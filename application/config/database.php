@@ -73,20 +73,50 @@ defined('BASEPATH') OR exit('No direct script access allowed');
 $active_group = 'default';
 $query_builder = TRUE;
 
+$db_hostname = trim((string) getenv('DB_HOST'));
+if ($db_hostname === '')
+{
+	$db_hostname = 'localhost';
+}
+$db_port = trim((string) getenv('DB_PORT'));
+if ($db_port !== '' && strpos($db_hostname, ':') === FALSE)
+{
+	$db_hostname .= ':'.$db_port;
+}
+$db_username = trim((string) getenv('DB_USER'));
+$db_password = trim((string) getenv('DB_PASS'));
+$db_name = trim((string) getenv('DB_NAME'));
+$db_charset = trim((string) getenv('DB_CHARSET'));
+if ($db_charset === '')
+{
+	$db_charset = 'utf8mb4';
+}
+$db_collation = trim((string) getenv('DB_COLLATION'));
+if ($db_collation === '')
+{
+	$db_collation = $db_charset === 'utf8mb4' ? 'utf8mb4_general_ci' : 'utf8_general_ci';
+}
+$db_debug = (ENVIRONMENT !== 'production');
+$db_debug_raw = strtolower(trim((string) getenv('DB_DEBUG')));
+if ($db_debug_raw !== '')
+{
+	$db_debug = in_array($db_debug_raw, array('1', 'true', 'on', 'yes'), TRUE);
+}
+
 $db['default'] = array(
 	'dsn'	=> '',
-	'hostname' => 'localhost',
-	'username' => '',
-	'password' => '',
-	'database' => '',
+	'hostname' => $db_hostname,
+	'username' => $db_username,
+	'password' => $db_password,
+	'database' => $db_name,
 	'dbdriver' => 'mysqli',
 	'dbprefix' => '',
 	'pconnect' => FALSE,
-	'db_debug' => (ENVIRONMENT !== 'production'),
+	'db_debug' => $db_debug,
 	'cache_on' => FALSE,
 	'cachedir' => '',
-	'char_set' => 'utf8',
-	'dbcollat' => 'utf8_general_ci',
+	'char_set' => $db_charset,
+	'dbcollat' => $db_collation,
 	'swap_pre' => '',
 	'encrypt' => FALSE,
 	'compress' => FALSE,

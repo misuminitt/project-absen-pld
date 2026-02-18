@@ -22,7 +22,34 @@ class Home extends CI_Controller {
 		$this->load->library('session');
 		$this->load->library('absen_sheet_sync');
 		$this->load->helper('absen_account_store');
+		$this->load->helper('absen_data_store');
 		date_default_timezone_set('Asia/Jakarta');
+
+		if ($this->session->userdata('absen_logged_in') === TRUE)
+		{
+			if ($this->is_current_session_expired())
+			{
+				$this->session->sess_destroy();
+				redirect('login');
+				return;
+			}
+
+			$session_profile_ok = $this->sync_session_actor_profile();
+			if ($session_profile_ok !== TRUE)
+			{
+				$this->session->sess_destroy();
+				redirect('login');
+				return;
+			}
+			$this->session->set_userdata('absen_last_activity_at', time());
+
+			$password_change_required = ((int) $this->session->userdata('absen_password_change_required')) === 1;
+			if ($password_change_required && !$this->is_force_password_route())
+			{
+				redirect('home/force_change_password');
+				return;
+			}
+		}
 	}
 
 	public function index()
@@ -52,6 +79,9 @@ class Home extends CI_Controller {
 			$data = array(
 				'title' => 'Dashboard Absen - User',
 				'username' => $display_name !== '' ? $display_name : ($username !== '' ? $username : 'user'),
+				'profile_photo' => isset($user_profile['profile_photo']) && trim((string) $user_profile['profile_photo']) !== ''
+					? (string) $user_profile['profile_photo']
+					: $this->default_employee_profile_photo(),
 				'job_title' => $job_title,
 				'shift_name' => $shift_name !== '' ? $shift_name : 'Shift Pagi - Sore',
 				'shift_time' => $shift_time !== '' ? $shift_time : '08:00 - 17:00',
@@ -86,9 +116,18 @@ class Home extends CI_Controller {
 		}
 
 		$admin_snapshot = $this->build_admin_dashboard_snapshot();
+		$can_super_admin_manage = $this->can_access_super_admin_features();
+		$can_manage_accounts = $this->can_manage_employee_accounts();
+		$can_sync_sheet_accounts = $this->can_sync_sheet_accounts_feature();
+		$can_view_log_data = $this->can_view_log_data_feature();
+		$dashboard_navbar_title = $this->dashboard_navbar_title($username);
+		$dashboard_role_label = $this->dashboard_role_label($username);
 		$data = array(
 			'title' => 'Dashboard Absen Online',
 			'username' => $display_name !== '' ? $display_name : $username,
+			'dashboard_navbar_title' => $dashboard_navbar_title,
+			'dashboard_role_label' => $dashboard_role_label,
+			'dashboard_status_label' => $this->dashboard_status_label(),
 			'summary' => isset($admin_snapshot['summary']) && is_array($admin_snapshot['summary'])
 				? $admin_snapshot['summary']
 				: array(),
@@ -104,13 +143,20 @@ class Home extends CI_Controller {
 			'job_title_options' => $this->employee_job_title_options(),
 			'branch_options' => $this->employee_branch_options(),
 			'default_branch' => $this->default_employee_branch(),
+			'can_view_log_data' => $can_view_log_data,
+			'can_manage_accounts' => $can_manage_accounts,
+			'can_sync_sheet_accounts' => $can_sync_sheet_accounts,
+			'can_manage_feature_accounts' => $can_super_admin_manage,
+			'admin_feature_catalog' => $this->admin_feature_permission_catalog(),
+			'admin_feature_accounts' => $this->build_manageable_admin_feature_account_options(),
+			'privileged_password_targets' => $this->build_privileged_password_target_options(),
 			'account_notice_success' => (string) $this->session->flashdata('account_notice_success'),
 			'account_notice_error' => (string) $this->session->flashdata('account_notice_error')
 		);
 		$this->load->view('home/index', $data);
 	}
 
-	public function create_employee_account()
+	public function cara_pakai()
 	{
 		if ($this->session->userdata('absen_logged_in') !== TRUE)
 		{
@@ -124,6 +170,330 @@ class Home extends CI_Controller {
 			return;
 		}
 
+		$username = (string) $this->session->userdata('absen_username');
+		$display_name = (string) $this->session->userdata('absen_display_name');
+		$dashboard_navbar_title = $this->dashboard_navbar_title($username);
+		$data = array(
+			'title' => 'Cara Pakai '.$dashboard_navbar_title,
+			'username' => $display_name !== '' ? $display_name : ($username !== '' ? $username : 'Admin'),
+			'dashboard_navbar_title' => $dashboard_navbar_title,
+			'can_view_log_data' => $this->can_view_log_data_feature()
+		);
+
+		$this->load->view('home/admin_guide', $data);
+	}
+
+	public function log_data()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			redirect('login');
+			return;
+		}
+
+		if (!$this->can_view_log_data_feature())
+		{
+			redirect('home');
+			return;
+		}
+
+		$username = (string) $this->session->userdata('absen_username');
+		$display_name = (string) $this->session->userdata('absen_display_name');
+		$dashboard_navbar_title = $this->dashboard_navbar_title($username);
+		$per_page = 20;
+		$page_raw = (int) $this->input->get('page', TRUE);
+		$current_page = $page_raw > 0 ? $page_raw : 1;
+		$all_logs = $this->load_conflict_logs(0);
+		$total_logs = count($all_logs);
+		$total_pages = $total_logs > 0 ? (int) ceil($total_logs / $per_page) : 1;
+		if ($current_page > $total_pages)
+		{
+			$current_page = $total_pages;
+		}
+		if ($current_page < 1)
+		{
+			$current_page = 1;
+		}
+		$offset = ($current_page - 1) * $per_page;
+		$logs_page = array_slice($all_logs, $offset, $per_page);
+		$data = array(
+			'title' => 'Log Data Aktivitas',
+			'username' => $display_name !== '' ? $display_name : ($username !== '' ? $username : 'Admin'),
+			'dashboard_navbar_title' => $dashboard_navbar_title,
+			'logs' => $logs_page,
+			'log_notice_success' => (string) $this->session->flashdata('log_notice_success'),
+			'log_notice_error' => (string) $this->session->flashdata('log_notice_error'),
+			'pagination' => array(
+				'per_page' => $per_page,
+				'current_page' => $current_page,
+				'total_logs' => $total_logs,
+				'total_pages' => $total_pages
+			)
+		);
+
+		$this->load->view('home/log_data', $data);
+	}
+
+	public function rollback_log_entry()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			redirect('login');
+			return;
+		}
+
+		if (!$this->can_view_log_data_feature())
+		{
+			redirect('home');
+			return;
+		}
+
+		if ($this->input->method(TRUE) !== 'POST')
+		{
+			redirect('home/log_data');
+			return;
+		}
+
+		$entry_id = trim((string) $this->input->post('entry_id', TRUE));
+		$page = (int) $this->input->post('page', TRUE);
+		if ($page <= 0)
+		{
+			$page = 1;
+		}
+		$redirect_url = 'home/log_data'.($page > 1 ? '?page='.$page : '');
+
+		if ($entry_id === '')
+		{
+			$this->session->set_flashdata('log_notice_error', 'Entry log rollback tidak valid.');
+			redirect($redirect_url);
+			return;
+		}
+
+		$logs = $this->load_conflict_logs(0);
+		$entry_index = $this->find_log_entry_index_by_id($logs, $entry_id);
+		if ($entry_index < 0)
+		{
+			$this->session->set_flashdata('log_notice_error', 'Entry log tidak ditemukan atau sudah terhapus.');
+			redirect($redirect_url);
+			return;
+		}
+
+		$entry = isset($logs[$entry_index]) && is_array($logs[$entry_index]) ? $logs[$entry_index] : array();
+		$can_rollback = $this->can_rollback_log_entry($entry);
+		if ($can_rollback !== TRUE)
+		{
+			$this->session->set_flashdata('log_notice_error', 'Entry log ini tidak mendukung rollback aman.');
+			redirect($redirect_url);
+			return;
+		}
+
+		$rollback_status = strtolower(trim((string) (isset($entry['rollback_status']) ? $entry['rollback_status'] : '')));
+		if ($rollback_status === 'rolled_back')
+		{
+			$this->session->set_flashdata('log_notice_error', 'Entry log ini sudah pernah di-rollback.');
+			redirect($redirect_url);
+			return;
+		}
+
+		$rollback_note = '';
+		$rollback_result = $this->rollback_log_entry_data($entry, $rollback_note);
+		if ($rollback_result !== TRUE)
+		{
+			$this->session->set_flashdata('log_notice_error', $rollback_note !== '' ? $rollback_note : 'Rollback gagal diproses.');
+			redirect($redirect_url);
+			return;
+		}
+
+		$actor = $this->current_actor_username();
+		if ($actor === '')
+		{
+			$actor = 'system';
+		}
+		$logs[$entry_index]['rollback_status'] = 'rolled_back';
+		$logs[$entry_index]['rolled_back_by'] = $actor;
+		$logs[$entry_index]['rolled_back_at'] = date('Y-m-d H:i:s');
+		$logs[$entry_index]['rollback_note'] = $rollback_note;
+		$save_log_state = $this->save_conflict_logs($logs);
+		if ($save_log_state !== TRUE)
+		{
+			$this->session->set_flashdata('log_notice_error', 'Rollback data berhasil, tetapi update status log gagal disimpan.');
+			redirect($redirect_url);
+			return;
+		}
+
+		$entry_action = isset($entry['action']) ? trim((string) $entry['action']) : '';
+		$entry_source = isset($entry['source']) ? trim((string) $entry['source']) : '';
+		$entry_username = isset($entry['username']) ? trim((string) $entry['username']) : '';
+		$entry_display_name = isset($entry['display_name']) ? trim((string) $entry['display_name']) : '';
+		$this->log_activity_event(
+			'rollback_log_entry',
+			'log_data',
+			$entry_username,
+			$entry_display_name,
+			'Rollback log '.$entry_id.' ('.$entry_source.' / '.$entry_action.').',
+			array(
+				'target_id' => $entry_id,
+				'field' => isset($entry['field']) ? (string) $entry['field'] : '',
+				'field_label' => isset($entry['field_label']) ? (string) $entry['field_label'] : '',
+				'old_value' => isset($entry['new_value']) ? (string) $entry['new_value'] : '',
+				'new_value' => isset($entry['old_value']) ? (string) $entry['old_value'] : ''
+			)
+		);
+
+		$success_message = 'Rollback berhasil: '.$rollback_note;
+		$this->session->set_flashdata('log_notice_success', $success_message);
+		redirect($redirect_url);
+	}
+
+	public function force_change_password()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			redirect('login');
+			return;
+		}
+
+		$password_change_required = ((int) $this->session->userdata('absen_password_change_required')) === 1;
+		if (!$password_change_required)
+		{
+			redirect('home');
+			return;
+		}
+
+		$username = (string) $this->session->userdata('absen_username');
+		$display_name = (string) $this->session->userdata('absen_display_name');
+		$data = array(
+			'title' => 'Ganti Password Pertama Kali',
+			'username' => $display_name !== '' ? $display_name : ($username !== '' ? $username : 'user'),
+			'password_notice_success' => (string) $this->session->flashdata('password_notice_success'),
+			'password_notice_error' => (string) $this->session->flashdata('password_notice_error')
+		);
+		$this->load->view('home/force_change_password', $data);
+	}
+
+	public function submit_force_change_password()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			redirect('login');
+			return;
+		}
+
+		if ($this->input->method(TRUE) !== 'POST')
+		{
+			redirect('home/force_change_password');
+			return;
+		}
+
+		$password_change_required = ((int) $this->session->userdata('absen_password_change_required')) === 1;
+		if (!$password_change_required)
+		{
+			redirect('home');
+			return;
+		}
+
+		$username_key = strtolower(trim((string) $this->session->userdata('absen_username')));
+		$current_password = trim((string) $this->input->post('current_password', FALSE));
+		$new_password = trim((string) $this->input->post('new_password', FALSE));
+		$confirm_password = trim((string) $this->input->post('confirm_password', FALSE));
+		if ($username_key === '')
+		{
+			$this->session->sess_destroy();
+			redirect('login');
+			return;
+		}
+
+		if ($current_password === '')
+		{
+			$this->session->set_flashdata('password_notice_error', 'Password saat ini wajib diisi.');
+			redirect('home/force_change_password');
+			return;
+		}
+		if ($new_password === '' || strlen($new_password) < 3)
+		{
+			$this->session->set_flashdata('password_notice_error', 'Password baru minimal 3 karakter.');
+			redirect('home/force_change_password');
+			return;
+		}
+		if ($new_password !== $confirm_password)
+		{
+			$this->session->set_flashdata('password_notice_error', 'Konfirmasi password baru tidak sama.');
+			redirect('home/force_change_password');
+			return;
+		}
+		if ($new_password === $current_password)
+		{
+			$this->session->set_flashdata('password_notice_error', 'Password baru harus berbeda dari password saat ini.');
+			redirect('home/force_change_password');
+			return;
+		}
+
+		$account_book = function_exists('absen_load_account_book')
+			? absen_load_account_book()
+			: array();
+		if (!isset($account_book[$username_key]) || !is_array($account_book[$username_key]))
+		{
+			$this->session->sess_destroy();
+			redirect('login');
+			return;
+		}
+
+		$needs_upgrade = FALSE;
+		$is_current_password_valid = function_exists('absen_verify_account_password')
+			? absen_verify_account_password($account_book[$username_key], $current_password, $needs_upgrade)
+			: ((isset($account_book[$username_key]['password']) ? (string) $account_book[$username_key]['password'] : '') === $current_password);
+		if ($is_current_password_valid !== TRUE)
+		{
+			$this->session->set_flashdata('password_notice_error', 'Password saat ini tidak sesuai.');
+			redirect('home/force_change_password');
+			return;
+		}
+
+		if (!function_exists('absen_account_set_password') || !absen_account_set_password($account_book[$username_key], $new_password, FALSE))
+		{
+			$this->session->set_flashdata('password_notice_error', 'Gagal memproses password baru. Coba lagi.');
+			redirect('home/force_change_password');
+			return;
+		}
+
+		$saved = function_exists('absen_save_account_book')
+			? absen_save_account_book($account_book)
+			: FALSE;
+		if (!$saved)
+		{
+			$this->session->set_flashdata('password_notice_error', 'Gagal menyimpan password baru. Coba lagi.');
+			redirect('home/force_change_password');
+			return;
+		}
+
+		$this->session->set_userdata('absen_password_change_required', 0);
+		$this->session->set_userdata('absen_last_activity_at', time());
+		$this->log_activity_event(
+			'force_change_password',
+			'account_data',
+			$username_key,
+			isset($account_book[$username_key]['display_name']) ? (string) $account_book[$username_key]['display_name'] : $username_key,
+			'Pengguna mengganti password wajib saat login pertama.'
+		);
+		$this->session->set_flashdata('password_notice_success', 'Password berhasil diperbarui.');
+		redirect('home');
+	}
+
+	public function create_employee_account()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			redirect('login');
+			return;
+		}
+
+		if (!$this->can_manage_employee_accounts())
+		{
+			$this->session->set_flashdata('account_notice_error', 'Akun login kamu belum punya izin untuk kelola akun karyawan.');
+			redirect('home');
+			return;
+		}
+
 		if ($this->input->method(TRUE) !== 'POST')
 		{
 			redirect('home');
@@ -131,6 +501,8 @@ class Home extends CI_Controller {
 		}
 
 		$username_key = $this->normalize_username_key($this->input->post('new_username', TRUE));
+		$display_name_input = trim((string) $this->input->post('new_display_name', TRUE));
+		$display_name_input = preg_replace('/\s+/', ' ', $display_name_input);
 		$password = trim((string) $this->input->post('new_password', FALSE));
 		$branch = $this->resolve_employee_branch($this->input->post('new_branch', TRUE));
 		$phone = trim((string) $this->input->post('new_phone', TRUE));
@@ -140,6 +512,8 @@ class Home extends CI_Controller {
 		$salary_monthly = $salary_digits === '' ? 0 : (int) $salary_digits;
 		$job_title = trim((string) $this->input->post('new_job_title', TRUE));
 		$address = trim((string) $this->input->post('new_address', TRUE));
+		$coordinate_input = trim((string) $this->input->post('new_coordinate_point', TRUE));
+		$coordinate_point = $this->normalize_coordinate_point($coordinate_input);
 		$work_days = (int) $this->input->post('new_work_days', TRUE);
 
 		if ($username_key === '')
@@ -156,9 +530,16 @@ class Home extends CI_Controller {
 			return;
 		}
 
-		if ($username_key === 'admin')
+		if ($this->is_reserved_system_username($username_key))
 		{
-			$this->session->set_flashdata('account_notice_error', 'Username admin tidak boleh dipakai untuk karyawan.');
+			$this->session->set_flashdata('account_notice_error', 'Username sistem (admin/developer/bos) tidak boleh dipakai untuk karyawan.');
+			redirect('home');
+			return;
+		}
+
+		if ($display_name_input === '')
+		{
+			$this->session->set_flashdata('account_notice_error', 'Nama lengkap karyawan wajib diisi.');
 			redirect('home');
 			return;
 		}
@@ -180,6 +561,13 @@ class Home extends CI_Controller {
 		if ($phone === '')
 		{
 			$this->session->set_flashdata('account_notice_error', 'Nomor telepon wajib diisi.');
+			redirect('home');
+			return;
+		}
+
+		if ($coordinate_point === '')
+		{
+			$this->session->set_flashdata('account_notice_error', 'Titik koordinat wajib diisi dengan format latitude, longitude.');
 			redirect('home');
 			return;
 		}
@@ -215,6 +603,7 @@ class Home extends CI_Controller {
 		{
 			$address = $this->default_employee_address();
 		}
+		$display_name = $display_name_input;
 
 		$salary_profiles = function_exists('absen_salary_profile_book') ? absen_salary_profile_book() : array();
 		$default_work_days = isset($salary_profiles['A']) && isset($salary_profiles['A']['work_days'])
@@ -236,10 +625,27 @@ class Home extends CI_Controller {
 			return;
 		}
 
-		$account_book[$username_key] = array(
+		$profile_photo_upload = $this->upload_employee_profile_photo('new_profile_photo', $username_key);
+		if (!isset($profile_photo_upload['success']) || $profile_photo_upload['success'] !== TRUE)
+		{
+			$message = isset($profile_photo_upload['message']) && trim((string) $profile_photo_upload['message']) !== ''
+				? (string) $profile_photo_upload['message']
+				: 'Upload PP karyawan gagal.';
+			$this->session->set_flashdata('account_notice_error', $message);
+			redirect('home');
+			return;
+		}
+		$profile_photo_path = isset($profile_photo_upload['relative_path']) ? trim((string) $profile_photo_upload['relative_path']) : '';
+		if ($profile_photo_path === '')
+		{
+			$this->session->set_flashdata('account_notice_error', 'File PP karyawan tidak valid.');
+			redirect('home');
+			return;
+		}
+
+		$new_account_row = array(
 			'role' => 'user',
-			'password' => $password,
-			'display_name' => $username_key,
+			'display_name' => $display_name,
 			'branch' => $branch,
 			'phone' => $phone,
 			'shift_name' => (string) $shift_profiles[$shift_key]['shift_name'],
@@ -249,18 +655,28 @@ class Home extends CI_Controller {
 			'work_days' => (int) $work_days,
 			'job_title' => $job_title,
 			'address' => $address,
-			'profile_photo' => $this->default_employee_profile_photo(),
+			'profile_photo' => $profile_photo_path,
+			'coordinate_point' => $coordinate_point,
 			'employee_status' => 'Aktif',
+			'force_password_change' => 1,
 			'sheet_row' => 0,
 			'sheet_sync_source' => 'web',
 			'sheet_last_sync_at' => ''
 		);
+		if (!function_exists('absen_account_set_password') || !absen_account_set_password($new_account_row, $password, TRUE))
+		{
+			$this->session->set_flashdata('account_notice_error', 'Gagal memproses password akun baru.');
+			redirect('home');
+			return;
+		}
+		$account_book[$username_key] = $new_account_row;
 
 		$saved = function_exists('absen_save_account_book')
 			? absen_save_account_book($account_book)
 			: FALSE;
 		if (!$saved)
 		{
+			$this->delete_local_uploaded_file($profile_photo_path);
 			$this->session->set_flashdata('account_notice_error', 'Gagal menyimpan akun karyawan baru.');
 			redirect('home');
 			return;
@@ -293,6 +709,19 @@ class Home extends CI_Controller {
 					: 'Sinkronisasi spreadsheet gagal.';
 			}
 		}
+		$create_note = 'Buat akun karyawan baru.';
+		$create_note .= ' Jabatan: '.$job_title.'.';
+		$create_note .= ' Cabang: '.$branch.'.';
+		$this->log_activity_event(
+			'create_account',
+			'account_data',
+			$username_key,
+			$display_name,
+			$create_note,
+			array(
+				'new_value' => 'username='.$username_key.', salary='.$salary_monthly.', work_days='.(int) $work_days.', coordinate='.$coordinate_point
+			)
+		);
 
 		$this->session->set_flashdata('account_notice_success', 'Akun karyawan '.$username_key.' berhasil dibuat.');
 		if ($sheet_sync_error !== '')
@@ -314,8 +743,9 @@ class Home extends CI_Controller {
 			return;
 		}
 
-		if ((string) $this->session->userdata('absen_role') === 'user')
+		if (!$this->can_sync_sheet_accounts_feature())
 		{
+			$this->session->set_flashdata('account_notice_error', 'Akun login kamu belum punya izin untuk sync akun dari sheet.');
 			redirect('home');
 			return;
 		}
@@ -327,12 +757,33 @@ class Home extends CI_Controller {
 			return;
 		}
 
-		$result = $this->absen_sheet_sync->sync_accounts_from_sheet(array('force' => TRUE));
+		$actor = strtolower(trim((string) $this->session->userdata('absen_username')));
+		if ($actor === '')
+		{
+			$actor = 'admin';
+		}
+		$actor_context = $this->build_sync_actor_context($actor);
+		$result = $this->absen_sheet_sync->sync_accounts_from_sheet(array(
+			'force' => TRUE,
+			'actor' => $actor,
+			'actor_context' => $actor_context
+		));
 		if (isset($result['success']) && $result['success'] === TRUE)
 		{
 			$created = isset($result['created']) ? (int) $result['created'] : 0;
 			$updated = isset($result['updated']) ? (int) $result['updated'] : 0;
 			$this->session->set_flashdata('account_notice_success', 'Sync spreadsheet selesai. Buat baru: '.$created.', update: '.$updated.'.');
+			$this->log_activity_event(
+				'sync_accounts_from_sheet',
+				'spreadsheet_data',
+				'',
+				'',
+				'Menjalankan Sync Akun dari Sheet.',
+				array(
+					'sheet' => 'DATABASE',
+					'new_value' => 'created='.$created.', updated='.$updated
+				)
+			);
 		}
 		else
 		{
@@ -366,7 +817,19 @@ class Home extends CI_Controller {
 			return;
 		}
 
-		$result = $this->absen_sheet_sync->sync_attendance_from_sheet(array('force' => TRUE));
+		$actor = strtolower(trim((string) $this->session->userdata('absen_username')));
+		if ($actor === '')
+		{
+			$actor = 'admin';
+		}
+		$actor_context = $this->build_sync_actor_context($actor);
+		$branch_scope = $this->is_branch_scoped_admin() ? $this->current_actor_branch() : '';
+		$result = $this->absen_sheet_sync->sync_attendance_from_sheet(array(
+			'force' => TRUE,
+			'actor' => $actor,
+			'actor_context' => $actor_context,
+			'branch_scope' => $branch_scope
+		));
 		if (isset($result['success']) && $result['success'] === TRUE)
 		{
 			$created_accounts = isset($result['created_accounts']) ? (int) $result['created_accounts'] : 0;
@@ -392,6 +855,17 @@ class Home extends CI_Controller {
 			{
 				$this->session->set_flashdata('account_notice_error', 'Data web berhasil sync, tapi isi balik kolom Cabang ke sheet gagal: '.$branch_backfill_error);
 			}
+			$this->log_activity_event(
+				'sync_attendance_from_sheet',
+				'spreadsheet_data',
+				'',
+				'',
+				'Menjalankan Sync Data Absen dari Sheet.',
+				array(
+					'sheet' => 'Data Absen',
+					'new_value' => 'account_created='.$created_accounts.', account_updated='.$updated_accounts.', attendance_created='.$created_attendance.', attendance_updated='.$updated_attendance
+				)
+			);
 		}
 		else
 		{
@@ -425,16 +899,45 @@ class Home extends CI_Controller {
 			return;
 		}
 
-		$result = $this->absen_sheet_sync->sync_attendance_to_sheet(array('force' => TRUE));
+		$actor = strtolower(trim((string) $this->session->userdata('absen_username')));
+		if ($actor === '')
+		{
+			$actor = 'admin';
+		}
+		$actor_context = $this->build_sync_actor_context($actor);
+		$branch_scope = $this->is_branch_scoped_admin() ? $this->current_actor_branch() : '';
+		$result = $this->absen_sheet_sync->sync_attendance_to_sheet(array(
+			'force' => TRUE,
+			'actor' => $actor,
+			'actor_context' => $actor_context,
+			'branch_scope' => $branch_scope
+		));
 		if (isset($result['success']) && $result['success'] === TRUE)
 		{
 			$month = isset($result['month']) ? (string) $result['month'] : date('Y-m');
 			$processed_users = isset($result['processed_users']) ? (int) $result['processed_users'] : 0;
 			$updated_rows = isset($result['updated_rows']) ? (int) $result['updated_rows'] : 0;
 			$appended_rows = isset($result['appended_rows']) ? (int) $result['appended_rows'] : 0;
+			$pruned_rows = isset($result['pruned_rows']) ? (int) $result['pruned_rows'] : 0;
+			$prune_error = isset($result['prune_error']) ? trim((string) $result['prune_error']) : '';
 			$this->session->set_flashdata(
 				'account_notice_success',
-				'Sync data web -> Data Absen selesai. Bulan: '.$month.', user diproses: '.$processed_users.', row update: '.$updated_rows.', row baru: '.$appended_rows.'.'
+				'Sync data web -> Data Absen selesai. Bulan: '.$month.', user diproses: '.$processed_users.', row update: '.$updated_rows.', row baru: '.$appended_rows.', row stale terhapus: '.$pruned_rows.'.'
+			);
+			if ($prune_error !== '')
+			{
+				$this->session->set_flashdata('account_notice_error', 'Data web berhasil sync, tapi hapus row stale gagal: '.$prune_error);
+			}
+			$this->log_activity_event(
+				'sync_web_to_sheet',
+				'web_data',
+				'',
+				'',
+				'Menjalankan Sync Data Web ke Sheet.',
+				array(
+					'sheet' => 'Data Absen',
+					'new_value' => 'month='.$month.', processed='.$processed_users.', updated='.$updated_rows.', appended='.$appended_rows.', pruned='.$pruned_rows
+				)
 			);
 		}
 		else
@@ -462,7 +965,11 @@ class Home extends CI_Controller {
 			return;
 		}
 
-		$result = $this->absen_sheet_sync->sync_accounts_from_sheet(array('force' => TRUE));
+		$result = $this->absen_sheet_sync->sync_accounts_from_sheet(array(
+			'force' => TRUE,
+			'actor' => 'cli',
+			'actor_context' => $this->build_sync_actor_context('cli', TRUE)
+		));
 		if (isset($result['success']) && $result['success'] === TRUE)
 		{
 			$created = isset($result['created']) ? (int) $result['created'] : 0;
@@ -492,7 +999,11 @@ class Home extends CI_Controller {
 			return;
 		}
 
-		$result = $this->absen_sheet_sync->sync_attendance_from_sheet(array('force' => TRUE));
+		$result = $this->absen_sheet_sync->sync_attendance_from_sheet(array(
+			'force' => TRUE,
+			'actor' => 'cli',
+			'actor_context' => $this->build_sync_actor_context('cli', TRUE)
+		));
 		if (isset($result['success']) && $result['success'] === TRUE)
 		{
 			$processed = isset($result['processed']) ? (int) $result['processed'] : 0;
@@ -537,7 +1048,11 @@ class Home extends CI_Controller {
 			return;
 		}
 
-		$result = $this->absen_sheet_sync->sync_attendance_to_sheet(array('force' => TRUE));
+		$result = $this->absen_sheet_sync->sync_attendance_to_sheet(array(
+			'force' => TRUE,
+			'actor' => 'cli',
+			'actor_context' => $this->build_sync_actor_context('cli', TRUE)
+		));
 		if (isset($result['success']) && $result['success'] === TRUE)
 		{
 			$month = isset($result['month']) ? (string) $result['month'] : date('Y-m');
@@ -545,11 +1060,18 @@ class Home extends CI_Controller {
 			$updated_rows = isset($result['updated_rows']) ? (int) $result['updated_rows'] : 0;
 			$appended_rows = isset($result['appended_rows']) ? (int) $result['appended_rows'] : 0;
 			$skipped_users = isset($result['skipped_users']) ? (int) $result['skipped_users'] : 0;
+			$pruned_rows = isset($result['pruned_rows']) ? (int) $result['pruned_rows'] : 0;
+			$prune_error = isset($result['prune_error']) ? trim((string) $result['prune_error']) : '';
 			echo "Sync web->Data Absen OK. month=".$month.
 				", users=".$processed_users.
 				", updated=".$updated_rows.
 				", appended=".$appended_rows.
-				", skipped=".$skipped_users."\n";
+				", skipped=".$skipped_users.
+				", pruned=".$pruned_rows."\n";
+			if ($prune_error !== '')
+			{
+				echo "Peringatan: hapus row stale gagal: ".$prune_error."\n";
+			}
 			return;
 		}
 
@@ -557,6 +1079,454 @@ class Home extends CI_Controller {
 			? (string) $result['message']
 			: 'Sinkronisasi web -> Data Absen gagal.';
 		echo "Sync web->Data Absen gagal: ".$message."\n";
+	}
+
+	public function sync_web_attendance_to_sheet_auto_cli()
+	{
+		if (!$this->input->is_cli_request())
+		{
+			show_404();
+			return;
+		}
+
+		if (!isset($this->absen_sheet_sync))
+		{
+			echo "Library sinkronisasi spreadsheet belum aktif.\n";
+			return;
+		}
+
+		$result = $this->absen_sheet_sync->sync_attendance_to_sheet(array(
+			'force' => FALSE,
+			'actor' => 'cron',
+			'actor_context' => $this->build_sync_actor_context('cron', TRUE)
+		));
+		if (isset($result['success']) && $result['success'] === TRUE)
+		{
+			if (isset($result['skipped']) && $result['skipped'] === TRUE)
+			{
+				$message = isset($result['message']) && trim((string) $result['message']) !== ''
+					? (string) $result['message']
+					: 'Auto sync web->Data Absen dilewati.';
+				echo "Auto sync web->Data Absen dilewati: ".$message."\n";
+				return;
+			}
+
+			$month = isset($result['month']) ? (string) $result['month'] : date('Y-m');
+			$processed_users = isset($result['processed_users']) ? (int) $result['processed_users'] : 0;
+			$updated_rows = isset($result['updated_rows']) ? (int) $result['updated_rows'] : 0;
+			$appended_rows = isset($result['appended_rows']) ? (int) $result['appended_rows'] : 0;
+			$skipped_users = isset($result['skipped_users']) ? (int) $result['skipped_users'] : 0;
+			$pruned_rows = isset($result['pruned_rows']) ? (int) $result['pruned_rows'] : 0;
+			$prune_error = isset($result['prune_error']) ? trim((string) $result['prune_error']) : '';
+			echo "Auto sync web->Data Absen OK. month=".$month.
+				", users=".$processed_users.
+				", updated=".$updated_rows.
+				", appended=".$appended_rows.
+				", skipped=".$skipped_users.
+				", pruned=".$pruned_rows."\n";
+			if ($prune_error !== '')
+			{
+				echo "Peringatan: hapus row stale gagal: ".$prune_error."\n";
+			}
+			return;
+		}
+
+		$message = isset($result['message']) && trim((string) $result['message']) !== ''
+			? (string) $result['message']
+			: 'Auto sync web -> Data Absen gagal.';
+		echo "Auto sync web->Data Absen gagal: ".$message."\n";
+	}
+
+	public function storage_status()
+	{
+		$is_cli = $this->input->is_cli_request();
+		if (!$is_cli)
+		{
+			if ($this->session->userdata('absen_logged_in') !== TRUE)
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Sesi login sudah habis.'), 401);
+				return;
+			}
+
+			if ((string) $this->session->userdata('absen_role') === 'user')
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Akses ditolak.'), 403);
+				return;
+			}
+		}
+
+		$this->load->helper('absen_data_store');
+		$this->load->helper('absen_account_store');
+
+		$storage_config = function_exists('absen_storage_config')
+			? absen_storage_config()
+			: array();
+		$db_storage_enabled = function_exists('absen_db_storage_enabled')
+			? absen_db_storage_enabled()
+			: FALSE;
+		$mirror_json_backup = function_exists('absen_db_storage_mirror_json')
+			? absen_db_storage_mirror_json()
+			: TRUE;
+		$table_name = function_exists('absen_data_store_safe_table_name')
+			? absen_data_store_safe_table_name()
+			: 'absen_data_store';
+		$accounts_store_key = function_exists('absen_accounts_store_key')
+			? absen_accounts_store_key()
+			: 'accounts_book';
+
+		$db = function_exists('absen_data_store_db_instance')
+			? absen_data_store_db_instance()
+			: NULL;
+		$db_connected = is_object($db) && isset($db->conn_id) && $db->conn_id ? TRUE : FALSE;
+		$table_ready = FALSE;
+		$table_error = '';
+		$total_store_rows = 0;
+		$last_write_at = '';
+		$store_rows = array();
+
+		if ($db_connected && function_exists('absen_data_store_ensure_table'))
+		{
+			$table_ready = absen_data_store_ensure_table($db) ? TRUE : FALSE;
+			if ($table_ready)
+			{
+				$summary_query = $db->select('COUNT(*) AS total_rows, MAX(updated_at) AS last_write_at')
+					->from($table_name)
+					->get();
+				if ($summary_query)
+				{
+					$summary_row = $summary_query->row_array();
+					$total_store_rows = isset($summary_row['total_rows']) ? (int) $summary_row['total_rows'] : 0;
+					$last_write_at = isset($summary_row['last_write_at']) ? trim((string) $summary_row['last_write_at']) : '';
+				}
+
+				$list_query = $db->select('store_key, updated_at')
+					->from($table_name)
+					->order_by('store_key', 'ASC')
+					->get();
+				if ($list_query)
+				{
+					$list_rows = $list_query->result_array();
+					for ($i = 0; $i < count($list_rows); $i += 1)
+					{
+						$row = is_array($list_rows[$i]) ? $list_rows[$i] : array();
+						$key = isset($row['store_key']) ? trim((string) $row['store_key']) : '';
+						if ($key === '')
+						{
+							continue;
+						}
+						$store_rows[] = array(
+							'store_key' => $key,
+							'updated_at' => isset($row['updated_at']) ? trim((string) $row['updated_at']) : ''
+						);
+					}
+				}
+			}
+			else
+			{
+				$db_error_payload = method_exists($db, 'error') ? $db->error() : array();
+				$table_error = isset($db_error_payload['message']) ? trim((string) $db_error_payload['message']) : '';
+			}
+		}
+
+		$store_key_lookup = array();
+		for ($i = 0; $i < count($store_rows); $i += 1)
+		{
+			$key = isset($store_rows[$i]['store_key']) ? trim((string) $store_rows[$i]['store_key']) : '';
+			if ($key !== '')
+			{
+				$store_key_lookup[$key] = TRUE;
+			}
+		}
+
+		$expected_store_keys = array(
+			$accounts_store_key,
+			'attendance_records',
+			'leave_requests',
+			'loan_requests',
+			'overtime_records',
+			'conflict_logs'
+		);
+		$expected_key_status = array();
+		for ($i = 0; $i < count($expected_store_keys); $i += 1)
+		{
+			$key = (string) $expected_store_keys[$i];
+			$expected_key_status[] = array(
+				'store_key' => $key,
+				'exists' => isset($store_key_lookup[$key]) ? TRUE : FALSE
+			);
+		}
+
+		$accounts = function_exists('absen_load_account_book')
+			? absen_load_account_book()
+			: array();
+		if (!is_array($accounts))
+		{
+			$accounts = array();
+		}
+
+		$admin_count = 0;
+		$user_count = 0;
+		$admin_usernames = array();
+		foreach ($accounts as $username_key => $row)
+		{
+			$username = strtolower(trim((string) $username_key));
+			if ($username === '' || !is_array($row))
+			{
+				continue;
+			}
+			$role = strtolower(trim((string) (isset($row['role']) ? $row['role'] : 'user')));
+			if ($role === 'admin')
+			{
+				$admin_count += 1;
+				$admin_usernames[] = $username;
+			}
+			else
+			{
+				$user_count += 1;
+			}
+		}
+		sort($admin_usernames);
+
+		$required_system_accounts = array('admin', 'developer', 'bos');
+		$required_status = array();
+		for ($i = 0; $i < count($required_system_accounts); $i += 1)
+		{
+			$key = (string) $required_system_accounts[$i];
+			$required_status[$key] = isset($accounts[$key]) && is_array($accounts[$key]) ? TRUE : FALSE;
+		}
+
+		$status_payload = array(
+			'checked_at' => date('Y-m-d H:i:s'),
+			'runtime' => array(
+				'is_cli' => $is_cli ? TRUE : FALSE,
+				'php_sapi' => PHP_SAPI
+			),
+			'db_storage' => array(
+				'enabled' => $db_storage_enabled ? TRUE : FALSE,
+				'mirror_json_backup' => $mirror_json_backup ? TRUE : FALSE,
+				'table' => $table_name,
+				'db_connected' => $db_connected ? TRUE : FALSE,
+				'table_ready' => $table_ready ? TRUE : FALSE,
+				'table_error' => $table_error,
+				'total_store_rows' => $total_store_rows,
+				'last_write_at' => $last_write_at,
+				'store_rows' => $store_rows,
+				'expected_keys' => $expected_key_status
+			),
+			'accounts' => array(
+				'total' => count($accounts),
+				'admin_count' => $admin_count,
+				'employee_count' => $user_count,
+				'admin_usernames' => $admin_usernames,
+				'required_system_accounts' => $required_status
+			),
+			'config' => array(
+				'accounts_store_key' => $accounts_store_key,
+				'raw_storage_config' => $storage_config
+			)
+		);
+
+		if ($is_cli)
+		{
+			echo json_encode(array('success' => TRUE, 'status' => $status_payload), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)."\n";
+			return;
+		}
+
+		$this->json_response(array('success' => TRUE, 'status' => $status_payload));
+	}
+
+	public function storage_seed_from_json()
+	{
+		$is_cli = $this->input->is_cli_request();
+		if (!$is_cli)
+		{
+			if ($this->session->userdata('absen_logged_in') !== TRUE)
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Sesi login sudah habis.'), 401);
+				return;
+			}
+			if ((string) $this->session->userdata('absen_role') === 'user')
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Akses ditolak.'), 403);
+				return;
+			}
+		}
+
+		$this->load->helper('absen_data_store');
+		$this->load->helper('absen_account_store');
+
+		$db_storage_enabled = function_exists('absen_db_storage_enabled')
+			? absen_db_storage_enabled()
+			: FALSE;
+		if (!$db_storage_enabled)
+		{
+			$message = 'DB storage belum aktif. Set ABSEN_DB_STORAGE_ENABLED=true lalu ulangi.';
+			if ($is_cli)
+			{
+				echo $message."\n";
+				return;
+			}
+			$this->json_response(array('success' => FALSE, 'message' => $message), 422);
+			return;
+		}
+
+		$db = function_exists('absen_data_store_db_instance')
+			? absen_data_store_db_instance()
+			: NULL;
+		if (!is_object($db) || !isset($db->conn_id) || !$db->conn_id)
+		{
+			$message = 'Koneksi MariaDB gagal. Cek DB_HOST/DB_PORT/DB_USER/DB_PASS/DB_NAME.';
+			if ($is_cli)
+			{
+				echo $message."\n";
+				return;
+			}
+			$this->json_response(array('success' => FALSE, 'message' => $message), 500);
+			return;
+		}
+
+		if (!function_exists('absen_data_store_ensure_table') || !absen_data_store_ensure_table($db))
+		{
+			$db_error_payload = method_exists($db, 'error') ? $db->error() : array();
+			$db_error_message = isset($db_error_payload['message']) ? trim((string) $db_error_payload['message']) : '';
+			$message = 'Table data store gagal disiapkan.'.($db_error_message !== '' ? ' '.$db_error_message : '');
+			if ($is_cli)
+			{
+				echo $message."\n";
+				return;
+			}
+			$this->json_response(array('success' => FALSE, 'message' => $message), 500);
+			return;
+		}
+
+		$accounts_store_key = function_exists('absen_accounts_store_key')
+			? absen_accounts_store_key()
+			: 'accounts_book';
+
+		$sources = array(
+			$accounts_store_key => array('file' => function_exists('absen_accounts_file_path') ? absen_accounts_file_path() : APPPATH.'cache/accounts.json'),
+			'attendance_records' => array('file' => $this->attendance_file_path()),
+			'leave_requests' => array('file' => $this->leave_requests_file_path()),
+			'loan_requests' => array('file' => $this->loan_requests_file_path()),
+			'overtime_records' => array('file' => $this->overtime_file_path()),
+			'conflict_logs' => array('file' => $this->conflict_logs_file_path())
+		);
+
+		$results = array();
+		$total_saved = 0;
+		$failed = array();
+		foreach ($sources as $store_key => $meta)
+		{
+			$file_path = isset($meta['file']) ? trim((string) $meta['file']) : '';
+			$raw = function_exists('absen_data_store_read_json_file')
+				? absen_data_store_read_json_file($file_path, array())
+				: array();
+			if (!is_array($raw))
+			{
+				$raw = array();
+			}
+
+			$payload = $raw;
+			if ($store_key === $accounts_store_key)
+			{
+				$account_book = array();
+				foreach ($raw as $key => $row)
+				{
+					if (is_int($key) && is_array($row))
+					{
+						$row_username = strtolower(trim((string) (isset($row['username']) ? $row['username'] : '')));
+						if ($row_username !== '')
+						{
+							$account_book[$row_username] = $row;
+						}
+						continue;
+					}
+					$account_book[(string) $key] = $row;
+				}
+				$payload = function_exists('absen_sanitize_account_book')
+					? absen_sanitize_account_book($account_book)
+					: $account_book;
+			}
+			else
+			{
+				$payload = array_values($raw);
+			}
+
+			$saved = function_exists('absen_data_store_save_value')
+				? absen_data_store_save_value($store_key, $payload, '')
+				: FALSE;
+			$row_count = is_array($payload) ? count($payload) : 0;
+			$results[] = array(
+				'store_key' => $store_key,
+				'file' => $file_path,
+				'rows' => $row_count,
+				'saved' => $saved ? TRUE : FALSE
+			);
+			if ($saved)
+			{
+				$total_saved += 1;
+			}
+			else
+			{
+				$failed[] = $store_key;
+			}
+		}
+
+		$accounts = function_exists('absen_load_account_book')
+			? absen_load_account_book()
+			: array();
+		if (!is_array($accounts))
+		{
+			$accounts = array();
+		}
+		$admin_count = 0;
+		$employee_count = 0;
+		foreach ($accounts as $username_key => $row)
+		{
+			if (!is_array($row))
+			{
+				continue;
+			}
+			$role = strtolower(trim((string) (isset($row['role']) ? $row['role'] : 'user')));
+			if ($role === 'admin')
+			{
+				$admin_count += 1;
+			}
+			else
+			{
+				$employee_count += 1;
+			}
+		}
+
+		$payload = array(
+			'success' => empty($failed),
+			'message' => empty($failed)
+				? 'Seed JSON -> MariaDB selesai.'
+				: 'Sebagian key gagal disimpan: '.implode(', ', $failed),
+			'seeded_at' => date('Y-m-d H:i:s'),
+			'saved_keys' => $total_saved,
+			'total_keys' => count($sources),
+			'results' => $results,
+			'accounts_summary' => array(
+				'total' => count($accounts),
+				'admin_count' => $admin_count,
+				'employee_count' => $employee_count,
+				'required_system_accounts' => array(
+					'admin' => isset($accounts['admin']) && is_array($accounts['admin']),
+					'developer' => isset($accounts['developer']) && is_array($accounts['developer']),
+					'bos' => isset($accounts['bos']) && is_array($accounts['bos'])
+				)
+			)
+		);
+
+		if ($is_cli)
+		{
+			echo json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)."\n";
+			return;
+		}
+
+		$status_code = empty($failed) ? 200 : 500;
+		$this->json_response($payload, $status_code);
 	}
 
 	public function delete_employee_account()
@@ -567,8 +1537,9 @@ class Home extends CI_Controller {
 			return;
 		}
 
-		if ((string) $this->session->userdata('absen_role') === 'user')
+		if (!$this->can_manage_employee_accounts())
 		{
+			$this->session->set_flashdata('account_notice_error', 'Akun login kamu belum punya izin untuk kelola akun karyawan.');
 			redirect('home');
 			return;
 		}
@@ -587,9 +1558,9 @@ class Home extends CI_Controller {
 			return;
 		}
 
-		if ($username_key === 'admin')
+		if ($this->is_reserved_system_username($username_key))
 		{
-			$this->session->set_flashdata('account_notice_error', 'Akun admin tidak dapat dihapus.');
+			$this->session->set_flashdata('account_notice_error', 'Akun sistem (admin/developer/bos) tidak dapat dihapus.');
 			redirect('home');
 			return;
 		}
@@ -643,6 +1614,19 @@ class Home extends CI_Controller {
 					: 'Sinkronisasi spreadsheet gagal.';
 			}
 		}
+		$deleted_display_name = isset($deleted_account_row['display_name']) ? trim((string) $deleted_account_row['display_name']) : $username_key;
+		$delete_note = 'Hapus akun karyawan dan data terkait.';
+		$delete_note .= ' attendance='.(int) $purge_summary['attendance'];
+		$delete_note .= ', leave='.(int) $purge_summary['leave'];
+		$delete_note .= ', loan='.(int) $purge_summary['loan'];
+		$delete_note .= ', overtime='.(int) $purge_summary['overtime'];
+		$this->log_activity_event(
+			'delete_account',
+			'account_data',
+			$username_key,
+			$deleted_display_name,
+			$delete_note
+		);
 
 		$this->session->set_flashdata('account_notice_success', 'Akun '.$username_key.' berhasil dihapus. Data terkait yang dibersihkan: '.$removed_total.' baris.');
 		if ($sheet_sync_error !== '')
@@ -664,8 +1648,9 @@ class Home extends CI_Controller {
 			return;
 		}
 
-		if ((string) $this->session->userdata('absen_role') === 'user')
+		if (!$this->can_manage_employee_accounts())
 		{
+			$this->session->set_flashdata('account_notice_error', 'Akun login kamu belum punya izin untuk kelola akun karyawan.');
 			redirect('home');
 			return;
 		}
@@ -680,6 +1665,9 @@ class Home extends CI_Controller {
 		$new_username_raw = $this->input->post('edit_new_username', TRUE);
 		$has_new_username_field = $this->input->post('edit_new_username', FALSE) !== NULL;
 		$new_username_key = $this->normalize_username_key($new_username_raw);
+		$display_name_input = trim((string) $this->input->post('edit_display_name', TRUE));
+		$display_name_input = preg_replace('/\s+/', ' ', $display_name_input);
+		$has_display_name_field = $this->input->post('edit_display_name', FALSE) !== NULL;
 		if (!$has_new_username_field)
 		{
 			// Kompatibel dengan halaman lama yang belum punya input edit_new_username.
@@ -717,15 +1705,22 @@ class Home extends CI_Controller {
 			return;
 		}
 
-		if ($username_key === 'admin')
+		if ($this->is_reserved_system_username($username_key))
 		{
-			$this->session->set_flashdata('account_notice_error', 'Akun admin tidak bisa diedit dari form ini.');
+			$this->session->set_flashdata('account_notice_error', 'Akun sistem (admin/developer/bos) tidak bisa diedit dari form ini.');
 			redirect('home#manajemen-karyawan');
 			return;
 		}
-		if ($new_username_key === 'admin')
+		if ($this->is_reserved_system_username($new_username_key))
 		{
-			$this->session->set_flashdata('account_notice_error', 'Username admin tidak boleh dipakai untuk karyawan.');
+			$this->session->set_flashdata('account_notice_error', 'Username sistem (admin/developer/bos) tidak boleh dipakai untuk karyawan.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		if ($has_display_name_field && $display_name_input === '')
+		{
+			$this->session->set_flashdata('account_notice_error', 'Nama lengkap akun wajib diisi.');
 			redirect('home#manajemen-karyawan');
 			return;
 		}
@@ -817,17 +1812,36 @@ class Home extends CI_Controller {
 		$salary_tier = $this->resolve_salary_tier_from_amount($salary_monthly);
 
 		$current_row = $account_book[$username_key];
-		$display_name_value = isset($current_row['display_name']) ? trim((string) $current_row['display_name']) : '';
-		if ($display_name_value === '' || strtolower($display_name_value) === $username_key)
+		$display_name_value = $has_display_name_field
+			? $display_name_input
+			: (isset($current_row['display_name']) ? trim((string) $current_row['display_name']) : '');
+		if ($display_name_value === '')
 		{
 			$display_name_value = $new_username_key;
 		}
 
+		$profile_photo_upload = $this->upload_employee_profile_photo(
+			'edit_profile_photo',
+			$new_username_key !== '' ? $new_username_key : $username_key,
+			FALSE
+		);
+		if (!isset($profile_photo_upload['success']) || $profile_photo_upload['success'] !== TRUE)
+		{
+			$message = isset($profile_photo_upload['message']) && trim((string) $profile_photo_upload['message']) !== ''
+				? (string) $profile_photo_upload['message']
+				: 'Upload PP karyawan gagal.';
+			$this->session->set_flashdata('account_notice_error', $message);
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+		$uploaded_profile_photo_path = '';
+		if (!(isset($profile_photo_upload['skipped']) && $profile_photo_upload['skipped'] === TRUE))
+		{
+			$uploaded_profile_photo_path = isset($profile_photo_upload['relative_path']) ? trim((string) $profile_photo_upload['relative_path']) : '';
+		}
+
 		$updated_account_row = array(
 			'role' => 'user',
-			'password' => $password_input !== ''
-				? $password_input
-				: (isset($current_row['password']) ? (string) $current_row['password'] : '123'),
 			'display_name' => $display_name_value,
 			'branch' => $branch,
 			'phone' => $phone,
@@ -838,16 +1852,40 @@ class Home extends CI_Controller {
 			'work_days' => (int) $work_days,
 			'job_title' => $job_title,
 			'address' => $address,
-			'profile_photo' => isset($current_row['profile_photo']) && trim((string) $current_row['profile_photo']) !== ''
-				? (string) $current_row['profile_photo']
-				: $this->default_employee_profile_photo(),
+			'profile_photo' => $uploaded_profile_photo_path !== ''
+				? $uploaded_profile_photo_path
+				: (
+					isset($current_row['profile_photo']) && trim((string) $current_row['profile_photo']) !== ''
+						? (string) $current_row['profile_photo']
+						: $this->default_employee_profile_photo()
+				),
+			'coordinate_point' => isset($current_row['coordinate_point']) ? trim((string) $current_row['coordinate_point']) : '',
 			'employee_status' => isset($current_row['employee_status']) && trim((string) $current_row['employee_status']) !== ''
 				? (string) $current_row['employee_status']
 				: 'Aktif',
+			'force_password_change' => isset($current_row['force_password_change']) && (int) $current_row['force_password_change'] === 1 ? 1 : 0,
+			'password_changed_at' => isset($current_row['password_changed_at']) ? (string) $current_row['password_changed_at'] : '',
 			'sheet_row' => isset($current_row['sheet_row']) ? (int) $current_row['sheet_row'] : 0,
 			'sheet_sync_source' => 'web',
 			'sheet_last_sync_at' => date('Y-m-d H:i:s')
 		);
+		$existing_password_value = isset($current_row['password']) ? trim((string) $current_row['password']) : '';
+		if ($existing_password_value === '')
+		{
+			$fallback_password = function_exists('absen_hash_password') ? absen_hash_password('123') : '123';
+			$existing_password_value = $fallback_password !== '' ? $fallback_password : '123';
+		}
+		$updated_account_row['password'] = $existing_password_value;
+		$updated_account_row['password_hash'] = $existing_password_value;
+		if ($password_input !== '')
+		{
+			if (!function_exists('absen_account_set_password') || !absen_account_set_password($updated_account_row, $password_input, TRUE))
+			{
+				$this->session->set_flashdata('account_notice_error', 'Gagal memproses password akun.');
+				redirect('home#manajemen-karyawan');
+				return;
+			}
+		}
 		if ($new_username_key !== $username_key)
 		{
 			unset($account_book[$username_key]);
@@ -859,6 +1897,10 @@ class Home extends CI_Controller {
 			: FALSE;
 		if (!$saved)
 		{
+			if ($uploaded_profile_photo_path !== '')
+			{
+				$this->delete_local_uploaded_file($uploaded_profile_photo_path);
+			}
 			$this->session->set_flashdata('account_notice_error', 'Gagal menyimpan perubahan akun karyawan.');
 			redirect('home#manajemen-karyawan');
 			return;
@@ -902,6 +1944,93 @@ class Home extends CI_Controller {
 					: 'Sinkronisasi spreadsheet gagal.';
 			}
 		}
+		$changed_fields = array();
+		$changed_entries = array();
+		$track_keys = array(
+			'display_name' => 'nama',
+			'branch' => 'cabang',
+			'phone' => 'tlp',
+			'shift_name' => 'shift',
+			'salary_monthly' => 'gaji_pokok',
+			'work_days' => 'hari_masuk',
+			'job_title' => 'jabatan',
+			'address' => 'alamat'
+		);
+		foreach ($track_keys as $key => $label)
+		{
+			$old_value = isset($current_row[$key]) ? trim((string) $current_row[$key]) : '';
+			$new_value = isset($updated_account_row[$key]) ? trim((string) $updated_account_row[$key]) : '';
+			if ($old_value !== $new_value)
+			{
+				$changed_fields[] = $label;
+				$changed_entries[] = array(
+					'field' => $key,
+					'field_label' => $label,
+					'old_value' => $old_value,
+					'new_value' => $new_value
+				);
+			}
+		}
+		if ($new_username_key !== $username_key)
+		{
+			$changed_fields[] = 'username';
+			$changed_entries[] = array(
+				'field' => 'username',
+				'field_label' => 'username',
+				'old_value' => $username_key,
+				'new_value' => $new_username_key
+			);
+		}
+		if ($password_input !== '')
+		{
+			$changed_fields[] = 'password';
+			$changed_entries[] = array(
+				'field' => 'password',
+				'field_label' => 'password',
+				'old_value' => '***',
+				'new_value' => '***'
+			);
+		}
+		$update_note = 'Edit akun karyawan.';
+		if (!empty($changed_fields))
+		{
+			$update_note .= ' Field berubah: '.implode(', ', $changed_fields).'.';
+		}
+		$this->log_activity_event(
+			'update_account',
+			'account_data',
+			$new_username_key,
+			$display_name_value,
+			$update_note
+		);
+		for ($entry_index = 0; $entry_index < count($changed_entries); $entry_index += 1)
+		{
+			$entry_row = is_array($changed_entries[$entry_index]) ? $changed_entries[$entry_index] : array();
+			$field_key = isset($entry_row['field']) ? trim((string) $entry_row['field']) : '';
+			$field_label = isset($entry_row['field_label']) ? trim((string) $entry_row['field_label']) : $field_key;
+			if ($field_key === '')
+			{
+				continue;
+			}
+
+			$field_old = isset($entry_row['old_value']) ? (string) $entry_row['old_value'] : '';
+			$field_new = isset($entry_row['new_value']) ? (string) $entry_row['new_value'] : '';
+			$field_action = $field_key === 'username' ? 'update_account_username' : 'update_account_field';
+			$field_note = 'Edit akun karyawan. Field '.$field_label.' diubah.';
+			$this->log_activity_event(
+				$field_action,
+				'account_data',
+				$new_username_key,
+				$display_name_value,
+				$field_note,
+				array(
+					'field' => $field_key,
+					'field_label' => $field_label,
+					'old_value' => $field_old,
+					'new_value' => $field_new
+				)
+			);
+		}
 
 		$success_message = 'Akun '.$new_username_key.' berhasil diperbarui.';
 		if ($new_username_key !== $username_key)
@@ -918,6 +2047,685 @@ class Home extends CI_Controller {
 		{
 			$this->session->set_flashdata('account_notice_error', 'Perubahan tersimpan, namun sinkron spreadsheet sebagian: '.$sheet_sync_warning);
 		}
+		redirect('home#manajemen-karyawan');
+	}
+
+	public function update_privileged_account_password()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			redirect('login');
+			return;
+		}
+
+		if (!$this->can_access_super_admin_features())
+		{
+			$this->session->set_flashdata('account_notice_error', 'Fitur ini hanya bisa diakses akun Developer dan Bos.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		if ($this->input->method(TRUE) !== 'POST')
+		{
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		$actor_username = $this->current_actor_username();
+		$target_username = strtolower(trim((string) $this->input->post('target_account', TRUE)));
+		$new_username_raw = $this->input->post('new_username', TRUE);
+		$has_new_username_field = $this->input->post('new_username', FALSE) !== NULL;
+		$new_username_key = $this->normalize_username_key($new_username_raw);
+		$new_display_name = trim((string) $this->input->post('new_display_name', TRUE));
+		$new_display_name = preg_replace('/\s+/', ' ', $new_display_name);
+		$new_password = trim((string) $this->input->post('new_password', FALSE));
+		$confirm_password = trim((string) $this->input->post('confirm_password', FALSE));
+		$allowed_targets = $this->allowed_privileged_password_targets($actor_username);
+
+		if (empty($allowed_targets))
+		{
+			$this->session->set_flashdata('account_notice_error', 'Akun login kamu tidak diizinkan mengubah informasi akun admin.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		if (!in_array($target_username, $allowed_targets, TRUE))
+		{
+			$this->session->set_flashdata('account_notice_error', 'Target akun tidak diizinkan untuk role login kamu.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		$wants_username_update = $has_new_username_field && trim((string) $new_username_raw) !== '';
+		$wants_display_name_update = $new_display_name !== '';
+		$wants_password_update = $new_password !== '' || $confirm_password !== '';
+		if (!$wants_username_update && !$wants_display_name_update && !$wants_password_update)
+		{
+			$this->session->set_flashdata('account_notice_error', 'Isi minimal satu perubahan: username baru, nama baru, atau password baru.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+		if ($wants_username_update)
+		{
+			if ($new_username_key === '' || !preg_match('/^[a-z0-9_]{3,30}$/', $new_username_key))
+			{
+				$this->session->set_flashdata('account_notice_error', 'Username baru hanya boleh huruf kecil, angka, underscore (3-30 karakter).');
+				redirect('home#manajemen-karyawan');
+				return;
+			}
+		}
+
+		$account_book = function_exists('absen_load_account_book')
+			? absen_load_account_book()
+			: array();
+		if (!isset($account_book[$target_username]) || !is_array($account_book[$target_username]))
+		{
+			$this->session->set_flashdata('account_notice_error', 'Akun '.$target_username.' tidak ditemukan.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+		$target_role = strtolower(trim((string) (isset($account_book[$target_username]['role']) ? $account_book[$target_username]['role'] : '')));
+		if ($target_role !== 'admin')
+		{
+			$this->session->set_flashdata('account_notice_error', 'Akun '.$target_username.' bukan akun admin.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+		$old_login_alias = $this->normalize_username_key(isset($account_book[$target_username]['login_alias']) ? (string) $account_book[$target_username]['login_alias'] : '');
+		$new_admin_login_alias = $old_login_alias;
+		if ($wants_username_update)
+		{
+			if ($target_username === 'admin')
+			{
+				if ($new_username_key === 'admin')
+				{
+					$new_admin_login_alias = '';
+				}
+				else
+				{
+					if ($this->is_reserved_system_username($new_username_key))
+					{
+						$this->session->set_flashdata('account_notice_error', 'Username sistem (admin/developer/bos) tidak boleh dipakai.');
+						redirect('home#manajemen-karyawan');
+						return;
+					}
+					if (isset($account_book[$new_username_key]))
+					{
+						$this->session->set_flashdata('account_notice_error', 'Username '.$new_username_key.' sudah terdaftar.');
+						redirect('home#manajemen-karyawan');
+						return;
+					}
+					foreach ($account_book as $candidate_username => $candidate_row)
+					{
+						$candidate_key = strtolower(trim((string) $candidate_username));
+						if ($candidate_key === '' || $candidate_key === $target_username || !is_array($candidate_row))
+						{
+							continue;
+						}
+						$candidate_alias = $this->normalize_username_key(isset($candidate_row['login_alias']) ? (string) $candidate_row['login_alias'] : '');
+						if ($candidate_alias !== '' && $candidate_alias === $new_username_key)
+						{
+							$this->session->set_flashdata('account_notice_error', 'Username '.$new_username_key.' sudah dipakai sebagai login akun lain.');
+							redirect('home#manajemen-karyawan');
+							return;
+						}
+					}
+					$new_admin_login_alias = $new_username_key;
+				}
+			}
+			else
+			{
+				if ($this->is_reserved_system_username($target_username))
+				{
+					$this->session->set_flashdata('account_notice_error', 'Username akun sistem developer/bos tidak bisa diubah.');
+					redirect('home#manajemen-karyawan');
+					return;
+				}
+				if ($this->is_reserved_system_username($new_username_key))
+				{
+					$this->session->set_flashdata('account_notice_error', 'Username sistem (admin/developer/bos) tidak boleh dipakai.');
+					redirect('home#manajemen-karyawan');
+					return;
+				}
+				if ($new_username_key !== $target_username && isset($account_book[$new_username_key]))
+				{
+					$this->session->set_flashdata('account_notice_error', 'Username '.$new_username_key.' sudah terdaftar.');
+					redirect('home#manajemen-karyawan');
+					return;
+				}
+			}
+		}
+
+		$old_display_name = isset($account_book[$target_username]['display_name']) && trim((string) $account_book[$target_username]['display_name']) !== ''
+			? trim((string) $account_book[$target_username]['display_name'])
+			: $target_username;
+		$display_name_changed = FALSE;
+		$password_changed = FALSE;
+		$username_changed = FALSE;
+		$username_login_changed = FALSE;
+
+		if ($wants_display_name_update && $new_display_name !== $old_display_name)
+		{
+			$account_book[$target_username]['display_name'] = $new_display_name;
+			$display_name_changed = TRUE;
+		}
+
+		if ($wants_password_update)
+		{
+			if ($new_password === '' || strlen($new_password) < 3)
+			{
+				$this->session->set_flashdata('account_notice_error', 'Password baru minimal 3 karakter.');
+				redirect('home#manajemen-karyawan');
+				return;
+			}
+			if ($new_password !== $confirm_password)
+			{
+				$this->session->set_flashdata('account_notice_error', 'Konfirmasi password tidak sama.');
+				redirect('home#manajemen-karyawan');
+				return;
+			}
+			$force_change_target = $actor_username !== $target_username;
+			if (!function_exists('absen_account_set_password') || !absen_account_set_password($account_book[$target_username], $new_password, $force_change_target))
+			{
+				$this->session->set_flashdata('account_notice_error', 'Gagal memproses password baru. Coba lagi.');
+				redirect('home#manajemen-karyawan');
+				return;
+			}
+			$password_changed = TRUE;
+		}
+
+		if ($wants_username_update)
+		{
+			if ($target_username === 'admin')
+			{
+				if ($new_admin_login_alias !== $old_login_alias)
+				{
+					$account_book[$target_username]['login_alias'] = $new_admin_login_alias;
+					$username_login_changed = TRUE;
+				}
+			}
+			elseif ($new_username_key !== $target_username)
+			{
+				$moved_account_row = $account_book[$target_username];
+				unset($account_book[$target_username]);
+				$account_book[$new_username_key] = $moved_account_row;
+				$username_changed = TRUE;
+			}
+		}
+		$final_username = $username_changed ? $new_username_key : $target_username;
+
+		if (!$username_changed && !$username_login_changed && !$display_name_changed && !$password_changed)
+		{
+			$this->session->set_flashdata('account_notice_success', 'Informasi akun '.$target_username.' tidak berubah.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		$saved = function_exists('absen_save_account_book')
+			? absen_save_account_book($account_book)
+			: FALSE;
+		if (!$saved)
+		{
+			$this->session->set_flashdata('account_notice_error', 'Gagal menyimpan perubahan informasi akun. Coba lagi.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		$target_display_name = isset($account_book[$final_username]['display_name']) && trim((string) $account_book[$final_username]['display_name']) !== ''
+			? trim((string) $account_book[$final_username]['display_name'])
+			: $final_username;
+		if ($username_changed)
+		{
+			$this->log_activity_event(
+				'update_account_username',
+				'account_data',
+				$final_username,
+				$target_display_name,
+				'Edit akun privileged. Field username diubah.',
+				array(
+					'field' => 'username',
+					'field_label' => 'username',
+					'old_value' => $target_username,
+					'new_value' => $final_username
+				)
+			);
+		}
+		if ($username_login_changed)
+		{
+			$old_login_label = $old_login_alias !== '' ? $old_login_alias : 'admin';
+			$new_login_label = $new_admin_login_alias !== '' ? $new_admin_login_alias : 'admin';
+			$this->log_activity_event(
+				'update_account_field',
+				'account_data',
+				$final_username,
+				$target_display_name,
+				'Edit akun privileged. Field username login diubah.',
+				array(
+					'field' => 'login_alias',
+					'field_label' => 'username_login',
+					'old_value' => $old_login_label,
+					'new_value' => $new_login_label
+				)
+			);
+		}
+		if ($display_name_changed)
+		{
+			$this->log_activity_event(
+				'update_account_field',
+				'account_data',
+				$final_username,
+				$target_display_name,
+				'Edit akun privileged. Field nama diubah.',
+				array(
+					'field' => 'display_name',
+					'field_label' => 'nama',
+					'old_value' => $old_display_name,
+					'new_value' => $new_display_name
+				)
+			);
+		}
+		if ($password_changed)
+		{
+			$this->log_activity_event(
+				'update_password',
+				'account_data',
+				$final_username,
+				$target_display_name,
+				'Ganti password akun '.$final_username.'.',
+				array(
+					'field' => 'password',
+					'field_label' => 'Password',
+					'old_value' => '***',
+					'new_value' => '***'
+				)
+			);
+		}
+
+		if ($actor_username === $target_username && $username_changed)
+		{
+			$this->session->set_userdata('absen_username', $final_username);
+			$actor_username = $final_username;
+		}
+		if ($actor_username === $final_username && $display_name_changed)
+		{
+			$this->session->set_userdata('absen_display_name', $target_display_name);
+		}
+		if ($actor_username === $final_username && $password_changed)
+		{
+			$this->session->set_userdata('absen_password_change_required', 0);
+		}
+		$success_parts = array();
+		if ($username_changed || $username_login_changed)
+		{
+			$success_parts[] = 'username';
+		}
+		if ($display_name_changed)
+		{
+			$success_parts[] = 'nama';
+		}
+		if ($password_changed)
+		{
+			$success_parts[] = 'password';
+		}
+		$this->session->set_flashdata('account_notice_success', 'Informasi akun '.$final_username.' berhasil diperbarui ('.implode(' + ', $success_parts).').');
+		redirect('home#manajemen-karyawan');
+	}
+
+	public function update_privileged_account_display_name()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			redirect('login');
+			return;
+		}
+
+		if (!$this->can_access_super_admin_features())
+		{
+			$this->session->set_flashdata('account_notice_error', 'Fitur ini hanya bisa diakses akun Developer dan Bos.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		if ($this->input->method(TRUE) !== 'POST')
+		{
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		$actor_username = $this->current_actor_username();
+		$target_username = strtolower(trim((string) $this->input->post('target_account', TRUE)));
+		$new_display_name = trim((string) $this->input->post('new_display_name', TRUE));
+		$new_display_name = preg_replace('/\s+/', ' ', $new_display_name);
+		$allowed_targets = $this->allowed_privileged_password_targets($actor_username);
+
+		if (empty($allowed_targets))
+		{
+			$this->session->set_flashdata('account_notice_error', 'Akun login kamu tidak diizinkan mengganti nama akun admin.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		if (!in_array($target_username, $allowed_targets, TRUE))
+		{
+			$this->session->set_flashdata('account_notice_error', 'Target akun tidak diizinkan untuk role login kamu.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		if ($target_username !== 'admin')
+		{
+			$this->session->set_flashdata('account_notice_error', 'Hanya akun admin yang bisa diganti nama dari form ini.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		if ($new_display_name === '')
+		{
+			$this->session->set_flashdata('account_notice_error', 'Nama baru akun admin wajib diisi.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		$account_book = function_exists('absen_load_account_book')
+			? absen_load_account_book()
+			: array();
+		if (!isset($account_book[$target_username]) || !is_array($account_book[$target_username]))
+		{
+			$this->session->set_flashdata('account_notice_error', 'Akun '.$target_username.' tidak ditemukan.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		$target_role = strtolower(trim((string) (isset($account_book[$target_username]['role']) ? $account_book[$target_username]['role'] : '')));
+		if ($target_role !== 'admin')
+		{
+			$this->session->set_flashdata('account_notice_error', 'Akun '.$target_username.' bukan akun admin.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		$old_display_name = isset($account_book[$target_username]['display_name']) && trim((string) $account_book[$target_username]['display_name']) !== ''
+			? trim((string) $account_book[$target_username]['display_name'])
+			: $target_username;
+		if ($old_display_name === $new_display_name)
+		{
+			$this->session->set_flashdata('account_notice_success', 'Nama akun admin tetap sama (tidak ada perubahan).');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		$account_book[$target_username]['display_name'] = $new_display_name;
+		$saved = function_exists('absen_save_account_book')
+			? absen_save_account_book($account_book)
+			: FALSE;
+		if (!$saved)
+		{
+			$this->session->set_flashdata('account_notice_error', 'Gagal menyimpan nama akun admin. Coba lagi.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		$this->log_activity_event(
+			'update_account_field',
+			'account_data',
+			$target_username,
+			$new_display_name,
+			'Edit akun admin. Field nama diubah.',
+			array(
+				'field' => 'display_name',
+				'field_label' => 'nama',
+				'old_value' => $old_display_name,
+				'new_value' => $new_display_name
+			)
+		);
+
+		$this->session->set_flashdata('account_notice_success', 'Nama akun admin berhasil diperbarui menjadi '.$new_display_name.'.');
+		redirect('home#manajemen-karyawan');
+	}
+
+	public function create_feature_admin_account()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			redirect('login');
+			return;
+		}
+
+		if (!$this->can_access_super_admin_features())
+		{
+			$this->session->set_flashdata('account_notice_error', 'Fitur ini hanya bisa diakses akun Developer dan Bos.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		if ($this->input->method(TRUE) !== 'POST')
+		{
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		$username_key = $this->normalize_username_key($this->input->post('feature_admin_username', TRUE));
+		$display_name = trim((string) $this->input->post('feature_admin_display_name', TRUE));
+		$display_name = preg_replace('/\s+/', ' ', $display_name);
+		$password = trim((string) $this->input->post('feature_admin_password', FALSE));
+		$feature_permissions = $this->normalize_admin_feature_permissions($this->input->post('feature_permissions', FALSE));
+
+		if ($username_key === '')
+		{
+			$this->session->set_flashdata('account_notice_error', 'Username akun fitur wajib diisi.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+		if (!preg_match('/^[a-z0-9_]{3,30}$/', $username_key))
+		{
+			$this->session->set_flashdata('account_notice_error', 'Username hanya boleh huruf kecil, angka, underscore (3-30 karakter).');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+		if ($this->is_reserved_system_username($username_key))
+		{
+			$this->session->set_flashdata('account_notice_error', 'Username sistem (admin/developer/bos) tidak boleh dipakai.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+		if ($display_name === '')
+		{
+			$display_name = $username_key;
+		}
+		if ($password === '' || strlen($password) < 3)
+		{
+			$this->session->set_flashdata('account_notice_error', 'Password akun fitur minimal 3 karakter.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+		if (empty($feature_permissions))
+		{
+			$this->session->set_flashdata('account_notice_error', 'Pilih minimal 1 fitur untuk akun baru.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		$account_book = function_exists('absen_load_account_book')
+			? absen_load_account_book()
+			: array();
+		if (isset($account_book[$username_key]) && is_array($account_book[$username_key]))
+		{
+			$this->session->set_flashdata('account_notice_error', 'Username '.$username_key.' sudah terdaftar.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		$new_account_row = array(
+			'role' => 'admin',
+			'display_name' => $display_name,
+			'branch' => '',
+			'phone' => '',
+			'shift_name' => '',
+			'shift_time' => '',
+			'salary_tier' => '',
+			'salary_monthly' => 0,
+			'work_days' => 22,
+			'job_title' => 'Admin',
+			'address' => $this->default_employee_address(),
+			'profile_photo' => '',
+			'coordinate_point' => '',
+			'employee_status' => 'Aktif',
+			'sheet_row' => 0,
+			'sheet_sync_source' => '',
+			'sheet_last_sync_at' => '',
+			'feature_permissions' => $feature_permissions,
+			'force_password_change' => 1,
+			'password_changed_at' => ''
+		);
+		if (!function_exists('absen_account_set_password') || !absen_account_set_password($new_account_row, $password, TRUE))
+		{
+			$this->session->set_flashdata('account_notice_error', 'Gagal memproses password akun fitur.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+		$account_book[$username_key] = $new_account_row;
+
+		$saved = function_exists('absen_save_account_book')
+			? absen_save_account_book($account_book)
+			: FALSE;
+		if (!$saved)
+		{
+			$this->session->set_flashdata('account_notice_error', 'Gagal menyimpan akun fitur baru.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		$this->log_activity_event(
+			'create_account',
+			'account_data',
+			$username_key,
+			$display_name,
+			'Buat akun admin fitur baru.',
+			array(
+				'field' => 'feature_permissions',
+				'field_label' => 'fitur',
+				'new_value' => implode(',', $feature_permissions)
+			)
+		);
+
+		$this->session->set_flashdata('account_notice_success', 'Akun fitur '.$username_key.' berhasil dibuat.');
+		redirect('home#manajemen-karyawan');
+	}
+
+	public function update_feature_admin_account_permissions()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			redirect('login');
+			return;
+		}
+
+		if (!$this->can_access_super_admin_features())
+		{
+			$this->session->set_flashdata('account_notice_error', 'Fitur ini hanya bisa diakses akun Developer dan Bos.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		if ($this->input->method(TRUE) !== 'POST')
+		{
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		$actor_username = $this->current_actor_username();
+		$target_username = strtolower(trim((string) $this->input->post('feature_target_account', TRUE)));
+		$feature_permissions = $this->normalize_admin_feature_permissions($this->input->post('feature_permissions', FALSE));
+		$allowed_targets = $this->manageable_admin_targets_for_actor($actor_username);
+		if ($target_username === '')
+		{
+			$this->session->set_flashdata('account_notice_error', 'Pilih akun admin yang ingin diubah fiturnya.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+		if (!in_array($target_username, $allowed_targets, TRUE))
+		{
+			$this->session->set_flashdata('account_notice_error', 'Kamu tidak punya izin mengubah fitur akun '.$target_username.'.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+		if (in_array($target_username, $this->privileged_admin_usernames(), TRUE))
+		{
+			if ($actor_username === 'developer' && $target_username === 'bos')
+			{
+				// Developer diizinkan mengelola fitur akun bos.
+			}
+			else
+			{
+				$message = 'Fitur akun sistem '.$target_username.' tidak bisa diubah dari form ini.';
+				if ($actor_username === 'bos' && $target_username === 'developer')
+				{
+					$message = 'Bos tidak diizinkan mengubah fitur akun developer.';
+				}
+				$this->session->set_flashdata('account_notice_error', $message);
+				redirect('home#manajemen-karyawan');
+				return;
+			}
+		}
+
+		$account_book = function_exists('absen_load_account_book')
+			? absen_load_account_book()
+			: array();
+		if (!isset($account_book[$target_username]) || !is_array($account_book[$target_username]))
+		{
+			$this->session->set_flashdata('account_notice_error', 'Akun '.$target_username.' tidak ditemukan.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+		$target_role = strtolower(trim((string) (isset($account_book[$target_username]['role']) ? $account_book[$target_username]['role'] : '')));
+		if ($target_role !== 'admin')
+		{
+			$this->session->set_flashdata('account_notice_error', 'Akun '.$target_username.' bukan akun admin.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		$old_permissions = $this->normalize_admin_feature_permissions(
+			isset($account_book[$target_username]['feature_permissions']) ? $account_book[$target_username]['feature_permissions'] : array()
+		);
+		$old_permissions_csv = implode(',', $old_permissions);
+		$new_permissions_csv = implode(',', $feature_permissions);
+		if ($old_permissions_csv === $new_permissions_csv)
+		{
+			$this->session->set_flashdata('account_notice_success', 'Fitur akun '.$target_username.' tidak berubah.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		$account_book[$target_username]['feature_permissions'] = $feature_permissions;
+		$saved = function_exists('absen_save_account_book')
+			? absen_save_account_book($account_book)
+			: FALSE;
+		if (!$saved)
+		{
+			$this->session->set_flashdata('account_notice_error', 'Gagal menyimpan perubahan fitur akun.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		$target_display_name = isset($account_book[$target_username]['display_name']) && trim((string) $account_book[$target_username]['display_name']) !== ''
+			? (string) $account_book[$target_username]['display_name']
+			: $target_username;
+		$this->log_activity_event(
+			'update_account_field',
+			'account_data',
+			$target_username,
+			$target_display_name,
+			'Edit akun admin. Field fitur diubah.',
+			array(
+				'field' => 'feature_permissions',
+				'field_label' => 'fitur',
+				'old_value' => $old_permissions_csv,
+				'new_value' => $new_permissions_csv
+			)
+		);
+
+		$this->session->set_flashdata('account_notice_success', 'Fitur akun '.$target_username.' berhasil diperbarui.');
 		redirect('home#manajemen-karyawan');
 	}
 
@@ -1325,17 +3133,23 @@ class Home extends CI_Controller {
 			return;
 		}
 
-		$stored_password = isset($account_book[$username_key]['password'])
-			? (string) $account_book[$username_key]['password']
-			: '';
-		if ($stored_password === '' || $stored_password !== $current_password)
+		$needs_upgrade = FALSE;
+		$is_current_password_valid = function_exists('absen_verify_account_password')
+			? absen_verify_account_password($account_book[$username_key], $current_password, $needs_upgrade)
+			: ((isset($account_book[$username_key]['password']) ? (string) $account_book[$username_key]['password'] : '') === $current_password);
+		if ($is_current_password_valid !== TRUE)
 		{
 			$this->session->set_flashdata('password_notice_error', 'Password saat ini tidak sesuai.');
 			redirect('home#ubah-password');
 			return;
 		}
 
-		$account_book[$username_key]['password'] = $new_password;
+		if (!function_exists('absen_account_set_password') || !absen_account_set_password($account_book[$username_key], $new_password, FALSE))
+		{
+			$this->session->set_flashdata('password_notice_error', 'Gagal memproses password baru. Coba lagi.');
+			redirect('home#ubah-password');
+			return;
+		}
 		$saved = function_exists('absen_save_account_book')
 			? absen_save_account_book($account_book)
 			: FALSE;
@@ -1346,6 +3160,8 @@ class Home extends CI_Controller {
 			return;
 		}
 
+		$this->session->set_userdata('absen_password_change_required', 0);
+		$this->session->set_userdata('absen_last_activity_at', time());
 		$this->session->set_flashdata('password_notice_success', 'Password berhasil diperbarui.');
 		redirect('home#ubah-password');
 	}
@@ -1365,10 +3181,17 @@ class Home extends CI_Controller {
 		}
 
 		$records = $this->load_attendance_records();
+		$scope_lookup = $this->scoped_employee_lookup();
 		$employee_id_book = $this->employee_id_book();
 		for ($i = 0; $i < count($records); $i += 1)
 		{
 			$row_username = isset($records[$i]['username']) ? (string) $records[$i]['username'] : '';
+			$row_username_key = strtolower(trim((string) $row_username));
+			if ($row_username_key === '' || !isset($scope_lookup[$row_username_key]))
+			{
+				unset($records[$i]);
+				continue;
+			}
 			$records[$i]['employee_id'] = $this->resolve_employee_id_from_book($row_username, $employee_id_book);
 			$row_profile = $this->get_employee_profile($row_username);
 			$records[$i]['profile_photo'] = isset($row_profile['profile_photo']) && trim((string) $row_profile['profile_photo']) !== ''
@@ -1468,6 +3291,7 @@ class Home extends CI_Controller {
 				);
 			}
 		}
+		$records = array_values($records);
 		usort($records, function ($a, $b) {
 			$left = (string) $a['date'].' '.(string) $a['check_in_time'];
 			$right = (string) $b['date'].' '.(string) $b['check_in_time'];
@@ -1539,6 +3363,7 @@ class Home extends CI_Controller {
 
 		$records = $this->load_attendance_records();
 		$users = array();
+		$scope_lookup = $this->scoped_employee_lookup();
 		$employee_id_book = $this->employee_id_book();
 
 		for ($i = 0; $i < count($records); $i += 1)
@@ -1546,6 +3371,11 @@ class Home extends CI_Controller {
 			$row = $records[$i];
 			$username = isset($row['username']) ? trim((string) $row['username']) : '';
 			if ($username === '')
+			{
+				continue;
+			}
+			$username_scope_key = strtolower($username);
+			if (!isset($scope_lookup[$username_scope_key]))
 			{
 				continue;
 			}
@@ -1783,6 +3613,11 @@ class Home extends CI_Controller {
 
 			$username = isset($request['username']) ? trim((string) $request['username']) : '';
 			if ($username === '')
+			{
+				continue;
+			}
+			$username_scope_key = strtolower($username);
+			if (!isset($scope_lookup[$username_scope_key]))
 			{
 				continue;
 			}
@@ -2166,6 +4001,12 @@ class Home extends CI_Controller {
 			redirect('home/employee_data');
 			return;
 		}
+		if (!$this->is_username_in_actor_scope($username))
+		{
+			$this->session->set_flashdata('attendance_notice_error', 'Akses data absensi ditolak karena beda cabang.');
+			redirect('home/employee_data');
+			return;
+		}
 
 		$records = $this->load_attendance_records();
 		$record_index = -1;
@@ -2196,6 +4037,19 @@ class Home extends CI_Controller {
 		$records[$record_index]['updated_at'] = date('Y-m-d H:i:s');
 
 		$this->save_attendance_records($records);
+		$deduction_note = 'Ubah potongan absensi pada data web.';
+		$deduction_note .= ' Tanggal '.$date_key.'.';
+		$this->log_activity_event(
+			'update_attendance_deduction',
+			'web_data',
+			$username,
+			$username,
+			$deduction_note,
+			array(
+				'field' => 'salary_cut_amount',
+				'new_value' => (string) $salary_cut_amount
+			)
+		);
 
 		if ($salary_cut_amount > 0)
 		{
@@ -2333,6 +4187,17 @@ class Home extends CI_Controller {
 		);
 
 		$this->save_leave_requests($request_records);
+		$this->log_activity_event(
+			'submit_leave_request',
+			'web_data',
+			$username,
+			$username,
+			'Karyawan membuat pengajuan '.$request_type_label.'.',
+			array(
+				'target_id' => $request_id,
+				'new_value' => $start_date.' s/d '.$end_date
+			)
+		);
 
 		$request_type_message = $request_type === 'cuti'
 			? 'cuti'
@@ -2425,6 +4290,17 @@ class Home extends CI_Controller {
 		);
 
 		$this->save_loan_requests($loan_records);
+		$this->log_activity_event(
+			'submit_loan_request',
+			'web_data',
+			$username,
+			$username,
+			'Karyawan membuat pengajuan pinjaman.',
+			array(
+				'target_id' => $loan_id,
+				'new_value' => 'amount='.(int) $amount.', tenor='.(int) $tenor_months
+			)
+		);
 
 		$this->json_response(array(
 			'success' => TRUE,
@@ -2481,6 +4357,13 @@ class Home extends CI_Controller {
 		}
 
 		$request_row = $requests[$target_index];
+		$request_username = isset($request_row['username']) ? (string) $request_row['username'] : '';
+		if (!$this->is_username_in_actor_scope($request_username))
+		{
+			$this->session->set_flashdata('leave_notice_error', 'Akses pengajuan ditolak karena beda cabang.');
+			redirect('home/leave_requests');
+			return;
+		}
 		$request_row['status'] = $next_status === 'diterima' ? 'Diterima' : 'Ditolak';
 		$request_row['updated_at'] = date('Y-m-d H:i:s');
 		$request_row['status_note'] = '';
@@ -2494,6 +4377,25 @@ class Home extends CI_Controller {
 
 		$requests[$target_index] = $request_row;
 		$this->save_leave_requests($requests);
+		$leave_type = $this->resolve_leave_request_type($request_row);
+		$leave_type_label = $leave_type === 'cuti' ? 'cuti' : 'izin';
+		$leave_action = strtolower(trim((string) $request_row['status'])) === 'diterima'
+			? 'approve_leave_request'
+			: 'reject_leave_request';
+		$leave_note = 'Ubah status pengajuan '.$leave_type_label.' menjadi '.$request_row['status'].'.';
+		$leave_note .= ' Periode '.(isset($request_row['start_date']) ? (string) $request_row['start_date'] : '-');
+		$leave_note .= ' s/d '.(isset($request_row['end_date']) ? (string) $request_row['end_date'] : '-').'.';
+		$this->log_activity_event(
+			$leave_action,
+			'web_data',
+			isset($request_row['username']) ? (string) $request_row['username'] : '',
+			isset($request_row['username']) ? (string) $request_row['username'] : '',
+			$leave_note,
+			array(
+				'target_id' => isset($request_row['id']) ? (string) $request_row['id'] : $request_id,
+				'new_value' => (string) $request_row['status']
+			)
+		);
 
 		$whatsapp_message = $this->build_leave_status_whatsapp_message($request_row);
 		$whatsapp_result = $this->send_whatsapp_notification($phone, $whatsapp_message);
@@ -2565,6 +4467,13 @@ class Home extends CI_Controller {
 		}
 
 		$request_row = $requests[$target_index];
+		$request_username = isset($request_row['username']) ? (string) $request_row['username'] : '';
+		if (!$this->is_username_in_actor_scope($request_username))
+		{
+			$this->session->set_flashdata('loan_notice_error', 'Akses pengajuan ditolak karena beda cabang.');
+			redirect('home/loan_requests');
+			return;
+		}
 		$request_row['status'] = $next_status === 'diterima' ? 'Diterima' : 'Ditolak';
 		$request_row['updated_at'] = date('Y-m-d H:i:s');
 		$request_row['status_note'] = '';
@@ -2578,6 +4487,22 @@ class Home extends CI_Controller {
 
 		$requests[$target_index] = $request_row;
 		$this->save_loan_requests($requests);
+		$loan_action = strtolower(trim((string) $request_row['status'])) === 'diterima'
+			? 'approve_loan_request'
+			: 'reject_loan_request';
+		$loan_note = 'Ubah status pengajuan pinjaman menjadi '.$request_row['status'].'.';
+		$loan_note .= ' Nominal Rp '.number_format((int) (isset($request_row['amount']) ? $request_row['amount'] : 0), 0, ',', '.').'.';
+		$this->log_activity_event(
+			$loan_action,
+			'web_data',
+			isset($request_row['username']) ? (string) $request_row['username'] : '',
+			isset($request_row['username']) ? (string) $request_row['username'] : '',
+			$loan_note,
+			array(
+				'target_id' => isset($request_row['id']) ? (string) $request_row['id'] : $request_id,
+				'new_value' => (string) $request_row['status']
+			)
+		);
 
 		$whatsapp_message = $this->build_loan_status_whatsapp_message($request_row);
 		$whatsapp_result = $this->send_whatsapp_notification($phone, $whatsapp_message);
@@ -2804,10 +4729,20 @@ class Home extends CI_Controller {
 			$right = isset($b['created_at']) ? (string) $b['created_at'] : '';
 			return strcmp($right, $left);
 		});
+		$visible_requests = array();
+		for ($i = 0; $i < count($requests); $i += 1)
+		{
+			$request_username = isset($requests[$i]['username']) ? (string) $requests[$i]['username'] : '';
+			if (!$this->is_username_in_actor_scope($request_username))
+			{
+				continue;
+			}
+			$visible_requests[] = $requests[$i];
+		}
 
 		$data = array(
 			'title' => 'Pengajuan Cuti / Izin',
-			'requests' => $requests
+			'requests' => $visible_requests
 		);
 		$this->load->view('home/leave_requests', $data);
 	}
@@ -3012,10 +4947,20 @@ class Home extends CI_Controller {
 			$right = isset($b['created_at']) ? (string) $b['created_at'] : '';
 			return strcmp($right, $left);
 		});
+		$visible_requests = array();
+		for ($i = 0; $i < count($requests); $i += 1)
+		{
+			$request_username = isset($requests[$i]['username']) ? (string) $requests[$i]['username'] : '';
+			if (!$this->is_username_in_actor_scope($request_username))
+			{
+				continue;
+			}
+			$visible_requests[] = $requests[$i];
+		}
 
 		$data = array(
 			'title' => 'Pengajuan Pinjaman',
-			'requests' => $requests
+			'requests' => $visible_requests
 		);
 		$this->load->view('home/loan_requests', $data);
 	}
@@ -3035,6 +4980,17 @@ class Home extends CI_Controller {
 		}
 
 		$employee_names = $this->employee_username_list();
+		$scoped_employee_names = array();
+		for ($i = 0; $i < count($employee_names); $i += 1)
+		{
+			$employee_name_key = isset($employee_names[$i]) ? (string) $employee_names[$i] : '';
+			if (!$this->is_username_in_actor_scope($employee_name_key))
+			{
+				continue;
+			}
+			$scoped_employee_names[] = $employee_name_key;
+		}
+		$employee_names = $scoped_employee_names;
 		$employee_id_book = $this->employee_id_book();
 		$employee_options = array();
 		for ($i = 0; $i < count($employee_names); $i += 1)
@@ -3161,12 +5117,22 @@ class Home extends CI_Controller {
 			$right_created = isset($b['created_at']) ? (string) $b['created_at'] : '';
 			return strcmp($right_created, $left_created);
 		});
+		$visible_records = array();
+		for ($i = 0; $i < count($records); $i += 1)
+		{
+			$record_username = isset($records[$i]['username']) ? (string) $records[$i]['username'] : '';
+			if (!$this->is_username_in_actor_scope($record_username))
+			{
+				continue;
+			}
+			$visible_records[] = $records[$i];
+		}
 
 		$data = array(
 			'title' => 'Data Lembur',
 			'employee_names' => $employee_names,
 			'employee_options' => $employee_options,
-			'records' => $records
+			'records' => $visible_records
 		);
 		$this->load->view('home/overtime_data', $data);
 	}
@@ -3204,6 +5170,12 @@ class Home extends CI_Controller {
 		if ($employee_name === '' || !in_array($employee_name, $employee_names, TRUE))
 		{
 			$this->session->set_flashdata('overtime_notice_error', 'Nama karyawan lembur tidak valid.');
+			redirect('home/overtime_data');
+			return;
+		}
+		if (!$this->is_username_in_actor_scope($employee_name))
+		{
+			$this->session->set_flashdata('overtime_notice_error', 'Akses input lembur ditolak karena beda cabang.');
 			redirect('home/overtime_data');
 			return;
 		}
@@ -3277,6 +5249,18 @@ class Home extends CI_Controller {
 		);
 
 		$this->save_overtime_records($records);
+		$overtime_note = 'Input data lembur.';
+		$overtime_note .= ' Tanggal '.$overtime_date.', jam '.$start_time.'-'.$end_time.', nominal Rp '.number_format($nominal_value, 0, ',', '.').'.';
+		$this->log_activity_event(
+			'input_overtime',
+			'web_data',
+			$employee_name,
+			$employee_name,
+			$overtime_note,
+			array(
+				'new_value' => $reason
+			)
+		);
 		$this->session->set_flashdata('overtime_notice_success', 'Data lembur berhasil disimpan.');
 		redirect('home/overtime_data');
 	}
@@ -3844,7 +5828,7 @@ class Home extends CI_Controller {
 
 	private function build_admin_metric_maps()
 	{
-		$employees = $this->employee_username_list();
+		$employees = $this->scoped_employee_usernames();
 		$employee_lookup = array();
 		for ($i = 0; $i < count($employees); $i += 1)
 		{
@@ -4282,6 +6266,15 @@ class Home extends CI_Controller {
 	private function load_attendance_records()
 	{
 		$file_path = $this->attendance_file_path();
+		if (function_exists('absen_data_store_load_value'))
+		{
+			$rows = absen_data_store_load_value('attendance_records', NULL, $file_path);
+			if (is_array($rows))
+			{
+				return array_values($rows);
+			}
+		}
+
 		if (!is_file($file_path))
 		{
 			return array();
@@ -4311,12 +6304,22 @@ class Home extends CI_Controller {
 	private function save_attendance_records($records)
 	{
 		$file_path = $this->attendance_file_path();
+		$normalized = array_values(is_array($records) ? $records : array());
+		if (function_exists('absen_data_store_save_value'))
+		{
+			$saved_to_store = absen_data_store_save_value('attendance_records', $normalized, $file_path);
+			if ($saved_to_store)
+			{
+				return;
+			}
+		}
+
 		$directory = dirname($file_path);
 		if (!is_dir($directory))
 		{
 			@mkdir($directory, 0755, TRUE);
 		}
-		$payload = json_encode(array_values($records), JSON_PRETTY_PRINT);
+		$payload = json_encode($normalized, JSON_PRETTY_PRINT);
 		@file_put_contents($file_path, $payload);
 	}
 
@@ -4328,6 +6331,15 @@ class Home extends CI_Controller {
 	private function load_leave_requests()
 	{
 		$file_path = $this->leave_requests_file_path();
+		if (function_exists('absen_data_store_load_value'))
+		{
+			$rows = absen_data_store_load_value('leave_requests', NULL, $file_path);
+			if (is_array($rows))
+			{
+				return array_values($rows);
+			}
+		}
+
 		if (!is_file($file_path))
 		{
 			return array();
@@ -4357,12 +6369,22 @@ class Home extends CI_Controller {
 	private function save_leave_requests($requests)
 	{
 		$file_path = $this->leave_requests_file_path();
+		$normalized = array_values(is_array($requests) ? $requests : array());
+		if (function_exists('absen_data_store_save_value'))
+		{
+			$saved_to_store = absen_data_store_save_value('leave_requests', $normalized, $file_path);
+			if ($saved_to_store)
+			{
+				return;
+			}
+		}
+
 		$directory = dirname($file_path);
 		if (!is_dir($directory))
 		{
 			@mkdir($directory, 0755, TRUE);
 		}
-		$payload = json_encode(array_values($requests), JSON_PRETTY_PRINT);
+		$payload = json_encode($normalized, JSON_PRETTY_PRINT);
 		@file_put_contents($file_path, $payload);
 	}
 
@@ -4374,6 +6396,15 @@ class Home extends CI_Controller {
 	private function load_loan_requests()
 	{
 		$file_path = $this->loan_requests_file_path();
+		if (function_exists('absen_data_store_load_value'))
+		{
+			$rows = absen_data_store_load_value('loan_requests', NULL, $file_path);
+			if (is_array($rows))
+			{
+				return array_values($rows);
+			}
+		}
+
 		if (!is_file($file_path))
 		{
 			return array();
@@ -4402,12 +6433,22 @@ class Home extends CI_Controller {
 	private function save_loan_requests($requests)
 	{
 		$file_path = $this->loan_requests_file_path();
+		$normalized = array_values(is_array($requests) ? $requests : array());
+		if (function_exists('absen_data_store_save_value'))
+		{
+			$saved_to_store = absen_data_store_save_value('loan_requests', $normalized, $file_path);
+			if ($saved_to_store)
+			{
+				return;
+			}
+		}
+
 		$directory = dirname($file_path);
 		if (!is_dir($directory))
 		{
 			@mkdir($directory, 0755, TRUE);
 		}
-		$payload = json_encode(array_values($requests), JSON_PRETTY_PRINT);
+		$payload = json_encode($normalized, JSON_PRETTY_PRINT);
 		@file_put_contents($file_path, $payload);
 	}
 
@@ -4565,6 +6606,15 @@ class Home extends CI_Controller {
 	private function load_overtime_records()
 	{
 		$file_path = $this->overtime_file_path();
+		if (function_exists('absen_data_store_load_value'))
+		{
+			$rows = absen_data_store_load_value('overtime_records', NULL, $file_path);
+			if (is_array($rows))
+			{
+				return array_values($rows);
+			}
+		}
+
 		if (!is_file($file_path))
 		{
 			return array();
@@ -4593,12 +6643,22 @@ class Home extends CI_Controller {
 	private function save_overtime_records($records)
 	{
 		$file_path = $this->overtime_file_path();
+		$normalized = array_values(is_array($records) ? $records : array());
+		if (function_exists('absen_data_store_save_value'))
+		{
+			$saved_to_store = absen_data_store_save_value('overtime_records', $normalized, $file_path);
+			if ($saved_to_store)
+			{
+				return;
+			}
+		}
+
 		$directory = dirname($file_path);
 		if (!is_dir($directory))
 		{
 			@mkdir($directory, 0755, TRUE);
 		}
-		$payload = json_encode(array_values($records), JSON_PRETTY_PRINT);
+		$payload = json_encode($normalized, JSON_PRETTY_PRINT);
 		@file_put_contents($file_path, $payload);
 	}
 
@@ -4615,6 +6675,10 @@ class Home extends CI_Controller {
 			{
 				continue;
 			}
+			if (!$this->is_username_in_actor_scope($username))
+			{
+				continue;
+			}
 
 			$job_title = $this->resolve_employee_job_title(isset($profile['job_title']) ? (string) $profile['job_title'] : '');
 			if ($job_title === '')
@@ -4625,6 +6689,9 @@ class Home extends CI_Controller {
 			$options[] = array(
 				'username' => $username,
 				'employee_id' => $this->resolve_employee_id_from_book($username, $id_book),
+				'display_name' => isset($profile['display_name']) && trim((string) $profile['display_name']) !== ''
+					? (string) $profile['display_name']
+					: $username,
 				'branch' => isset($profile['branch']) ? (string) $profile['branch'] : $this->default_employee_branch(),
 				'phone' => isset($profile['phone']) ? (string) $profile['phone'] : '',
 				'shift_name' => isset($profile['shift_name']) ? (string) $profile['shift_name'] : '',
@@ -4633,6 +6700,7 @@ class Home extends CI_Controller {
 				'salary_monthly' => isset($profile['salary_monthly']) ? (int) $profile['salary_monthly'] : 0,
 				'job_title' => $job_title,
 				'address' => isset($profile['address']) ? (string) $profile['address'] : $this->default_employee_address(),
+				'coordinate_point' => isset($profile['coordinate_point']) ? (string) $profile['coordinate_point'] : '',
 				'work_days' => isset($profile['work_days']) ? (int) $profile['work_days'] : 28
 			);
 		}
@@ -5026,6 +7094,274 @@ class Home extends CI_Controller {
 		);
 	}
 
+	private function profile_photo_upload_dir()
+	{
+		return 'uploads/profile_photo';
+	}
+
+	private function upload_employee_profile_photo($field_name, $username_key = '', $is_required = TRUE)
+	{
+		$parse_size_to_bytes = function ($size_value) {
+			$size_text = trim((string) $size_value);
+			if ($size_text === '')
+			{
+				return 0;
+			}
+			$unit = strtolower(substr($size_text, -1));
+			$number = (float) $size_text;
+			if ($number <= 0)
+			{
+				return 0;
+			}
+			switch ($unit)
+			{
+				case 'g':
+					$number *= 1024;
+					// no break
+				case 'm':
+					$number *= 1024;
+					// no break
+				case 'k':
+					$number *= 1024;
+					break;
+			}
+			return (int) round($number);
+		};
+		$format_size_label = function ($size_bytes) {
+			$bytes = (int) $size_bytes;
+			if ($bytes <= 0)
+			{
+				return '0 MB';
+			}
+			$size_mb = $bytes / (1024 * 1024);
+			if ($size_mb < 1)
+			{
+				$size_kb = (int) ceil($bytes / 1024);
+				return $size_kb.' KB';
+			}
+			$size_mb_label = number_format($size_mb, $size_mb >= 10 ? 0 : 1, ',', '.');
+			return $size_mb_label.' MB';
+		};
+		$app_max_size_bytes = (int) round(2.3 * 1024 * 1024);
+		$server_upload_max_bytes = $parse_size_to_bytes(ini_get('upload_max_filesize'));
+		$server_post_max_bytes = $parse_size_to_bytes(ini_get('post_max_size'));
+		$effective_max_size_bytes = $app_max_size_bytes;
+		if ($server_upload_max_bytes > 0 && $server_upload_max_bytes < $effective_max_size_bytes)
+		{
+			$effective_max_size_bytes = $server_upload_max_bytes;
+		}
+		if ($server_post_max_bytes > 0 && $server_post_max_bytes < $effective_max_size_bytes)
+		{
+			$effective_max_size_bytes = $server_post_max_bytes;
+		}
+
+		$file_data = isset($_FILES[$field_name]) && is_array($_FILES[$field_name]) ? $_FILES[$field_name] : NULL;
+		if ($file_data === NULL)
+		{
+			if (!$is_required)
+			{
+				return array(
+					'success' => TRUE,
+					'skipped' => TRUE,
+					'message' => 'File PP tidak diubah.'
+				);
+			}
+			return array(
+				'success' => FALSE,
+				'message' => 'PP karyawan wajib diupload.'
+			);
+		}
+
+		$file_error = isset($file_data['error']) ? (int) $file_data['error'] : UPLOAD_ERR_NO_FILE;
+		if ($file_error === UPLOAD_ERR_NO_FILE)
+		{
+			if (!$is_required)
+			{
+				return array(
+					'success' => TRUE,
+					'skipped' => TRUE,
+					'message' => 'File PP tidak diubah.'
+				);
+			}
+			return array(
+				'success' => FALSE,
+				'message' => 'PP karyawan wajib diupload.'
+			);
+		}
+		if ($file_error !== UPLOAD_ERR_OK)
+		{
+			$error_message = 'Upload PP karyawan gagal. Coba ulangi lagi.';
+			switch ($file_error)
+			{
+				case UPLOAD_ERR_INI_SIZE:
+				case UPLOAD_ERR_FORM_SIZE:
+					$error_message = 'Ukuran PP melebihi batas upload (maks '.$format_size_label($effective_max_size_bytes).').';
+					break;
+				case UPLOAD_ERR_PARTIAL:
+					$error_message = 'Upload PP tidak selesai. Coba upload ulang.';
+					break;
+				case UPLOAD_ERR_NO_TMP_DIR:
+					$error_message = 'Folder sementara upload tidak tersedia di server.';
+					break;
+				case UPLOAD_ERR_CANT_WRITE:
+					$error_message = 'Server gagal menulis file upload.';
+					break;
+				case UPLOAD_ERR_EXTENSION:
+					$error_message = 'Upload PP diblokir ekstensi server.';
+					break;
+			}
+			return array(
+				'success' => FALSE,
+				'message' => $error_message
+			);
+		}
+
+		$original_name = isset($file_data['name']) ? trim((string) $file_data['name']) : '';
+		$file_ext = strtolower(pathinfo($original_name, PATHINFO_EXTENSION));
+		$allowed_extensions = array('png', 'jpg', 'jpeg', 'heic');
+		if ($file_ext === '' || !in_array($file_ext, $allowed_extensions, TRUE))
+		{
+			return array(
+				'success' => FALSE,
+				'message' => 'Format PP harus png, jpg, jpeg, atau heic.'
+			);
+		}
+
+		$file_size = isset($file_data['size']) ? (int) $file_data['size'] : 0;
+		if ($file_size <= 0 || $file_size > $effective_max_size_bytes)
+		{
+			return array(
+				'success' => FALSE,
+				'message' => 'Ukuran PP maksimal '.$format_size_label($effective_max_size_bytes).'.'
+			);
+		}
+
+		$tmp_name = isset($file_data['tmp_name']) ? (string) $file_data['tmp_name'] : '';
+		if ($tmp_name === '' || !is_uploaded_file($tmp_name))
+		{
+			return array(
+				'success' => FALSE,
+				'message' => 'File PP tidak valid.'
+			);
+		}
+
+		$upload_directory_relative = trim($this->profile_photo_upload_dir(), '/\\');
+		$upload_directory_absolute = rtrim((string) FCPATH, '/\\').DIRECTORY_SEPARATOR.
+			str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $upload_directory_relative);
+		if (!is_dir($upload_directory_absolute))
+		{
+			@mkdir($upload_directory_absolute, 0755, TRUE);
+		}
+		if (!is_dir($upload_directory_absolute))
+		{
+			return array(
+				'success' => FALSE,
+				'message' => 'Folder upload PP tidak tersedia.'
+			);
+		}
+
+		$username_safe = preg_replace('/[^a-z0-9_]+/i', '', strtolower(trim((string) $username_key)));
+		if ($username_safe === '')
+		{
+			$username_safe = 'user';
+		}
+		$file_name = 'pp_'.$username_safe.'_'.date('YmdHis').'_'.strtolower(substr(md5(uniqid('', TRUE)), 0, 10)).'.'.$file_ext;
+		$target_path = rtrim($upload_directory_absolute, DIRECTORY_SEPARATOR).DIRECTORY_SEPARATOR.$file_name;
+		if (!@move_uploaded_file($tmp_name, $target_path))
+		{
+			return array(
+				'success' => FALSE,
+				'message' => 'Gagal menyimpan file PP.'
+			);
+		}
+
+		return array(
+			'success' => TRUE,
+			'file_name' => $file_name,
+			'original_name' => $original_name,
+			'relative_path' => '/'.str_replace('\\', '/', $upload_directory_relative.'/'.$file_name),
+			'file_ext' => $file_ext
+		);
+	}
+
+	private function normalize_coordinate_point($coordinate_value)
+	{
+		$raw = trim((string) $coordinate_value);
+		if ($raw === '')
+		{
+			return '';
+		}
+
+		$raw = str_replace(array("\r", "\n", "\t"), ' ', $raw);
+		$raw = str_replace(';', ',', $raw);
+		$raw = preg_replace('/\s+/', ' ', $raw);
+		$parts = array();
+		if (strpos($raw, ',') !== FALSE)
+		{
+			$parts = explode(',', $raw);
+		}
+		else
+		{
+			$parts = preg_split('/\s+/', $raw);
+		}
+		if (!is_array($parts) || count($parts) < 2)
+		{
+			return '';
+		}
+
+		$latitude_text = trim((string) $parts[0]);
+		$longitude_text = trim((string) $parts[1]);
+		if ($latitude_text === '' || $longitude_text === '')
+		{
+			return '';
+		}
+		if (!is_numeric($latitude_text) || !is_numeric($longitude_text))
+		{
+			return '';
+		}
+
+		$latitude = (float) $latitude_text;
+		$longitude = (float) $longitude_text;
+		if ($latitude < -90 || $latitude > 90 || $longitude < -180 || $longitude > 180)
+		{
+			return '';
+		}
+
+		return $this->format_coordinate_number($latitude).', '.$this->format_coordinate_number($longitude);
+	}
+
+	private function format_coordinate_number($value)
+	{
+		$number = number_format((float) $value, 8, '.', '');
+		$number = rtrim(rtrim($number, '0'), '.');
+		if ($number === '-0')
+		{
+			return '0';
+		}
+
+		return $number !== '' ? $number : '0';
+	}
+
+	private function delete_local_uploaded_file($relative_path)
+	{
+		$path_value = trim((string) $relative_path);
+		if ($path_value === '')
+		{
+			return;
+		}
+		if (strpos($path_value, 'data:') === 0 || preg_match('/^https?:\/\//i', $path_value) === 1)
+		{
+			return;
+		}
+
+		$absolute_path = rtrim((string) FCPATH, '/\\').DIRECTORY_SEPARATOR.
+			str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, ltrim($path_value, '/\\'));
+		if (is_file($absolute_path))
+		{
+			@unlink($absolute_path);
+		}
+	}
+
 	private function is_valid_date_format($date_value)
 	{
 		$date_value = trim((string) $date_value);
@@ -5179,6 +7515,540 @@ class Home extends CI_Controller {
 		return $normalized;
 	}
 
+	private function dashboard_role_label($username = '')
+	{
+		$username_key = strtolower(trim((string) $username));
+		if ($username_key === '')
+		{
+			$username_key = $this->current_actor_username();
+		}
+
+		if ($username_key === 'developer')
+		{
+			return 'Developer';
+		}
+
+		if ($username_key === 'bos')
+		{
+			return 'Bos';
+		}
+
+		return 'Admin';
+	}
+
+	private function dashboard_navbar_title($username = '')
+	{
+		return 'Dashboard '.$this->dashboard_role_label($username).' Absen';
+	}
+
+	private function dashboard_status_label()
+	{
+		return 'Ringkasan Operasional Harian';
+	}
+
+	private function privileged_admin_usernames()
+	{
+		return array('developer', 'bos');
+	}
+
+	private function allowed_privileged_password_targets($actor_username = '')
+	{
+		$actor = strtolower(trim((string) $actor_username));
+		if ($actor === '')
+		{
+			$actor = $this->current_actor_username();
+		}
+		return $this->manageable_admin_targets_for_actor($actor);
+	}
+
+	private function build_privileged_password_target_options($actor_username = '')
+	{
+		$targets = $this->allowed_privileged_password_targets($actor_username);
+		if (empty($targets))
+		{
+			return array();
+		}
+
+		$accounts = function_exists('absen_load_account_book')
+			? absen_load_account_book()
+			: array();
+		$options = array();
+		for ($i = 0; $i < count($targets); $i += 1)
+		{
+			$username = strtolower(trim((string) $targets[$i]));
+			if ($username === '')
+			{
+				continue;
+			}
+
+			$display_name = $username;
+			$login_label = $username;
+			if (isset($accounts[$username]) && is_array($accounts[$username]))
+			{
+				$row = $accounts[$username];
+				$display_name_value = isset($row['display_name']) ? trim((string) $row['display_name']) : '';
+				if ($display_name_value !== '')
+				{
+					$display_name = $display_name_value;
+				}
+				if ($username === 'admin')
+				{
+					$login_alias = $this->normalize_username_key(isset($row['login_alias']) ? (string) $row['login_alias'] : '');
+					if ($login_alias !== '')
+					{
+						$login_label = $login_alias;
+					}
+				}
+			}
+
+			$label = $display_name;
+			if ($login_label !== '')
+			{
+				$label .= ' ('.$login_label.')';
+			}
+			$options[] = array(
+				'username' => $username,
+				'label' => $label
+			);
+		}
+
+		return $options;
+	}
+
+	private function admin_feature_permission_catalog()
+	{
+		return array(
+			'manage_accounts' => 'Kelola akun karyawan',
+			'sync_sheet_accounts' => 'Sync akun dari sheet',
+			'view_log_data' => 'Akses log data'
+		);
+	}
+
+	private function normalize_admin_feature_permissions($value)
+	{
+		$catalog = $this->admin_feature_permission_catalog();
+		$allowed_keys = array_keys($catalog);
+		$raw_items = array();
+		if (is_array($value))
+		{
+			$raw_items = $value;
+		}
+		elseif (is_string($value))
+		{
+			$raw_text = trim($value);
+			if ($raw_text !== '')
+			{
+				$raw_items = preg_split('/[\s,;|]+/', $raw_text);
+			}
+		}
+
+		$permissions = array();
+		for ($i = 0; $i < count($raw_items); $i += 1)
+		{
+			$key = strtolower(trim((string) $raw_items[$i]));
+			if ($key === '' || !in_array($key, $allowed_keys, TRUE))
+			{
+				continue;
+			}
+			if (!in_array($key, $permissions, TRUE))
+			{
+				$permissions[] = $key;
+			}
+		}
+
+		return $permissions;
+	}
+
+	private function actor_admin_feature_permissions($actor_username = '')
+	{
+		$actor = strtolower(trim((string) $actor_username));
+		if ($actor === '')
+		{
+			$actor = $this->current_actor_username();
+		}
+		if ($actor === '')
+		{
+			return array();
+		}
+		if (in_array($actor, $this->privileged_admin_usernames(), TRUE))
+		{
+			return array_keys($this->admin_feature_permission_catalog());
+		}
+
+		$accounts = function_exists('absen_load_account_book')
+			? absen_load_account_book()
+			: array();
+		if (!isset($accounts[$actor]) || !is_array($accounts[$actor]))
+		{
+			return array();
+		}
+		$role = strtolower(trim((string) (isset($accounts[$actor]['role']) ? $accounts[$actor]['role'] : 'user')));
+		if ($role !== 'admin')
+		{
+			return array();
+		}
+
+		return $this->normalize_admin_feature_permissions(
+			isset($accounts[$actor]['feature_permissions']) ? $accounts[$actor]['feature_permissions'] : array()
+		);
+	}
+
+	private function actor_has_admin_feature($feature_key)
+	{
+		$feature = strtolower(trim((string) $feature_key));
+		if ($feature === '')
+		{
+			return FALSE;
+		}
+		if ($this->can_access_super_admin_features())
+		{
+			return TRUE;
+		}
+
+		$permissions = $this->actor_admin_feature_permissions();
+		return in_array($feature, $permissions, TRUE);
+	}
+
+	private function can_manage_employee_accounts()
+	{
+		return $this->actor_has_admin_feature('manage_accounts');
+	}
+
+	private function can_sync_sheet_accounts_feature()
+	{
+		return $this->actor_has_admin_feature('sync_sheet_accounts');
+	}
+
+	private function can_view_log_data_feature()
+	{
+		return $this->actor_has_admin_feature('view_log_data');
+	}
+
+	private function manageable_admin_targets_for_actor($actor_username = '')
+	{
+		$actor = strtolower(trim((string) $actor_username));
+		if ($actor === '')
+		{
+			$actor = $this->current_actor_username();
+		}
+		if (!in_array($actor, $this->privileged_admin_usernames(), TRUE))
+		{
+			return array();
+		}
+
+		$accounts = function_exists('absen_load_account_book')
+			? absen_load_account_book()
+			: array();
+		$targets = array();
+		foreach ($accounts as $username => $row)
+		{
+			$username_key = strtolower(trim((string) $username));
+			if ($username_key === '' || !is_array($row))
+			{
+				continue;
+			}
+			$role = strtolower(trim((string) (isset($row['role']) ? $row['role'] : 'user')));
+			if ($role !== 'admin')
+			{
+				continue;
+			}
+			if ($actor === 'bos' && $username_key === 'developer')
+			{
+				continue;
+			}
+			$targets[] = $username_key;
+		}
+
+		$priority = array('developer' => 1, 'admin' => 2, 'bos' => 3);
+		usort($targets, function ($a, $b) use ($priority) {
+			$ap = isset($priority[$a]) ? (int) $priority[$a] : 99;
+			$bp = isset($priority[$b]) ? (int) $priority[$b] : 99;
+			if ($ap !== $bp)
+			{
+				return $ap - $bp;
+			}
+			return strcmp($a, $b);
+		});
+
+		return array_values(array_unique($targets));
+	}
+
+	private function build_manageable_admin_feature_account_options()
+	{
+		$targets = $this->manageable_admin_targets_for_actor();
+		if (empty($targets))
+		{
+			return array();
+		}
+		$actor = $this->current_actor_username();
+		$accounts = function_exists('absen_load_account_book')
+			? absen_load_account_book()
+			: array();
+		$options = array();
+		for ($i = 0; $i < count($targets); $i += 1)
+		{
+			$username = (string) $targets[$i];
+			if (in_array($username, $this->privileged_admin_usernames(), TRUE))
+			{
+				if (!($actor === 'developer' && $username === 'bos'))
+				{
+					continue;
+				}
+			}
+			if (!isset($accounts[$username]) || !is_array($accounts[$username]))
+			{
+				continue;
+			}
+			$row = $accounts[$username];
+			$options[] = array(
+				'username' => $username,
+				'display_name' => isset($row['display_name']) && trim((string) $row['display_name']) !== ''
+					? trim((string) $row['display_name'])
+					: $username,
+				'feature_permissions' => $this->normalize_admin_feature_permissions(
+					isset($row['feature_permissions']) ? $row['feature_permissions'] : array()
+				)
+			);
+		}
+
+		return $options;
+	}
+
+	private function current_actor_username()
+	{
+		return strtolower(trim((string) $this->session->userdata('absen_username')));
+	}
+
+	private function is_current_session_expired()
+	{
+		$last_activity_at = (int) $this->session->userdata('absen_last_activity_at');
+		$timeout_seconds = function_exists('absen_password_session_timeout_seconds')
+			? (int) absen_password_session_timeout_seconds()
+			: 1800;
+		if (function_exists('absen_session_is_expired'))
+		{
+			return absen_session_is_expired($last_activity_at, $timeout_seconds);
+		}
+
+		return $timeout_seconds > 0 && $last_activity_at > 0 && (time() - $last_activity_at) > $timeout_seconds;
+	}
+
+	private function is_force_password_route()
+	{
+		$method = '';
+		if (isset($this->router) && method_exists($this->router, 'fetch_method'))
+		{
+			$method = strtolower(trim((string) $this->router->fetch_method()));
+		}
+
+		return in_array($method, array('force_change_password', 'submit_force_change_password'), TRUE);
+	}
+
+	private function sync_session_actor_profile()
+	{
+		$username_key = $this->current_actor_username();
+		if ($username_key === '')
+		{
+			return FALSE;
+		}
+
+		$accounts = function_exists('absen_load_account_book')
+			? absen_load_account_book()
+			: array();
+		if (!is_array($accounts) || !isset($accounts[$username_key]) || !is_array($accounts[$username_key]))
+		{
+			return FALSE;
+		}
+
+		$account = $accounts[$username_key];
+		$role_value = isset($account['role']) ? strtolower(trim((string) $account['role'])) : 'user';
+		if ($role_value !== 'admin')
+		{
+			$role_value = 'user';
+		}
+
+		$branch_value = isset($account['branch']) ? trim((string) $account['branch']) : '';
+		if ($role_value === 'user' && $branch_value === '')
+		{
+			$branch_value = $this->default_employee_branch();
+		}
+		if ($role_value === 'admin' && $username_key === 'admin' && $branch_value === '')
+		{
+			$branch_value = $this->default_employee_branch();
+		}
+
+		$requires_password_change = function_exists('absen_account_requires_password_change')
+			? absen_account_requires_password_change($account)
+			: FALSE;
+		$feature_permissions = $this->normalize_admin_feature_permissions(
+			isset($account['feature_permissions']) ? $account['feature_permissions'] : array()
+		);
+
+		$this->session->set_userdata(array(
+			'absen_role' => $role_value,
+			'absen_display_name' => isset($account['display_name']) && trim((string) $account['display_name']) !== ''
+				? (string) $account['display_name']
+				: $username_key,
+			'absen_shift_name' => isset($account['shift_name']) ? (string) $account['shift_name'] : '',
+			'absen_shift_time' => isset($account['shift_time']) ? (string) $account['shift_time'] : '',
+			'absen_phone' => isset($account['phone']) ? (string) $account['phone'] : '',
+			'absen_branch' => $branch_value,
+			'absen_salary_tier' => isset($account['salary_tier']) ? (string) $account['salary_tier'] : '',
+			'absen_salary_monthly' => isset($account['salary_monthly']) ? (int) $account['salary_monthly'] : 0,
+			'absen_work_days' => isset($account['work_days']) ? (int) $account['work_days'] : 0,
+			'absen_feature_permissions' => implode(',', $feature_permissions),
+			'absen_password_change_required' => $requires_password_change ? 1 : 0
+		));
+
+		return TRUE;
+	}
+
+	private function can_access_super_admin_features()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			return FALSE;
+		}
+
+		$role = strtolower(trim((string) $this->session->userdata('absen_role')));
+		if ($role === '' || $role === 'user')
+		{
+			return FALSE;
+		}
+
+		$actor = $this->current_actor_username();
+		if ($actor === '')
+		{
+			return FALSE;
+		}
+
+		return in_array($actor, $this->privileged_admin_usernames(), TRUE);
+	}
+
+	private function is_branch_scoped_admin()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			return FALSE;
+		}
+
+		$role = strtolower(trim((string) $this->session->userdata('absen_role')));
+		if ($role !== 'admin')
+		{
+			return FALSE;
+		}
+
+		$actor = $this->current_actor_username();
+		if ($actor !== 'admin')
+		{
+			return FALSE;
+		}
+
+		return !$this->can_access_super_admin_features();
+	}
+
+	private function current_actor_branch()
+	{
+		$branch = $this->resolve_employee_branch($this->session->userdata('absen_branch'));
+		if ($branch !== '')
+		{
+			return $branch;
+		}
+
+		$actor = $this->current_actor_username();
+		if ($actor === '')
+		{
+			return '';
+		}
+
+		$accounts = function_exists('absen_load_account_book')
+			? absen_load_account_book()
+			: array();
+		if (isset($accounts[$actor]) && is_array($accounts[$actor]))
+		{
+			$account_branch = $this->resolve_employee_branch(isset($accounts[$actor]['branch']) ? (string) $accounts[$actor]['branch'] : '');
+			if ($account_branch !== '')
+			{
+				return $account_branch;
+			}
+		}
+
+		return $actor === 'admin' ? $this->default_employee_branch() : '';
+	}
+
+	private function is_username_in_actor_scope($username)
+	{
+		$username_key = strtolower(trim((string) $username));
+		if ($username_key === '')
+		{
+			return FALSE;
+		}
+
+		if (!$this->is_branch_scoped_admin())
+		{
+			return TRUE;
+		}
+
+		$profile = $this->get_employee_profile($username_key);
+		$target_branch = $this->resolve_employee_branch(isset($profile['branch']) ? (string) $profile['branch'] : '');
+		if ($target_branch === '')
+		{
+			$target_branch = $this->default_employee_branch();
+		}
+		$scope_branch = $this->current_actor_branch();
+		if ($scope_branch === '')
+		{
+			return FALSE;
+		}
+
+		return strcasecmp($target_branch, $scope_branch) === 0;
+	}
+
+	private function scoped_employee_lookup()
+	{
+		$profiles = $this->employee_profile_book();
+		$lookup = array();
+		foreach ($profiles as $username_key => $profile)
+		{
+			$username = strtolower(trim((string) $username_key));
+			if ($username === '')
+			{
+				continue;
+			}
+			if (!$this->is_username_in_actor_scope($username))
+			{
+				continue;
+			}
+			$lookup[$username] = TRUE;
+		}
+
+		return $lookup;
+	}
+
+	private function scoped_employee_usernames()
+	{
+		$lookup = $this->scoped_employee_lookup();
+		$usernames = array_keys($lookup);
+		sort($usernames);
+		return $usernames;
+	}
+
+	private function is_reserved_system_username($username)
+	{
+		$username_key = strtolower(trim((string) $username));
+		if ($username_key === '')
+		{
+			return FALSE;
+		}
+
+		if ($username_key === 'admin')
+		{
+			return TRUE;
+		}
+
+		return in_array($username_key, $this->privileged_admin_usernames(), TRUE);
+	}
+
 	private function employee_profile_book()
 	{
 		$accounts = function_exists('absen_load_account_book')
@@ -5190,6 +8060,10 @@ class Home extends CI_Controller {
 		{
 			$username_key = strtolower(trim((string) $username));
 			if ($username_key === '' || !is_array($account))
+			{
+				continue;
+			}
+			if ($this->is_reserved_system_username($username_key))
 			{
 				continue;
 			}
@@ -5207,6 +8081,9 @@ class Home extends CI_Controller {
 			}
 
 			$profiles[$username_key] = array(
+				'display_name' => isset($account['display_name']) && trim((string) $account['display_name']) !== ''
+					? trim((string) $account['display_name'])
+					: $username_key,
 				'branch' => $this->resolve_employee_branch(isset($account['branch']) ? (string) $account['branch'] : ''),
 				'phone' => isset($account['phone']) ? (string) $account['phone'] : '',
 				'shift_name' => isset($account['shift_name']) ? (string) $account['shift_name'] : 'Shift Pagi - Sore',
@@ -5216,6 +8093,7 @@ class Home extends CI_Controller {
 				'salary_monthly' => isset($account['salary_monthly']) ? (int) $account['salary_monthly'] : 0,
 				'work_days' => isset($account['work_days']) ? (int) $account['work_days'] : 28,
 				'profile_photo' => isset($account['profile_photo']) ? (string) $account['profile_photo'] : $this->default_employee_profile_photo(),
+				'coordinate_point' => isset($account['coordinate_point']) ? trim((string) $account['coordinate_point']) : '',
 				'address' => isset($account['address']) && trim((string) $account['address']) !== ''
 					? (string) $account['address']
 					: $this->default_employee_address()
@@ -5254,6 +8132,10 @@ class Home extends CI_Controller {
 			{
 				$profile['job_title'] = $this->default_employee_job_title();
 			}
+			if (!isset($profile['coordinate_point']))
+			{
+				$profile['coordinate_point'] = '';
+			}
 
 			return $profile;
 		}
@@ -5261,7 +8143,8 @@ class Home extends CI_Controller {
 		return array(
 			'profile_photo' => $this->default_employee_profile_photo(),
 			'address' => $this->default_employee_address(),
-			'job_title' => $this->default_employee_job_title()
+			'job_title' => $this->default_employee_job_title(),
+			'coordinate_point' => ''
 		);
 	}
 
@@ -6035,6 +8918,846 @@ class Home extends CI_Controller {
 			'weekly_off_days' => $weekly_off_days,
 			'work_days' => $work_days
 		);
+	}
+
+	private function conflict_logs_file_path()
+	{
+		return APPPATH.'cache/conflict_logs.json';
+	}
+
+	private function read_conflict_logs_from_disk()
+	{
+		$file_path = $this->conflict_logs_file_path();
+		if (function_exists('absen_data_store_load_value'))
+		{
+			$rows = absen_data_store_load_value('conflict_logs', NULL, $file_path);
+			if (is_array($rows))
+			{
+				return array_values($rows);
+			}
+		}
+
+		if (!is_file($file_path))
+		{
+			return array();
+		}
+
+		$content = @file_get_contents($file_path);
+		if ($content === FALSE || trim((string) $content) === '')
+		{
+			return array();
+		}
+		if (substr($content, 0, 3) === "\xEF\xBB\xBF")
+		{
+			$content = substr($content, 3);
+		}
+
+		$decoded = json_decode($content, TRUE);
+		if (!is_array($decoded))
+		{
+			return array();
+		}
+
+		return array_values($decoded);
+	}
+
+	private function save_conflict_logs($rows)
+	{
+		$rows = is_array($rows) ? array_values($rows) : array();
+		$normalized_rows = array();
+		for ($i = 0; $i < count($rows); $i += 1)
+		{
+			$row = isset($rows[$i]) && is_array($rows[$i]) ? $rows[$i] : array();
+			$normalized_rows[] = $this->normalize_data_log_entry($row);
+		}
+
+		$limit = $this->data_logs_limit();
+		if ($limit > 0 && count($normalized_rows) > $limit)
+		{
+			$normalized_rows = array_slice($normalized_rows, count($normalized_rows) - $limit);
+		}
+
+		$file_path = $this->conflict_logs_file_path();
+		if (function_exists('absen_data_store_save_value'))
+		{
+			$saved_to_store = absen_data_store_save_value('conflict_logs', array_values($normalized_rows), $file_path);
+			if ($saved_to_store)
+			{
+				return TRUE;
+			}
+		}
+
+		$directory = dirname($file_path);
+		if (!is_dir($directory))
+		{
+			@mkdir($directory, 0755, TRUE);
+		}
+		if (!is_dir($directory))
+		{
+			return FALSE;
+		}
+
+		$payload = json_encode(array_values($normalized_rows), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+		if ($payload === FALSE)
+		{
+			return FALSE;
+		}
+
+		return @file_put_contents($file_path, $payload) !== FALSE;
+	}
+
+	private function load_conflict_logs($limit = 500)
+	{
+		$raw_rows = $this->read_conflict_logs_from_disk();
+		$rows = array();
+		for ($i = 0; $i < count($raw_rows); $i += 1)
+		{
+			$row = isset($raw_rows[$i]) && is_array($raw_rows[$i]) ? $raw_rows[$i] : array();
+			$rows[] = $this->normalize_data_log_entry($row);
+		}
+
+		usort($rows, function ($a, $b) {
+			$left = isset($a['logged_at']) ? trim((string) $a['logged_at']) : '';
+			$right = isset($b['logged_at']) ? trim((string) $b['logged_at']) : '';
+			if ($left === $right)
+			{
+				$left_id = isset($a['entry_id']) ? trim((string) $a['entry_id']) : '';
+				$right_id = isset($b['entry_id']) ? trim((string) $b['entry_id']) : '';
+				return strcmp($right_id, $left_id);
+			}
+			return strcmp($right, $left);
+		});
+
+		$limit = (int) $limit;
+		if ($limit > 0 && count($rows) > $limit)
+		{
+			$rows = array_slice($rows, 0, $limit);
+		}
+
+		return $rows;
+	}
+
+	private function find_log_entry_index_by_id($rows, $entry_id)
+	{
+		$entry_key = trim((string) $entry_id);
+		if ($entry_key === '' || !is_array($rows))
+		{
+			return -1;
+		}
+
+		for ($i = 0; $i < count($rows); $i += 1)
+		{
+			$row = isset($rows[$i]) && is_array($rows[$i]) ? $rows[$i] : array();
+			$row_id = isset($row['entry_id']) ? trim((string) $row['entry_id']) : '';
+			if ($row_id !== '' && hash_equals($row_id, $entry_key))
+			{
+				return $i;
+			}
+		}
+
+		return -1;
+	}
+
+	private function generate_data_log_entry_id()
+	{
+		return 'LG-'.date('YmdHis').'-'.strtoupper(substr(md5(uniqid('', TRUE)), 0, 8));
+	}
+
+	private function build_sync_actor_context($actor = 'system', $force_cli = FALSE)
+	{
+		$actor = strtolower(trim((string) $actor));
+		if ($actor === '')
+		{
+			$actor = 'system';
+		}
+
+		$is_cli = $force_cli === TRUE || ($this->input->is_cli_request() === TRUE);
+		$ip_address = '';
+		$computer_name = '';
+		if ($is_cli)
+		{
+			$ip_address = '127.0.0.1';
+			$computer_name = $this->normalize_device_label(function_exists('gethostname') ? gethostname() : php_uname('n'));
+		}
+		else
+		{
+			$ip_address = method_exists($this->input, 'ip_address')
+				? trim((string) $this->input->ip_address())
+				: '';
+			if ($ip_address === '' && isset($_SERVER['REMOTE_ADDR']))
+			{
+				$ip_address = trim((string) $_SERVER['REMOTE_ADDR']);
+			}
+			if ($ip_address === '0.0.0.0')
+			{
+				$ip_address = '';
+			}
+
+			$computer_name = $this->resolve_client_computer_name($ip_address);
+		}
+
+		$mac_address = $this->resolve_client_mac_address($ip_address, $is_cli);
+
+		return array(
+			'actor' => $actor,
+			'is_cli' => $is_cli ? 1 : 0,
+			'ip_address' => $ip_address,
+			'computer_name' => $computer_name,
+			'mac_address' => $mac_address
+		);
+	}
+
+	private function resolve_client_computer_name($ip_address = '')
+	{
+		$candidates = array(
+			isset($_SERVER['HTTP_X_COMPUTER_NAME']) ? (string) $_SERVER['HTTP_X_COMPUTER_NAME'] : '',
+			isset($_SERVER['HTTP_X_DEVICE_NAME']) ? (string) $_SERVER['HTTP_X_DEVICE_NAME'] : '',
+			isset($_SERVER['HTTP_X_CLIENT_HOSTNAME']) ? (string) $_SERVER['HTTP_X_CLIENT_HOSTNAME'] : '',
+			isset($_SERVER['REMOTE_HOST']) ? (string) $_SERVER['REMOTE_HOST'] : ''
+		);
+		for ($i = 0; $i < count($candidates); $i += 1)
+		{
+			$label = $this->normalize_device_label($candidates[$i]);
+			if ($label !== '')
+			{
+				return $label;
+			}
+		}
+
+		$ip_address = trim((string) $ip_address);
+		if ($ip_address !== '' && filter_var($ip_address, FILTER_VALIDATE_IP))
+		{
+			$reverse = @gethostbyaddr($ip_address);
+			if (is_string($reverse))
+			{
+				$reverse = trim($reverse);
+				if ($reverse !== '' && strcasecmp($reverse, $ip_address) !== 0)
+				{
+					return $this->normalize_device_label($reverse);
+				}
+			}
+		}
+
+		return '';
+	}
+
+	private function resolve_client_mac_address($ip_address = '', $is_cli = FALSE)
+	{
+		if (!function_exists('shell_exec'))
+		{
+			return '';
+		}
+
+		$ip_address = trim((string) $ip_address);
+		$is_cli = $is_cli === TRUE;
+		if ($is_cli)
+		{
+			$commands = array();
+			if (stripos(PHP_OS, 'WIN') === 0)
+			{
+				$commands[] = 'getmac';
+				$commands[] = 'arp -a';
+			}
+			else
+			{
+				$commands[] = 'ip link 2>/dev/null';
+				$commands[] = 'ifconfig -a 2>/dev/null';
+				$commands[] = 'arp -an 2>/dev/null';
+			}
+
+			for ($i = 0; $i < count($commands); $i += 1)
+			{
+				$output = @shell_exec($commands[$i]);
+				$mac = $this->extract_mac_from_text($output);
+				if ($mac !== '')
+				{
+					return $mac;
+				}
+			}
+
+			return '';
+		}
+
+		if ($ip_address === '' || !filter_var($ip_address, FILTER_VALIDATE_IP))
+		{
+			return '';
+		}
+		if (!$this->is_private_or_loopback_ip($ip_address))
+		{
+			// MAC client internet biasanya tidak bisa didapat dari server.
+			return '';
+		}
+
+		$commands = array();
+		if (stripos(PHP_OS, 'WIN') === 0)
+		{
+			$commands[] = 'arp -a '.$ip_address;
+			$commands[] = 'arp -a';
+		}
+		else
+		{
+			$commands[] = 'arp -n '.$ip_address.' 2>/dev/null';
+			$commands[] = 'arp -an '.$ip_address.' 2>/dev/null';
+			$commands[] = 'arp -an 2>/dev/null';
+		}
+
+		for ($i = 0; $i < count($commands); $i += 1)
+		{
+			$output = @shell_exec($commands[$i]);
+			if (!is_string($output) || trim($output) === '')
+			{
+				continue;
+			}
+
+			$lines = preg_split('/\r\n|\r|\n/', $output);
+			for ($line_index = 0; $line_index < count($lines); $line_index += 1)
+			{
+				$line = isset($lines[$line_index]) ? (string) $lines[$line_index] : '';
+				if ($line === '')
+				{
+					continue;
+				}
+				if (strpos($line, $ip_address) === FALSE && strpos($commands[$i], ' '.$ip_address) !== FALSE)
+				{
+					continue;
+				}
+				$mac = $this->extract_mac_from_text($line);
+				if ($mac !== '')
+				{
+					return $mac;
+				}
+			}
+
+			$fallback_mac = $this->extract_mac_from_text($output);
+			if ($fallback_mac !== '')
+			{
+				return $fallback_mac;
+			}
+		}
+
+		return '';
+	}
+
+	private function extract_mac_from_text($text)
+	{
+		$text = trim((string) $text);
+		if ($text === '')
+		{
+			return '';
+		}
+
+		$matches = array();
+		if (preg_match('/([0-9A-Fa-f]{2}[-:]){5}[0-9A-Fa-f]{2}/', $text, $matches))
+		{
+			$mac = strtoupper(str_replace('-', ':', (string) $matches[0]));
+			if ($mac === '00:00:00:00:00:00' || $mac === 'FF:FF:FF:FF:FF:FF')
+			{
+				return '';
+			}
+			return $mac;
+		}
+
+		return '';
+	}
+
+	private function normalize_device_label($value)
+	{
+		$label = trim((string) $value);
+		if ($label === '')
+		{
+			return '';
+		}
+		$label = preg_replace('/\s+/', ' ', $label);
+		if ($label === NULL)
+		{
+			$label = trim((string) $value);
+		}
+		if (strlen($label) > 120)
+		{
+			$label = substr($label, 0, 120);
+		}
+
+		return $label;
+	}
+
+	private function is_private_or_loopback_ip($ip_address)
+	{
+		$ip_address = trim((string) $ip_address);
+		if ($ip_address === '')
+		{
+			return FALSE;
+		}
+		if ($ip_address === '127.0.0.1' || $ip_address === '::1')
+		{
+			return TRUE;
+		}
+
+		if (filter_var($ip_address, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4))
+		{
+			$is_public = filter_var($ip_address, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== FALSE;
+			return !$is_public;
+		}
+
+		if (filter_var($ip_address, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6))
+		{
+			$ip_lower = strtolower($ip_address);
+			if (strpos($ip_lower, 'fe80:') === 0)
+			{
+				return TRUE;
+			}
+			if (strpos($ip_lower, 'fc') === 0 || strpos($ip_lower, 'fd') === 0)
+			{
+				return TRUE;
+			}
+			return FALSE;
+		}
+
+		return FALSE;
+	}
+
+	private function data_logs_limit()
+	{
+		return 5000;
+	}
+
+	private function append_data_log($entry)
+	{
+		if (!is_array($entry) || empty($entry))
+		{
+			return FALSE;
+		}
+
+		$rows = $this->read_conflict_logs_from_disk();
+		$rows[] = $this->normalize_data_log_entry($entry);
+		return $this->save_conflict_logs($rows);
+	}
+
+	private function normalize_data_log_entry($entry)
+	{
+		$entry = is_array($entry) ? $entry : array();
+		$entry_id = '';
+		if (isset($entry['entry_id']) && trim((string) $entry['entry_id']) !== '')
+		{
+			$entry_id = trim((string) $entry['entry_id']);
+		}
+		elseif (isset($entry['id']) && trim((string) $entry['id']) !== '')
+		{
+			$entry_id = trim((string) $entry['id']);
+		}
+		if ($entry_id === '')
+		{
+			$entry_id = $this->generate_data_log_entry_id();
+		}
+
+		$rollback_status = strtolower(trim((string) (isset($entry['rollback_status']) ? $entry['rollback_status'] : '')));
+		if ($rollback_status !== 'rolled_back')
+		{
+			$rollback_status = '';
+		}
+		return array(
+			'entry_id' => $entry_id,
+			'log_type' => isset($entry['log_type']) && trim((string) $entry['log_type']) !== ''
+				? trim((string) $entry['log_type'])
+				: 'activity',
+			'logged_at' => isset($entry['logged_at']) && trim((string) $entry['logged_at']) !== ''
+				? trim((string) $entry['logged_at'])
+				: date('Y-m-d H:i:s'),
+			'source' => isset($entry['source']) ? trim((string) $entry['source']) : '',
+			'actor' => isset($entry['actor']) ? trim((string) $entry['actor']) : 'system',
+			'ip_address' => isset($entry['ip_address']) ? trim((string) $entry['ip_address']) : '',
+			'mac_address' => isset($entry['mac_address']) ? trim((string) $entry['mac_address']) : '',
+			'computer_name' => isset($entry['computer_name']) ? trim((string) $entry['computer_name']) : '',
+			'username' => isset($entry['username']) ? trim((string) $entry['username']) : '',
+			'display_name' => isset($entry['display_name']) ? trim((string) $entry['display_name']) : '',
+			'field' => isset($entry['field']) ? trim((string) $entry['field']) : '',
+			'field_label' => isset($entry['field_label']) ? trim((string) $entry['field_label']) : '',
+			'old_value' => isset($entry['old_value']) ? trim((string) $entry['old_value']) : '',
+			'new_value' => isset($entry['new_value']) ? trim((string) $entry['new_value']) : '',
+			'action' => isset($entry['action']) ? trim((string) $entry['action']) : '',
+			'sheet' => isset($entry['sheet']) ? trim((string) $entry['sheet']) : '',
+			'row_number' => isset($entry['row_number']) ? (int) $entry['row_number'] : 0,
+			'note' => isset($entry['note']) ? trim((string) $entry['note']) : '',
+			'target_id' => isset($entry['target_id']) ? trim((string) $entry['target_id']) : '',
+			'rollback_status' => $rollback_status,
+			'rolled_back_at' => isset($entry['rolled_back_at']) ? trim((string) $entry['rolled_back_at']) : '',
+			'rolled_back_by' => isset($entry['rolled_back_by']) ? trim((string) $entry['rolled_back_by']) : '',
+			'rollback_note' => isset($entry['rollback_note']) ? trim((string) $entry['rollback_note']) : ''
+		);
+	}
+
+	private function rollback_allowed_account_field_map()
+	{
+		return array(
+			'display_name' => 'Nama',
+			'branch' => 'Cabang',
+			'phone' => 'No Tlp',
+			'shift_name' => 'Shift',
+			'salary_monthly' => 'Gaji Pokok',
+			'work_days' => 'Hari Masuk',
+			'job_title' => 'Jabatan',
+			'address' => 'Alamat'
+		);
+	}
+
+	private function can_rollback_log_entry($entry)
+	{
+		if (!is_array($entry))
+		{
+			return FALSE;
+		}
+
+		$rollback_status = strtolower(trim((string) (isset($entry['rollback_status']) ? $entry['rollback_status'] : '')));
+		if ($rollback_status === 'rolled_back')
+		{
+			return FALSE;
+		}
+
+		$source = strtolower(trim((string) (isset($entry['source']) ? $entry['source'] : '')));
+		$action = strtolower(trim((string) (isset($entry['action']) ? $entry['action'] : '')));
+		$field = trim((string) (isset($entry['field']) ? $entry['field'] : ''));
+
+		if ($source !== 'account_data')
+		{
+			return FALSE;
+		}
+
+		if ($action === 'update_account_field')
+		{
+			$allowed_fields = $this->rollback_allowed_account_field_map();
+			return isset($allowed_fields[$field]);
+		}
+
+		if ($action === 'update_account_username' && $field === 'username')
+		{
+			return TRUE;
+		}
+
+		return FALSE;
+	}
+
+	private function rollback_log_entry_data($entry, &$message)
+	{
+		$message = '';
+		$entry = is_array($entry) ? $entry : array();
+		$source = strtolower(trim((string) (isset($entry['source']) ? $entry['source'] : '')));
+		$action = strtolower(trim((string) (isset($entry['action']) ? $entry['action'] : '')));
+
+		if ($source !== 'account_data')
+		{
+			$message = 'Rollback hanya diizinkan untuk perubahan data akun.';
+			return FALSE;
+		}
+
+		if ($action === 'update_account_field')
+		{
+			return $this->rollback_account_field_entry($entry, $message);
+		}
+
+		if ($action === 'update_account_username')
+		{
+			return $this->rollback_account_username_entry($entry, $message);
+		}
+
+		$message = 'Jenis aksi log ini belum mendukung rollback aman.';
+		return FALSE;
+	}
+
+	private function rollback_account_field_entry($entry, &$message)
+	{
+		$message = '';
+		$field = trim((string) (isset($entry['field']) ? $entry['field'] : ''));
+		$allowed_fields = $this->rollback_allowed_account_field_map();
+		if ($field === '' || !isset($allowed_fields[$field]))
+		{
+			$message = 'Field rollback tidak valid.';
+			return FALSE;
+		}
+
+		$username_key = strtolower(trim((string) (isset($entry['username']) ? $entry['username'] : '')));
+		if ($username_key === '' || $this->is_reserved_system_username($username_key))
+		{
+			$message = 'Target akun rollback tidak valid.';
+			return FALSE;
+		}
+
+		$old_value = isset($entry['old_value']) ? (string) $entry['old_value'] : '';
+		$new_value = isset($entry['new_value']) ? (string) $entry['new_value'] : '';
+
+		$account_book = function_exists('absen_load_account_book')
+			? absen_load_account_book()
+			: array();
+		if (!isset($account_book[$username_key]) || !is_array($account_book[$username_key]))
+		{
+			$message = 'Akun target rollback tidak ditemukan.';
+			return FALSE;
+		}
+
+		$current_row = $account_book[$username_key];
+		$current_role = strtolower(trim((string) (isset($current_row['role']) ? $current_row['role'] : 'user')));
+		if ($current_role !== 'user')
+		{
+			$message = 'Rollback dibatalkan karena target bukan akun karyawan.';
+			return FALSE;
+		}
+
+		$current_field_value = isset($current_row[$field]) ? (string) $current_row[$field] : '';
+		if (!$this->rollback_field_values_equal($field, $current_field_value, $new_value))
+		{
+			$message = 'Rollback dibatalkan karena nilai saat ini sudah berubah lagi setelah log tersebut.';
+			return FALSE;
+		}
+
+		$updated_row = $current_row;
+		if ($field === 'display_name')
+		{
+			$display_name = trim((string) $old_value);
+			if ($display_name === '')
+			{
+				$message = 'Rollback nama dibatalkan karena nilai lama kosong.';
+				return FALSE;
+			}
+			$updated_row['display_name'] = $display_name;
+		}
+		elseif ($field === 'branch')
+		{
+			$branch_value = $this->resolve_employee_branch($old_value);
+			if ($branch_value === '')
+			{
+				$message = 'Rollback cabang dibatalkan karena nilai lama cabang tidak valid.';
+				return FALSE;
+			}
+			$updated_row['branch'] = $branch_value;
+		}
+		elseif ($field === 'phone')
+		{
+			$updated_row['phone'] = trim((string) $old_value);
+		}
+		elseif ($field === 'shift_name')
+		{
+			$shift_name_old = trim((string) $old_value);
+			if ($shift_name_old === '')
+			{
+				$message = 'Rollback shift dibatalkan karena nilai lama kosong.';
+				return FALSE;
+			}
+			$shift_profiles = function_exists('absen_shift_profile_book') ? absen_shift_profile_book() : array();
+			$shift_key = strpos(strtolower($shift_name_old), 'siang') !== FALSE || strpos(strtolower($shift_name_old), '12:00') !== FALSE
+				? 'siang'
+				: 'pagi';
+			if (!isset($shift_profiles[$shift_key]))
+			{
+				$message = 'Rollback shift dibatalkan karena konfigurasi shift tidak tersedia.';
+				return FALSE;
+			}
+			$updated_row['shift_name'] = (string) $shift_profiles[$shift_key]['shift_name'];
+			$updated_row['shift_time'] = (string) $shift_profiles[$shift_key]['shift_time'];
+		}
+		elseif ($field === 'salary_monthly')
+		{
+			$salary_digits = preg_replace('/\D+/', '', (string) $old_value);
+			$salary_amount = $salary_digits === '' ? 0 : (int) $salary_digits;
+			if ($salary_amount <= 0)
+			{
+				$message = 'Rollback gaji pokok dibatalkan karena nilai lama tidak valid.';
+				return FALSE;
+			}
+			$updated_row['salary_monthly'] = $salary_amount;
+			$updated_row['salary_tier'] = $this->resolve_salary_tier_from_amount($salary_amount);
+		}
+		elseif ($field === 'work_days')
+		{
+			$work_days_old = (int) trim((string) $old_value);
+			if ($work_days_old <= 0 || $work_days_old > 31)
+			{
+				$message = 'Rollback hari masuk dibatalkan karena nilai lama tidak valid.';
+				return FALSE;
+			}
+			$updated_row['work_days'] = $work_days_old;
+		}
+		elseif ($field === 'job_title')
+		{
+			$job_title_old = $this->resolve_employee_job_title($old_value);
+			if ($job_title_old === '')
+			{
+				$message = 'Rollback jabatan dibatalkan karena nilai lama tidak valid.';
+				return FALSE;
+			}
+			$updated_row['job_title'] = $job_title_old;
+		}
+		elseif ($field === 'address')
+		{
+			$address_old = trim((string) $old_value);
+			$updated_row['address'] = $address_old !== '' ? $address_old : $this->default_employee_address();
+		}
+		else
+		{
+			$message = 'Field rollback belum didukung.';
+			return FALSE;
+		}
+
+		$updated_row['sheet_sync_source'] = 'web';
+		$updated_row['sheet_last_sync_at'] = date('Y-m-d H:i:s');
+		$account_book[$username_key] = $updated_row;
+		$saved = function_exists('absen_save_account_book')
+			? absen_save_account_book($account_book)
+			: FALSE;
+		if (!$saved)
+		{
+			$message = 'Gagal menyimpan rollback ke data akun.';
+			return FALSE;
+		}
+
+		$message = 'Field '.$allowed_fields[$field].' untuk akun '.$username_key.' berhasil dikembalikan.';
+		return TRUE;
+	}
+
+	private function rollback_account_username_entry($entry, &$message)
+	{
+		$message = '';
+		$old_username = $this->normalize_username_key(isset($entry['old_value']) ? (string) $entry['old_value'] : '');
+		$new_username = $this->normalize_username_key(isset($entry['new_value']) ? (string) $entry['new_value'] : '');
+		$target_username = $this->normalize_username_key(isset($entry['username']) ? (string) $entry['username'] : '');
+		if ($target_username === '')
+		{
+			$target_username = $new_username;
+		}
+
+		if ($old_username === '' || $new_username === '' || $old_username === $new_username)
+		{
+			$message = 'Data username pada log rollback tidak valid.';
+			return FALSE;
+		}
+		if ($this->is_reserved_system_username($old_username) || $this->is_reserved_system_username($new_username))
+		{
+			$message = 'Rollback username sistem tidak diizinkan.';
+			return FALSE;
+		}
+
+		$account_book = function_exists('absen_load_account_book')
+			? absen_load_account_book()
+			: array();
+		$current_username = $target_username;
+		if (!isset($account_book[$current_username]) || !is_array($account_book[$current_username]))
+		{
+			if (isset($account_book[$new_username]) && is_array($account_book[$new_username]))
+			{
+				$current_username = $new_username;
+			}
+		}
+		if (!isset($account_book[$current_username]) || !is_array($account_book[$current_username]))
+		{
+			$message = 'Akun target rollback username tidak ditemukan.';
+			return FALSE;
+		}
+		if ($current_username !== $new_username)
+		{
+			$message = 'Rollback username dibatalkan karena username saat ini sudah berubah lagi.';
+			return FALSE;
+		}
+		if (isset($account_book[$old_username]) && is_array($account_book[$old_username]))
+		{
+			$message = 'Rollback username dibatalkan karena username lama sudah dipakai akun lain.';
+			return FALSE;
+		}
+
+		$current_row = $account_book[$current_username];
+		$current_role = strtolower(trim((string) (isset($current_row['role']) ? $current_row['role'] : 'user')));
+		if ($current_role !== 'user')
+		{
+			$message = 'Rollback username hanya untuk akun karyawan.';
+			return FALSE;
+		}
+
+		unset($account_book[$current_username]);
+		$current_row['sheet_sync_source'] = 'web';
+		$current_row['sheet_last_sync_at'] = date('Y-m-d H:i:s');
+		$account_book[$old_username] = $current_row;
+		$saved = function_exists('absen_save_account_book')
+			? absen_save_account_book($account_book)
+			: FALSE;
+		if (!$saved)
+		{
+			$message = 'Gagal menyimpan rollback username.';
+			return FALSE;
+		}
+
+		$renamed_related = $this->rename_employee_related_records($current_username, $old_username);
+		$renamed_total = (int) $renamed_related['attendance'] + (int) $renamed_related['leave'] + (int) $renamed_related['loan'] + (int) $renamed_related['overtime'];
+		$message = 'Username akun berhasil dikembalikan dari '.$current_username.' ke '.$old_username.'. Data terkait diperbarui: '.$renamed_total.' baris.';
+		return TRUE;
+	}
+
+	private function rollback_field_values_equal($field, $value_left, $value_right)
+	{
+		$field_key = trim((string) $field);
+		$left = trim((string) $value_left);
+		$right = trim((string) $value_right);
+
+		if ($field_key === 'salary_monthly')
+		{
+			$left_digits = preg_replace('/\D+/', '', $left);
+			$right_digits = preg_replace('/\D+/', '', $right);
+			return (int) ($left_digits === '' ? 0 : $left_digits) === (int) ($right_digits === '' ? 0 : $right_digits);
+		}
+
+		if ($field_key === 'work_days')
+		{
+			return (int) $left === (int) $right;
+		}
+
+		if ($field_key === 'branch')
+		{
+			$left_branch = $this->resolve_employee_branch($left);
+			$right_branch = $this->resolve_employee_branch($right);
+			return strcasecmp($left_branch, $right_branch) === 0;
+		}
+
+		if ($field_key === 'job_title')
+		{
+			$left_job = $this->resolve_employee_job_title($left);
+			$right_job = $this->resolve_employee_job_title($right);
+			return strcasecmp($left_job, $right_job) === 0;
+		}
+
+		if ($field_key === 'shift_name')
+		{
+			return strcasecmp($left, $right) === 0;
+		}
+
+		return $left === $right;
+	}
+
+	private function log_activity_event($action, $source, $target_username = '', $target_display_name = '', $note = '', $extra = array())
+	{
+		$extra = is_array($extra) ? $extra : array();
+		$actor = strtolower(trim((string) $this->session->userdata('absen_username')));
+		if ($actor === '')
+		{
+			$actor = 'system';
+		}
+		$context = $this->build_sync_actor_context($actor);
+		$entry = array(
+			'log_type' => 'activity',
+			'logged_at' => date('Y-m-d H:i:s'),
+			'source' => trim((string) $source),
+			'actor' => $actor,
+			'ip_address' => isset($context['ip_address']) ? trim((string) $context['ip_address']) : '',
+			'mac_address' => isset($context['mac_address']) ? trim((string) $context['mac_address']) : '',
+			'computer_name' => isset($context['computer_name']) ? trim((string) $context['computer_name']) : '',
+			'username' => trim((string) $target_username),
+			'display_name' => trim((string) $target_display_name),
+			'field' => isset($extra['field']) ? trim((string) $extra['field']) : '',
+			'field_label' => isset($extra['field_label']) ? trim((string) $extra['field_label']) : '',
+			'old_value' => isset($extra['old_value']) ? trim((string) $extra['old_value']) : '',
+			'new_value' => isset($extra['new_value']) ? trim((string) $extra['new_value']) : '',
+			'action' => trim((string) $action),
+			'sheet' => isset($extra['sheet']) ? trim((string) $extra['sheet']) : '',
+			'row_number' => isset($extra['row_number']) ? (int) $extra['row_number'] : 0,
+			'note' => trim((string) $note),
+			'target_id' => isset($extra['target_id']) ? trim((string) $extra['target_id']) : ''
+		);
+
+		$this->append_data_log($entry);
 	}
 
 	private function evaluate_geofence($distance_m, $accuracy_m)

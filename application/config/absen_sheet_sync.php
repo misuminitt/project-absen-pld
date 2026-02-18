@@ -42,6 +42,24 @@ if ($attendance_sync_enabled_env === '0' || $attendance_sync_enabled_env === 'fa
 {
 	$attendance_sync_enabled = FALSE;
 }
+$attendance_push_enabled_env = strtolower(trim((string) getenv('ABSEN_ATTENDANCE_PUSH_ENABLED')));
+$attendance_push_enabled = TRUE;
+if ($attendance_push_enabled_env === '0' || $attendance_push_enabled_env === 'false' || $attendance_push_enabled_env === 'off')
+{
+	$attendance_push_enabled = FALSE;
+}
+$attendance_pull_interval_raw = trim((string) getenv('ABSEN_ATTENDANCE_SYNC_INTERVAL_SECONDS'));
+$attendance_pull_interval_seconds = $attendance_pull_interval_raw !== '' ? (int) $attendance_pull_interval_raw : 60;
+if ($attendance_pull_interval_seconds < 0)
+{
+	$attendance_pull_interval_seconds = 0;
+}
+$attendance_push_interval_raw = trim((string) getenv('ABSEN_ATTENDANCE_PUSH_INTERVAL_SECONDS'));
+$attendance_push_interval_seconds = $attendance_push_interval_raw !== '' ? (int) $attendance_push_interval_raw : 300;
+if ($attendance_push_interval_seconds < 0)
+{
+	$attendance_push_interval_seconds = 0;
+}
 
 $config['absen_sheet_sync'] = array(
 	'enabled' => $sheet_sync_enabled,
@@ -56,9 +74,11 @@ $config['absen_sheet_sync'] = array(
 	'writeback_on_web_change' => FALSE,
 	'prune_missing_sheet_users' => TRUE,
 	'attendance_sync_enabled' => $attendance_sync_enabled,
+	'attendance_push_enabled' => $attendance_push_enabled,
 	'attendance_sheet_gid' => $attendance_sheet_gid,
 	'attendance_sheet_title' => $attendance_sheet_title,
-	'attendance_sync_interval_seconds' => 60,
+	'attendance_sync_interval_seconds' => $attendance_pull_interval_seconds,
+	'attendance_push_interval_seconds' => $attendance_push_interval_seconds,
 	'state_file' => APPPATH.'cache/sheet_sync_state.json',
 	'log_prefix' => '[SheetSync] ',
 	'field_labels' => array(

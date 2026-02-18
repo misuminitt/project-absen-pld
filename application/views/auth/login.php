@@ -265,18 +265,6 @@ $logo_url = $base_path.'/'.$logo_path;
 			font-weight: 700;
 		}
 
-		.demo-account {
-			margin: 0 0 16px;
-			padding: 11px 12px;
-			border-radius: 12px;
-			background: rgba(14, 51, 95, 0.1);
-			border: 1px solid rgba(14, 51, 95, 0.2);
-			color: #1f3d5f;
-			font-size: 0.82rem;
-			font-weight: 700;
-			line-height: 1.45;
-		}
-
 		.signin-btn {
 			width: 100%;
 			height: 52px;
@@ -358,8 +346,6 @@ $logo_url = $base_path.'/'.$logo_path;
 			<?php if (!empty($login_error)): ?>
 				<p class="error-box" role="alert"><?php echo htmlspecialchars($login_error, ENT_QUOTES, 'UTF-8'); ?></p>
 			<?php endif; ?>
-
-			<p class="demo-account">Akun demo: <strong>admin / absen123</strong>, <strong>user / 12345</strong> (Gaji 1jt), <strong>userb / 12345</strong> (Gaji 2jt), <strong>userc / 12345</strong> (Gaji 3jt), <strong>userd / 12345</strong> (Gaji 4jt), <strong>usersiang / 12345</strong> (Shift 12:00-23:00)</p>
 
 			<form id="login-form" method="post" action="">
 				<div class="form-row">

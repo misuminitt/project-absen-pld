@@ -224,6 +224,57 @@ $notice_error = $this->session->flashdata('loan_notice_error');
 			color: #526a82;
 		}
 
+		.table-meta {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 0.7rem;
+			padding: 0.72rem 0.85rem;
+			font-size: 0.78rem;
+			color: #5b748f;
+			border-top: 1px solid #e9f1f9;
+			background: #fbfdff;
+		}
+
+		.pager {
+			display: flex;
+			align-items: center;
+			gap: 0.45rem;
+			padding: 0 0.85rem 0.9rem;
+			flex-wrap: wrap;
+		}
+
+		.pager-btn {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			min-width: 2.7rem;
+			height: 2.45rem;
+			padding: 0 0.82rem;
+			border-radius: 0.75rem;
+			border: 1px solid #b9cfe4;
+			background: #ffffff;
+			color: #1c4670;
+			font-size: 0.8rem;
+			font-weight: 700;
+			cursor: pointer;
+		}
+
+		.pager-btn:hover {
+			background: #f0f7ff;
+		}
+
+		.pager-btn.active {
+			background: linear-gradient(180deg, #1f6fbd 0%, #0f5c93 100%);
+			border-color: #0f5c93;
+			color: #ffffff;
+		}
+
+		.pager-btn.wide {
+			padding: 0 0.95rem;
+			min-width: 6rem;
+		}
+
 		.notice {
 			margin-bottom: 0.85rem;
 			padding: 0.72rem 0.82rem;
@@ -366,7 +417,7 @@ $notice_error = $this->session->flashdata('loan_notice_error');
 								$is_waiting = $status_raw === 'menunggu' || $status_raw === 'pending' || $status_raw === 'waiting';
 								?>
 								<tr class="loan-row" data-id="<?php echo htmlspecialchars(strtolower($employee_id_value), ENT_QUOTES, 'UTF-8'); ?>" data-name="<?php echo htmlspecialchars(strtolower((string) (isset($row['username']) ? $row['username'] : '')), ENT_QUOTES, 'UTF-8'); ?>" data-phone="<?php echo htmlspecialchars(strtolower($phone_value), ENT_QUOTES, 'UTF-8'); ?>">
-									<td><?php echo $no; ?></td>
+									<td class="row-no"><?php echo $no; ?></td>
 									<td><?php echo htmlspecialchars($employee_id_value, ENT_QUOTES, 'UTF-8'); ?></td>
 									<td>
 										<img class="profile-avatar" src="<?php echo htmlspecialchars($profile_photo_url, ENT_QUOTES, 'UTF-8'); ?>" alt="PP <?php echo htmlspecialchars(isset($row['username']) ? (string) $row['username'] : 'Karyawan', ENT_QUOTES, 'UTF-8'); ?>">
@@ -399,6 +450,8 @@ $notice_error = $this->session->flashdata('loan_notice_error');
 					</table>
 				</div>
 				<div id="loanSearchEmpty" class="empty" style="display:none;">Data pengajuan tidak ditemukan.</div>
+				<div id="loanPageMeta" class="table-meta"></div>
+				<div id="loanPager" class="pager"></div>
 			<?php endif; ?>
 		</div>
 	</div>
@@ -406,15 +459,41 @@ $notice_error = $this->session->flashdata('loan_notice_error');
 		(function () {
 			var searchInput = document.getElementById('loanSearchInput');
 			var emptyInfo = document.getElementById('loanSearchEmpty');
-			var rows = document.querySelectorAll('#loanRequestTableBody .loan-row');
+			var pageMeta = document.getElementById('loanPageMeta');
+			var pager = document.getElementById('loanPager');
+			var rows = Array.prototype.slice.call(document.querySelectorAll('#loanRequestTableBody .loan-row'));
+			var pageSize = 15;
 
 			if (!searchInput || !rows.length) {
 				return;
 			}
 
-			var filterRows = function () {
+			var currentPage = 1;
+
+			var assignVisibleRowNumbers = function (visibleRows, offset) {
+				for (var i = 0; i < visibleRows.length; i += 1) {
+					var noCell = visibleRows[i].querySelector('.row-no');
+					if (noCell) {
+						noCell.textContent = String(offset + i + 1);
+					}
+				}
+			};
+
+			var buildPagerButton = function (label, targetPage, extraClass) {
+				var button = document.createElement('button');
+				button.type = 'button';
+				button.className = 'pager-btn' + (extraClass ? ' ' + extraClass : '');
+				button.textContent = label;
+				button.addEventListener('click', function () {
+					currentPage = targetPage;
+					renderRows();
+				});
+				return button;
+			};
+
+			var renderRows = function () {
 				var keyword = String(searchInput.value || '').toLowerCase().trim();
-				var visibleCount = 0;
+				var filteredRows = [];
 
 				for (var i = 0; i < rows.length; i += 1) {
 					var row = rows[i];
@@ -422,18 +501,69 @@ $notice_error = $this->session->flashdata('loan_notice_error');
 					var nameValue = String(row.getAttribute('data-name') || '');
 					var phoneValue = String(row.getAttribute('data-phone') || '');
 					var matched = keyword === '' || idValue.indexOf(keyword) !== -1 || nameValue.indexOf(keyword) !== -1 || phoneValue.indexOf(keyword) !== -1;
-					row.style.display = matched ? '' : 'none';
 					if (matched) {
-						visibleCount += 1;
+						filteredRows.push(row);
 					}
 				}
 
+				var totalPages = filteredRows.length > 0 ? Math.ceil(filteredRows.length / pageSize) : 1;
+				if (currentPage < 1) {
+					currentPage = 1;
+				}
+				if (currentPage > totalPages) {
+					currentPage = totalPages;
+				}
+				var startIndex = (currentPage - 1) * pageSize;
+				var endIndex = startIndex + pageSize;
+				var visibleRows = [];
+				for (var j = 0; j < rows.length; j += 1) {
+					rows[j].style.display = 'none';
+				}
+				for (var k = startIndex; k < endIndex && k < filteredRows.length; k += 1) {
+					filteredRows[k].style.display = '';
+					visibleRows.push(filteredRows[k]);
+				}
+				assignVisibleRowNumbers(visibleRows, startIndex);
+
 				if (emptyInfo) {
-					emptyInfo.style.display = visibleCount > 0 ? 'none' : 'block';
+					emptyInfo.style.display = filteredRows.length > 0 ? 'none' : 'block';
+				}
+				if (pageMeta) {
+					if (filteredRows.length === 0) {
+						pageMeta.textContent = '';
+					} else {
+						var from = startIndex + 1;
+						var until = Math.min(endIndex, filteredRows.length);
+						pageMeta.textContent = 'Menampilkan ' + from + ' - ' + until + ' dari ' + filteredRows.length + ' data | Halaman ' + currentPage + ' / ' + totalPages;
+					}
+				}
+				if (pager) {
+					pager.innerHTML = '';
+					if (filteredRows.length > 0 && totalPages > 1) {
+						if (currentPage > 1) {
+							pager.appendChild(buildPagerButton('Sebelumnya', currentPage - 1, 'wide'));
+						}
+						var startPage = Math.max(1, currentPage - 2);
+						var endPage = Math.min(totalPages, startPage + 4);
+						if ((endPage - startPage + 1) < 5) {
+							startPage = Math.max(1, endPage - 4);
+						}
+						for (var pageNo = startPage; pageNo <= endPage; pageNo += 1) {
+							var pageButton = buildPagerButton(String(pageNo), pageNo, pageNo === currentPage ? 'active' : '');
+							pager.appendChild(pageButton);
+						}
+						if (currentPage < totalPages) {
+							pager.appendChild(buildPagerButton('Selanjutnya', currentPage + 1, 'wide'));
+						}
+					}
 				}
 			};
 
-			searchInput.addEventListener('input', filterRows);
+			searchInput.addEventListener('input', function () {
+				currentPage = 1;
+				renderRows();
+			});
+			renderRows();
 		})();
 
 		(function () {

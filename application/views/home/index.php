@@ -29,19 +29,39 @@ $branch_options = isset($branch_options) && is_array($branch_options) ? array_va
 $default_branch = isset($default_branch) && trim((string) $default_branch) !== ''
 	? trim((string) $default_branch)
 	: (isset($branch_options[0]) ? (string) $branch_options[0] : 'Baros');
+$can_view_log_data = isset($can_view_log_data) && $can_view_log_data === TRUE;
+$can_manage_accounts = isset($can_manage_accounts) && $can_manage_accounts === TRUE;
+$can_sync_sheet_accounts = isset($can_sync_sheet_accounts) && $can_sync_sheet_accounts === TRUE;
+$can_manage_feature_accounts = isset($can_manage_feature_accounts) && $can_manage_feature_accounts === TRUE;
+$dashboard_navbar_title = isset($dashboard_navbar_title) && trim((string) $dashboard_navbar_title) !== ''
+	? trim((string) $dashboard_navbar_title)
+	: 'Dashboard Admin Absen';
+$dashboard_role_label = isset($dashboard_role_label) && trim((string) $dashboard_role_label) !== ''
+	? trim((string) $dashboard_role_label)
+	: 'Admin';
+$dashboard_status_label = isset($dashboard_status_label) && trim((string) $dashboard_status_label) !== ''
+	? trim((string) $dashboard_status_label)
+	: 'Ringkasan Operasional Harian';
+$privileged_password_targets = isset($privileged_password_targets) && is_array($privileged_password_targets)
+	? array_values($privileged_password_targets)
+	: array(
+		array('username' => 'developer', 'label' => 'Developer (developer)'),
+		array('username' => 'admin', 'label' => 'Admin (admin)'),
+		array('username' => 'bos', 'label' => 'Bos (bos)')
+	);
+$admin_feature_catalog = isset($admin_feature_catalog) && is_array($admin_feature_catalog)
+	? $admin_feature_catalog
+	: array();
+$admin_feature_accounts = isset($admin_feature_accounts) && is_array($admin_feature_accounts)
+	? array_values($admin_feature_accounts)
+	: array();
+$admin_feature_accounts_json = json_encode($admin_feature_accounts, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+if ($admin_feature_accounts_json === FALSE) {
+	$admin_feature_accounts_json = '[]';
+}
 
-$status_hari_ini = isset($summary['status_hari_ini']) ? (string) $summary['status_hari_ini'] : 'Belum Check In';
-$status_key = strtolower($status_hari_ini);
-$status_class = 'status-default';
-if (strpos($status_key, 'hadir') !== FALSE || strpos($status_key, 'check in') !== FALSE) {
-	$status_class = 'status-success';
-}
-elseif (strpos($status_key, 'terlambat') !== FALSE) {
-	$status_class = 'status-warning';
-}
-elseif (strpos($status_key, 'izin') !== FALSE || strpos($status_key, 'cuti') !== FALSE) {
-	$status_class = 'status-info';
-}
+$status_hari_ini = $dashboard_status_label;
+$status_class = 'status-info';
 
 $script_name = isset($_SERVER['SCRIPT_NAME']) ? (string) $_SERVER['SCRIPT_NAME'] : '';
 $base_path = str_replace('\\', '/', dirname($script_name));
@@ -616,6 +636,23 @@ $logo_url = $base_path.'/'.$logo_path;
 			background: #fbfeff;
 		}
 
+		.clock-box-link {
+			display: block;
+			text-decoration: none;
+			transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+		}
+
+		.clock-box-link:hover,
+		.clock-box-link:focus-visible {
+			border-color: #84b8e3;
+			box-shadow: 0 10px 20px rgba(11, 71, 124, 0.12);
+			transform: translateY(-1px);
+		}
+
+		.clock-box-link:focus-visible {
+			outline: none;
+		}
+
 		.clock-label {
 			margin: 0;
 			font-size: 0.68rem;
@@ -630,6 +667,14 @@ $logo_url = $base_path.'/'.$logo_path;
 			font-size: 1.02rem;
 			font-weight: 800;
 			color: var(--brand-dark);
+		}
+
+		.clock-help-text {
+			margin: 0.34rem 0 0;
+			font-size: 0.72rem;
+			font-weight: 700;
+			color: #4e6b89;
+			opacity: 0.9;
 		}
 
 		.status-pill {
@@ -969,6 +1014,12 @@ $logo_url = $base_path.'/'.$logo_path;
 			align-items: start;
 		}
 
+		.account-column-stack {
+			display: grid;
+			gap: 1rem;
+			align-content: start;
+		}
+
 		.account-card {
 			background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
 			border: 1px solid #d5e6f3;
@@ -1058,6 +1109,134 @@ $logo_url = $base_path.'/'.$logo_path;
 
 		.account-submit.delete {
 			background: linear-gradient(140deg, #b94040 0%, #8f2727 100%);
+		}
+
+		.account-action-grid {
+			display: grid;
+			gap: 0.68rem;
+		}
+
+		.account-action-btn {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			width: 100%;
+			border: none;
+			border-radius: 12px;
+			padding: 0.62rem 0.9rem;
+			font-size: 0.86rem;
+			font-weight: 800;
+			color: #ffffff;
+			background: linear-gradient(140deg, var(--brand-main) 0%, var(--brand-dark) 100%);
+			cursor: pointer;
+			transition: transform 0.16s ease, filter 0.16s ease;
+		}
+
+		.account-action-btn:hover {
+			filter: brightness(1.03);
+			transform: translateY(-1px);
+		}
+
+		.account-action-btn.secondary {
+			background: linear-gradient(140deg, #3f6280 0%, #284a66 100%);
+		}
+
+		.manage-modal {
+			position: fixed;
+			inset: 0;
+			z-index: 2200;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			padding: 0.95rem;
+			background: rgba(5, 22, 39, 0.58);
+			opacity: 0;
+			pointer-events: none;
+			visibility: hidden;
+			transition: opacity 0.2s ease, visibility 0.2s ease;
+		}
+
+		.manage-modal.show {
+			opacity: 1;
+			pointer-events: auto;
+			visibility: visible;
+		}
+
+		.manage-modal-card {
+			width: min(980px, calc(100vw - 1.9rem));
+			max-height: 92vh;
+			background: linear-gradient(180deg, #f8fcff 0%, #eef6fd 100%);
+			border: 1px solid rgba(255, 255, 255, 0.22);
+			border-radius: 18px;
+			box-shadow: 0 26px 56px rgba(4, 22, 40, 0.36);
+			overflow: hidden;
+			display: grid;
+			grid-template-rows: auto 1fr;
+		}
+
+		.manage-modal-head {
+			padding: 0.86rem 0.95rem;
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			border-bottom: 1px solid rgba(116, 156, 193, 0.34);
+			background: rgba(15, 54, 91, 0.92);
+			color: #ffffff;
+		}
+
+		.manage-modal-title {
+			margin: 0;
+			font-size: 0.95rem;
+			font-weight: 800;
+			letter-spacing: 0.02em;
+		}
+
+		.manage-modal-close {
+			width: 34px;
+			height: 34px;
+			border: 1px solid rgba(255, 255, 255, 0.28);
+			border-radius: 10px;
+			background: rgba(255, 255, 255, 0.08);
+			color: #ffffff;
+			font-size: 1.05rem;
+			font-weight: 700;
+			line-height: 1;
+			cursor: pointer;
+		}
+
+		.manage-modal-body {
+			padding: 0.88rem;
+			overflow: auto;
+			display: grid;
+			gap: 0.88rem;
+			align-content: start;
+		}
+
+		.manage-modal-section {
+			margin: 0;
+		}
+
+		.manage-modal-grid {
+			display: grid;
+			gap: 0.88rem;
+		}
+
+		.manage-source-block {
+			display: none !important;
+		}
+
+		@media (min-width: 768px) {
+			.account-action-grid {
+				grid-template-columns: repeat(3, minmax(0, 1fr));
+			}
+
+			.manage-modal-grid.two-col {
+				grid-template-columns: repeat(2, minmax(0, 1fr));
+			}
+		}
+
+		body.manage-modal-open {
+			overflow: hidden;
 		}
 
 		.account-divider {
@@ -1184,13 +1363,9 @@ $logo_url = $base_path.'/'.$logo_path;
 		}
 
 		@media (pointer: fine) {
-			.table-wrap {
-				cursor: grab;
-			}
-
-			.table-wrap.is-dragging,
-			.table-wrap.is-dragging * {
-				cursor: grabbing !important;
+			.table-wrap,
+			.table-wrap * {
+				cursor: default;
 			}
 		}
 
@@ -1312,6 +1487,24 @@ $logo_url = $base_path.'/'.$logo_path;
 			.metric-range-note {
 				width: 100%;
 			}
+
+			.manage-modal {
+				padding: 0.55rem;
+			}
+
+			.manage-modal-card {
+				width: 100%;
+				max-height: 95vh;
+				border-radius: 14px;
+			}
+
+			.manage-modal-head {
+				padding: 0.75rem 0.82rem;
+			}
+
+			.manage-modal-body {
+				padding: 0.72rem 0.78rem 0.8rem;
+			}
 		}
 	</style>
 </head>
@@ -1322,9 +1515,14 @@ $logo_url = $base_path.'/'.$logo_path;
 				<div class="topbar-inner">
 					<a href="<?php echo site_url('home'); ?>" class="brand-block">
 						<img class="brand-logo" src="<?php echo htmlspecialchars($logo_url, ENT_QUOTES, 'UTF-8'); ?>" alt="Logo Absen Online">
-						<span class="brand-text">Dashboard Admin Absen</span>
+						<span class="brand-text"><?php echo htmlspecialchars($dashboard_navbar_title, ENT_QUOTES, 'UTF-8'); ?></span>
 					</a>
-					<a href="<?php echo site_url('logout'); ?>" class="logout">Logout</a>
+					<div class="nav-right">
+						<?php if ($can_view_log_data): ?>
+							<a href="<?php echo site_url('home/log_data'); ?>" class="logout">Log Data</a>
+						<?php endif; ?>
+						<a href="<?php echo site_url('logout'); ?>" class="logout">Logout</a>
+					</div>
 				</div>
 			</div>
 		</nav>
@@ -1335,9 +1533,9 @@ $logo_url = $base_path.'/'.$logo_path;
 					<div class="row g-3 align-items-center">
 						<div class="col-lg-7">
 							<p class="status-pill <?php echo htmlspecialchars($status_class, ENT_QUOTES, 'UTF-8'); ?>" id="summaryStatusPill"><?php echo htmlspecialchars($status_hari_ini, ENT_QUOTES, 'UTF-8'); ?></p>
-							<h1 class="hero-title">Halo, <?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?>. Selamat datang di Dashboard Absen Online.</h1>
+							<h1 class="hero-title">Halo, <?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?>. Selamat datang di Dashboard Absen.</h1>
 							<p class="hero-subtitle">
-								Pantau kehadiran harian, lakukan check in/check out, dan lihat riwayat absensi dalam satu halaman.
+								Kelola data kehadiran tim, sinkronisasi spreadsheet, dan operasional administrasi absensi dalam satu halaman kerja.
 							</p>
 						</div>
 						<div class="col-lg-5">
@@ -1355,14 +1553,11 @@ $logo_url = $base_path.'/'.$logo_path;
 									</div>
 								</div>
 								<div class="col-12">
-									<div class="clock-box">
-										<p class="clock-label">Waktu Check In / Check Out</p>
-										<p class="clock-value">
-											<span id="summaryCheckInTime"><?php echo htmlspecialchars(isset($summary['jam_masuk']) ? (string) $summary['jam_masuk'] : '-', ENT_QUOTES, 'UTF-8'); ?></span>
-											/
-											<span id="summaryCheckOutTime"><?php echo htmlspecialchars(isset($summary['jam_pulang']) ? (string) $summary['jam_pulang'] : '-', ENT_QUOTES, 'UTF-8'); ?></span>
-										</p>
-									</div>
+									<a href="<?php echo site_url('home/cara_pakai'); ?>" class="clock-box clock-box-link" aria-label="Buka halaman Cara Pakai Dashboard">
+										<p class="clock-label">Cara Pakai Dashboard</p>
+										<p class="clock-value">Buka Panduan Lengkap</p>
+										<p class="clock-help-text">Klik untuk lihat fungsi tombol, aturan potongan, dan alur sinkronisasi.</p>
+									</a>
 								</div>
 							</div>
 						</div>
@@ -1434,7 +1629,11 @@ $logo_url = $base_path.'/'.$logo_path;
 				</section>
 
 				<section id="manajemen-karyawan" class="mb-4">
-					<h2 class="section-title">Manajemen Akun Karyawan</h2>
+					<?php if ($can_manage_accounts): ?>
+						<h2 class="section-title">Manajemen Akun Karyawan</h2>
+					<?php else: ?>
+						<h2 class="section-title">Sinkronisasi Data Absen</h2>
+					<?php endif; ?>
 
 					<?php if ($account_notice_success !== ''): ?>
 						<div class="account-notice success"><?php echo htmlspecialchars($account_notice_success, ENT_QUOTES, 'UTF-8'); ?></div>
@@ -1445,11 +1644,17 @@ $logo_url = $base_path.'/'.$logo_path;
 					<div class="account-grid mb-3">
 						<article class="account-card">
 							<h3>Sinkronisasi Spreadsheet</h3>
-							<p>Tarik data terbaru dari Google Sheet ke web (akun + Data Absen).</p>
+							<?php if ($can_sync_sheet_accounts): ?>
+								<p>Tarik data terbaru dari Google Sheet ke web (akun + Data Absen).</p>
+							<?php else: ?>
+								<p>Tarik data terbaru dari Google Sheet ke web (Data Absen).</p>
+							<?php endif; ?>
 							<div class="d-flex flex-wrap gap-2">
-								<form method="post" action="<?php echo site_url('home/sync_sheet_accounts_now'); ?>">
-									<button type="submit" class="account-submit">Sync Akun dari Sheet</button>
-								</form>
+								<?php if ($can_sync_sheet_accounts): ?>
+									<form method="post" action="<?php echo site_url('home/sync_sheet_accounts_now'); ?>">
+										<button type="submit" class="account-submit">Sync Akun dari Sheet</button>
+									</form>
+								<?php endif; ?>
 								<form method="post" action="<?php echo site_url('home/sync_sheet_attendance_now'); ?>">
 									<button type="submit" class="account-submit">Sync Data Absen dari Sheet</button>
 								</form>
@@ -1460,193 +1665,113 @@ $logo_url = $base_path.'/'.$logo_path;
 						</article>
 					</div>
 
-					<div class="account-grid mb-3">
-						<article class="account-card">
-							<h3>Buat Akun Karyawan Baru</h3>
-							<p>Admin bisa menambahkan akun login karyawan langsung dari dashboard.</p>
-							<form method="post" action="<?php echo site_url('home/create_employee_account'); ?>" class="account-form">
-								<div>
-									<p class="account-label">Username</p>
-									<input type="text" name="new_username" id="newUsernameInput" class="account-input" placeholder="contoh: userbaru" autocomplete="off" autocapitalize="off" spellcheck="false" required>
+					<?php if ($can_manage_accounts): ?>
+						<div class="account-grid mb-3">
+							<article class="account-card">
+								<h3>Aksi Manajemen Akun</h3>
+								<p>Pilih tombol untuk membuka pop up form sesuai kebutuhan.</p>
+								<div class="account-action-grid">
+									<button type="button" class="account-action-btn" data-manage-modal-open="employeeCreateModal">Buat Akun Karyawan Baru</button>
+									<button type="button" class="account-action-btn secondary" data-manage-modal-open="employeeManageModal">Hapus / Edit Akun Karyawan</button>
+									<?php if ($can_manage_feature_accounts): ?>
+										<button type="button" class="account-action-btn" data-manage-modal-open="privilegedManageModal">Kelola Akun Privileged</button>
+									<?php endif; ?>
 								</div>
-								<div class="account-form-row two">
-									<div>
-										<p class="account-label">Password</p>
-										<input type="text" name="new_password" class="account-input" placeholder="minimal 3 karakter" required>
-									</div>
-									<div>
-										<p class="account-label">No Telp</p>
-										<input type="text" name="new_phone" class="account-input" placeholder="08xxxxxxxxxx" required>
-									</div>
-								</div>
-								<div class="account-form-row two">
-									<div>
-										<p class="account-label">Cabang</p>
-										<select name="new_branch" class="account-input" required>
-											<?php foreach ($branch_options as $branch_option): ?>
-												<?php $branch_option_value = trim((string) $branch_option); ?>
-												<?php if ($branch_option_value === ''): ?>
-													<?php continue; ?>
-												<?php endif; ?>
-												<option value="<?php echo htmlspecialchars($branch_option_value, ENT_QUOTES, 'UTF-8'); ?>"<?php echo strcasecmp($branch_option_value, $default_branch) === 0 ? ' selected' : ''; ?>>
-													<?php echo htmlspecialchars($branch_option_value, ENT_QUOTES, 'UTF-8'); ?>
-												</option>
-											<?php endforeach; ?>
-										</select>
-									</div>
-									<div>
-										<p class="account-label">Shift</p>
-										<select name="new_shift" class="account-input" required>
-											<option value="pagi">Shift Pagi - Sore (08:00 - 17:00)</option>
-											<option value="siang">Shift Siang - Malam (12:00 - 23:00)</option>
-										</select>
-									</div>
-								</div>
-								<div class="account-form-row two">
-									<div>
-										<p class="account-label">Gaji Pokok (Rp)</p>
-										<input type="text" name="new_salary_monthly" class="account-input" placeholder="contoh: 2500000" required>
-									</div>
-									<div>
-										<p class="account-label">Hari Masuk / Bulan</p>
-										<input type="number" min="1" max="31" name="new_work_days" class="account-input" value="28">
-									</div>
-								</div>
-								<div>
-									<p class="account-label">Jabatan</p>
-									<select name="new_job_title" class="account-input" required>
-										<?php foreach ($job_title_options as $job_title_option): ?>
-											<?php $job_title_option_value = trim((string) $job_title_option); ?>
-											<?php if ($job_title_option_value === ''): ?>
-												<?php continue; ?>
-											<?php endif; ?>
-											<option value="<?php echo htmlspecialchars($job_title_option_value, ENT_QUOTES, 'UTF-8'); ?>"<?php echo $job_title_option_value === $default_job_title ? ' selected' : ''; ?>>
-												<?php echo htmlspecialchars($job_title_option_value, ENT_QUOTES, 'UTF-8'); ?>
-											</option>
-										<?php endforeach; ?>
-									</select>
-								</div>
-								<div>
-									<p class="account-label">Alamat</p>
-									<input type="text" name="new_address" class="account-input" placeholder="Kp. Kesekian Kalinya, Pandenglang, Banten">
-								</div>
-								<button type="submit" class="account-submit">Simpan Akun Baru</button>
-							</form>
-						</article>
+							</article>
+						</div>
 
-						<article class="account-card">
-							<h3>Hapus Akun Karyawan</h3>
-							<p>Pilih akun yang ingin dihapus. Data absen, cuti/izin, pinjaman, dan lembur karyawan tersebut juga akan dibersihkan.</p>
-							<form method="post" action="<?php echo site_url('home/delete_employee_account'); ?>" class="account-form" id="deleteEmployeeForm">
-								<div>
-									<p class="account-label">Pilih Karyawan</p>
-									<input
-										type="text"
-										name="delete_username"
-										id="deleteUsernameInput"
-										class="account-input"
-										list="deleteEmployeeUsernameList"
-										placeholder="Cari ID atau username karyawan"
-										autocomplete="off"
-										required
-									>
-									<datalist id="deleteEmployeeUsernameList">
-										<?php foreach ($employee_accounts as $employee): ?>
-											<?php
-											$employee_username_value = isset($employee['username']) ? trim((string) $employee['username']) : '';
-											if ($employee_username_value === '') {
-												continue;
-											}
-											$employee_id_value = isset($employee['employee_id']) ? trim((string) $employee['employee_id']) : '-';
-											?>
-											<option value="<?php echo htmlspecialchars($employee_username_value, ENT_QUOTES, 'UTF-8'); ?>" label="<?php echo htmlspecialchars($employee_id_value.' - '.$employee_username_value, ENT_QUOTES, 'UTF-8'); ?>"></option>
-											<?php if ($employee_id_value !== '' && $employee_id_value !== '-'): ?>
-												<option value="<?php echo htmlspecialchars($employee_id_value.' - '.$employee_username_value, ENT_QUOTES, 'UTF-8'); ?>"></option>
-											<?php endif; ?>
-										<?php endforeach; ?>
-									</datalist>
+						<div class="manage-modal" id="employeeCreateModal" data-manage-modal aria-hidden="true" role="dialog" aria-labelledby="employeeCreateModalTitle">
+							<div class="manage-modal-card">
+								<div class="manage-modal-head">
+									<h3 class="manage-modal-title" id="employeeCreateModalTitle">Buat Akun Karyawan Baru</h3>
+									<button type="button" class="manage-modal-close" data-manage-modal-close aria-label="Tutup popup">&times;</button>
 								</div>
-								<button type="submit" class="account-submit delete">Hapus Akun</button>
-							</form>
+								<div class="manage-modal-body" id="employeeCreateModalBody"></div>
+							</div>
+						</div>
 
-							<div class="account-divider"></div>
+						<div class="manage-modal" id="employeeManageModal" data-manage-modal aria-hidden="true" role="dialog" aria-labelledby="employeeManageModalTitle">
+							<div class="manage-modal-card">
+								<div class="manage-modal-head">
+									<h3 class="manage-modal-title" id="employeeManageModalTitle">Hapus / Edit Akun Karyawan</h3>
+									<button type="button" class="manage-modal-close" data-manage-modal-close aria-label="Tutup popup">&times;</button>
+								</div>
+								<div class="manage-modal-body manage-modal-grid two-col" id="employeeManageModalBody"></div>
+							</div>
+						</div>
 
-							<h4 class="account-subtitle">Edit Akun Karyawan</h4>
-							<p class="account-help">Ubah data akun karyawan terpilih. Password boleh dikosongkan jika tidak ingin diubah.</p>
-							<form method="post" action="<?php echo site_url('home/update_employee_account'); ?>" class="account-form" id="editEmployeeForm">
-								<div>
-									<p class="account-label">Pilih Karyawan</p>
-									<input
-										type="text"
-										name="edit_username"
-										id="editUsernameInput"
-										class="account-input"
-										list="editEmployeeUsernameList"
-										placeholder="Cari ID atau username karyawan"
-										autocomplete="off"
-										required
-									>
-									<datalist id="editEmployeeUsernameList">
-										<?php foreach ($employee_accounts as $employee): ?>
-											<?php
-											$employee_username_value = isset($employee['username']) ? trim((string) $employee['username']) : '';
-											if ($employee_username_value === '') {
-												continue;
-											}
-											$employee_id_value = isset($employee['employee_id']) ? trim((string) $employee['employee_id']) : '-';
-											?>
-											<option value="<?php echo htmlspecialchars($employee_username_value, ENT_QUOTES, 'UTF-8'); ?>" label="<?php echo htmlspecialchars($employee_id_value.' - '.$employee_username_value, ENT_QUOTES, 'UTF-8'); ?>"></option>
-											<?php if ($employee_id_value !== '' && $employee_id_value !== '-'): ?>
-												<option value="<?php echo htmlspecialchars($employee_id_value.' - '.$employee_username_value, ENT_QUOTES, 'UTF-8'); ?>"></option>
-											<?php endif; ?>
-										<?php endforeach; ?>
-									</datalist>
+						<?php if ($can_manage_feature_accounts): ?>
+							<div class="manage-modal" id="privilegedManageModal" data-manage-modal aria-hidden="true" role="dialog" aria-labelledby="privilegedManageModalTitle">
+								<div class="manage-modal-card">
+									<div class="manage-modal-head">
+										<h3 class="manage-modal-title" id="privilegedManageModalTitle">Kelola Akun Privileged</h3>
+										<button type="button" class="manage-modal-close" data-manage-modal-close aria-label="Tutup popup">&times;</button>
+									</div>
+									<div class="manage-modal-body manage-modal-grid two-col" id="privilegedManageModalBody"></div>
 								</div>
-								<div>
-									<p class="account-label">Username</p>
-									<input type="text" name="edit_new_username" id="editNewUsernameInput" class="account-input" placeholder="contoh: userbaru" autocomplete="off" autocapitalize="off" spellcheck="false" required>
-								</div>
-								<div class="account-form-row two">
+							</div>
+						<?php endif; ?>
+
+						<div class="account-grid mb-3 manage-source-block" id="manageAccountSourceWrap">
+							<div class="account-column-stack">
+								<article class="account-card" id="createEmployeeSourceCard">
+									<h3>Buat Akun Karyawan Baru</h3>
+									<p>Akun dengan izin kelola akun bisa menambahkan akun login karyawan langsung dari dashboard.</p>
+									<form method="post" action="<?php echo site_url('home/create_employee_account'); ?>" class="account-form" enctype="multipart/form-data">
 									<div>
-										<p class="account-label">Password Baru (Opsional)</p>
-										<input type="text" name="edit_password" id="editPasswordInput" class="account-input" placeholder="Kosongkan jika tidak diubah">
+										<p class="account-label">Username</p>
+										<input type="text" name="new_username" id="newUsernameInput" class="account-input" placeholder="contoh: userbaru" autocomplete="off" autocapitalize="off" spellcheck="false" required>
 									</div>
 									<div>
-										<p class="account-label">No Telp</p>
-										<input type="text" name="edit_phone" id="editPhoneInput" class="account-input" placeholder="08xxxxxxxxxx" required>
+										<p class="account-label">Nama Lengkap</p>
+										<input type="text" name="new_display_name" class="account-input" placeholder="contoh: Muhammad Ridwan K." autocomplete="off" required>
 									</div>
-								</div>
-								<div class="account-form-row two">
-									<div>
-										<p class="account-label">Cabang</p>
-										<select name="edit_branch" id="editBranchInput" class="account-input" required>
-											<?php foreach ($branch_options as $branch_option): ?>
-												<?php $branch_option_value = trim((string) $branch_option); ?>
-												<?php if ($branch_option_value === ''): ?>
-													<?php continue; ?>
-												<?php endif; ?>
-												<option value="<?php echo htmlspecialchars($branch_option_value, ENT_QUOTES, 'UTF-8'); ?>"<?php echo strcasecmp($branch_option_value, $default_branch) === 0 ? ' selected' : ''; ?>>
-													<?php echo htmlspecialchars($branch_option_value, ENT_QUOTES, 'UTF-8'); ?>
-												</option>
-											<?php endforeach; ?>
-										</select>
+									<div class="account-form-row two">
+										<div>
+											<p class="account-label">Password</p>
+											<input type="text" name="new_password" class="account-input" placeholder="minimal 3 karakter" required>
+										</div>
+										<div>
+											<p class="account-label">No Telp</p>
+											<input type="text" name="new_phone" class="account-input" placeholder="08xxxxxxxxxx" required>
+										</div>
 									</div>
-									<div>
-										<p class="account-label">Shift</p>
-										<select name="edit_shift" id="editShiftInput" class="account-input" required>
-											<option value="pagi">Shift Pagi - Sore (08:00 - 17:00)</option>
-											<option value="siang">Shift Siang - Malam (12:00 - 23:00)</option>
-										</select>
+									<div class="account-form-row two">
+										<div>
+											<p class="account-label">Cabang</p>
+											<select name="new_branch" class="account-input" required>
+												<?php foreach ($branch_options as $branch_option): ?>
+													<?php $branch_option_value = trim((string) $branch_option); ?>
+													<?php if ($branch_option_value === ''): ?>
+														<?php continue; ?>
+													<?php endif; ?>
+													<option value="<?php echo htmlspecialchars($branch_option_value, ENT_QUOTES, 'UTF-8'); ?>"<?php echo strcasecmp($branch_option_value, $default_branch) === 0 ? ' selected' : ''; ?>>
+														<?php echo htmlspecialchars($branch_option_value, ENT_QUOTES, 'UTF-8'); ?>
+													</option>
+												<?php endforeach; ?>
+											</select>
+										</div>
+										<div>
+											<p class="account-label">Shift</p>
+											<select name="new_shift" class="account-input" required>
+												<option value="pagi">Shift Pagi - Sore (08:00 - 17:00)</option>
+												<option value="siang">Shift Siang - Malam (12:00 - 23:00)</option>
+											</select>
+										</div>
 									</div>
-								</div>
-								<div>
-									<p class="account-label">Gaji Pokok (Rp)</p>
-									<input type="text" name="edit_salary_monthly" id="editSalaryMonthlyInput" class="account-input" placeholder="contoh: 2500000" required>
-								</div>
-								<div class="account-form-row two">
+									<div class="account-form-row two">
+										<div>
+											<p class="account-label">Gaji Pokok (Rp)</p>
+											<input type="text" name="new_salary_monthly" class="account-input" placeholder="contoh: 2500000" required>
+										</div>
+										<div>
+											<p class="account-label">Hari Masuk / Bulan</p>
+											<input type="number" min="1" max="31" name="new_work_days" class="account-input" value="28">
+										</div>
+									</div>
 									<div>
 										<p class="account-label">Jabatan</p>
-										<select name="edit_job_title" id="editJobTitleInput" class="account-input" required>
+										<select name="new_job_title" class="account-input" required>
 											<?php foreach ($job_title_options as $job_title_option): ?>
 												<?php $job_title_option_value = trim((string) $job_title_option); ?>
 												<?php if ($job_title_option_value === ''): ?>
@@ -1659,72 +1784,370 @@ $logo_url = $base_path.'/'.$logo_path;
 										</select>
 									</div>
 									<div>
-										<p class="account-label">Hari Masuk / Bulan</p>
-										<input type="number" min="1" max="31" name="edit_work_days" id="editWorkDaysInput" class="account-input" value="28">
+										<p class="account-label">Alamat</p>
+										<input type="text" name="new_address" class="account-input" placeholder="Kp. Kesekian Kalinya, Pandenglang, Banten">
 									</div>
-								</div>
-								<div>
-									<p class="account-label">Alamat</p>
-									<input type="text" name="edit_address" id="editAddressInput" class="account-input" placeholder="Kp. Kesekian Kalinya, Pandenglang, Banten">
-								</div>
-								<button type="submit" class="account-submit">Simpan Perubahan Akun</button>
-							</form>
-						</article>
-					</div>
+									<div class="account-form-row two">
+										<div>
+											<p class="account-label">Titik Koordinat</p>
+											<input type="text" name="new_coordinate_point" class="account-input" placeholder="-6.217062, 106.1321109" required>
+										</div>
+										<div>
+											<p class="account-label">Upload PP (Wajib)</p>
+											<input type="file" name="new_profile_photo" class="account-input" accept=".png,.jpg,.jpeg,.heic" required>
+										</div>
+									</div>
+										<button type="submit" class="account-submit">Simpan Akun Baru</button>
+									</form>
+								</article>
 
-					<div class="table-wrap">
-						<?php if (!empty($employee_accounts)): ?>
-							<div class="account-table-toolbar">
-								<input
-									type="text"
-									id="employeeAccountSearchInput"
-									class="account-search-input"
-									placeholder="Cari ID atau nama karyawan"
-									autocomplete="off"
-								>
+								<?php if ($can_manage_feature_accounts): ?>
+									<article class="account-card" id="privilegedRenameSourceCard">
+										<h3>Ganti Nama Akun Admin</h3>
+										<p>Khusus Developer/Bos. Ubah nama tampilan akun admin untuk login dashboard.</p>
+										<form method="post" action="<?php echo site_url('home/update_privileged_account_display_name'); ?>" class="account-form">
+											<input type="hidden" name="target_account" value="admin">
+											<div>
+												<p class="account-label">Nama Baru Akun Admin</p>
+												<input type="text" name="new_display_name" class="account-input" placeholder="contoh: Admin Operasional" autocomplete="off" required>
+											</div>
+											<button type="submit" class="account-submit">Simpan Nama Admin</button>
+										</form>
+									</article>
+
+									<article class="account-card" id="privilegedPasswordSourceCard">
+										<h3>Ganti Informasi Akun Privileged</h3>
+										<p>Khusus Developer/Bos. Bisa ubah username login admin, nama akun, dan/atau password akun admin. Username akun developer/bos tetap tidak bisa diubah. Bos tidak bisa mengubah akun developer.</p>
+										<form method="post" action="<?php echo site_url('home/update_privileged_account_password'); ?>" class="account-form">
+											<div>
+												<p class="account-label">Target Akun</p>
+												<select name="target_account" class="account-input" required>
+													<?php foreach ($privileged_password_targets as $target_account_row): ?>
+														<?php
+														$target_account_username = '';
+														$target_account_option_label = '';
+														if (is_array($target_account_row)) {
+															$target_account_username = strtolower(trim((string) (isset($target_account_row['username']) ? $target_account_row['username'] : '')));
+															$target_account_option_label = trim((string) (isset($target_account_row['label']) ? $target_account_row['label'] : ''));
+														} else {
+															$target_account_username = strtolower(trim((string) $target_account_row));
+														}
+														if ($target_account_username === '') {
+															continue;
+														}
+														if ($target_account_option_label === '') {
+															$target_account_option_label = $target_account_username;
+														}
+														?>
+														<option value="<?php echo htmlspecialchars($target_account_username, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($target_account_option_label, ENT_QUOTES, 'UTF-8'); ?></option>
+													<?php endforeach; ?>
+												</select>
+											</div>
+											<div>
+												<p class="account-label">Username Baru (Opsional)</p>
+												<input type="text" name="new_username" id="privilegedNewUsernameInput" class="account-input" placeholder="contoh: admin_ops_baru" autocomplete="off" autocapitalize="off" spellcheck="false">
+											</div>
+											<div>
+												<p class="account-label">Nama Baru (Opsional)</p>
+												<input type="text" name="new_display_name" class="account-input" placeholder="Kosongkan jika tidak diubah" autocomplete="off">
+											</div>
+											<div class="account-form-row two">
+												<div>
+													<p class="account-label">Password Baru (Opsional)</p>
+													<input type="text" name="new_password" class="account-input" placeholder="Kosongkan jika tidak diubah">
+												</div>
+												<div>
+													<p class="account-label">Konfirmasi Password</p>
+													<input type="text" name="confirm_password" class="account-input" placeholder="Isi jika password diubah">
+												</div>
+											</div>
+											<button type="submit" class="account-submit">Simpan Informasi</button>
+										</form>
+									</article>
+
+									<article class="account-card" id="privilegedCreateSourceCard">
+										<h3>Buat Akun Admin Fitur</h3>
+										<p>Khusus Developer/Bos. Buat akun admin custom dan pilih fitur yang diizinkan.</p>
+										<form method="post" action="<?php echo site_url('home/create_feature_admin_account'); ?>" class="account-form">
+											<div>
+												<p class="account-label">Username</p>
+												<input type="text" name="feature_admin_username" class="account-input" placeholder="contoh: admin_ops" autocomplete="off" autocapitalize="off" spellcheck="false" required>
+											</div>
+											<div>
+												<p class="account-label">Nama Lengkap</p>
+												<input type="text" name="feature_admin_display_name" class="account-input" placeholder="contoh: Admin Operasional" autocomplete="off" required>
+											</div>
+											<div>
+												<p class="account-label">Password</p>
+												<input type="text" name="feature_admin_password" class="account-input" placeholder="minimal 3 karakter" required>
+											</div>
+											<div>
+												<p class="account-label">Fitur Akses</p>
+												<div class="d-flex flex-column gap-2">
+													<?php foreach ($admin_feature_catalog as $feature_key => $feature_label): ?>
+														<?php $feature_key_value = trim((string) $feature_key); ?>
+														<?php if ($feature_key_value === ''): ?>
+															<?php continue; ?>
+														<?php endif; ?>
+														<label class="d-flex align-items-center gap-2">
+															<input type="checkbox" name="feature_permissions[]" value="<?php echo htmlspecialchars($feature_key_value, ENT_QUOTES, 'UTF-8'); ?>">
+															<span><?php echo htmlspecialchars((string) $feature_label, ENT_QUOTES, 'UTF-8'); ?></span>
+														</label>
+													<?php endforeach; ?>
+												</div>
+											</div>
+											<button type="submit" class="account-submit">Simpan Akun Fitur</button>
+										</form>
+									</article>
+								<?php endif; ?>
 							</div>
-						<?php endif; ?>
-						<div class="table-responsive">
-							<table class="table table-custom account-table">
-								<thead>
-									<tr>
-										<th>ID</th>
-										<th>Username</th>
-										<th>Jabatan</th>
-										<th>Telp</th>
-										<th>Cabang</th>
-										<th>Shift</th>
-										<th>Gaji Pokok</th>
-									</tr>
-								</thead>
-								<tbody id="employeeAccountTableBody">
-									<?php if (empty($employee_accounts)): ?>
-										<tr class="employee-account-empty">
-											<td colspan="7" class="text-center py-4 text-secondary">Belum ada akun karyawan.</td>
-										</tr>
-									<?php else: ?>
-										<?php foreach ($employee_accounts as $employee): ?>
-											<tr class="employee-account-row">
-												<td><?php echo htmlspecialchars(isset($employee['employee_id']) ? (string) $employee['employee_id'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
-												<td><?php echo htmlspecialchars(isset($employee['username']) ? (string) $employee['username'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
-												<td><?php echo htmlspecialchars(isset($employee['job_title']) ? (string) $employee['job_title'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
-												<td><?php echo htmlspecialchars(isset($employee['phone']) ? (string) $employee['phone'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
-												<td><?php echo htmlspecialchars(isset($employee['branch']) ? (string) $employee['branch'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
-												<td><?php echo htmlspecialchars(isset($employee['shift_name']) ? (string) $employee['shift_name'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
-												<td>
-													<?php
-													$salary_monthly_value = isset($employee['salary_monthly']) ? (int) $employee['salary_monthly'] : 0;
-													echo htmlspecialchars($salary_monthly_value > 0 ? 'Rp '.number_format($salary_monthly_value, 0, ',', '.') : '-', ENT_QUOTES, 'UTF-8');
-													?>
-												</td>
-											</tr>
-										<?php endforeach; ?>
-									<?php endif; ?>
-								</tbody>
-							</table>
+
+							<div class="account-column-stack">
+								<article class="account-card" id="employeeDeleteSourceCard">
+									<h3>Hapus Akun Karyawan</h3>
+									<p>Pilih akun yang ingin dihapus. Data absen, cuti/izin, pinjaman, dan lembur karyawan tersebut juga akan dibersihkan.</p>
+									<form method="post" action="<?php echo site_url('home/delete_employee_account'); ?>" class="account-form" id="deleteEmployeeForm">
+									<div>
+										<p class="account-label">Pilih Karyawan</p>
+										<input
+											type="text"
+											name="delete_username"
+											id="deleteUsernameInput"
+											class="account-input"
+											list="deleteEmployeeUsernameList"
+											placeholder="Cari ID atau username karyawan"
+											autocomplete="off"
+											required
+										>
+										<datalist id="deleteEmployeeUsernameList">
+											<?php foreach ($employee_accounts as $employee): ?>
+												<?php
+												$employee_username_value = isset($employee['username']) ? trim((string) $employee['username']) : '';
+												if ($employee_username_value === '') {
+													continue;
+												}
+												$employee_id_value = isset($employee['employee_id']) ? trim((string) $employee['employee_id']) : '-';
+												?>
+												<option value="<?php echo htmlspecialchars($employee_username_value, ENT_QUOTES, 'UTF-8'); ?>" label="<?php echo htmlspecialchars($employee_id_value.' - '.$employee_username_value, ENT_QUOTES, 'UTF-8'); ?>"></option>
+												<?php if ($employee_id_value !== '' && $employee_id_value !== '-'): ?>
+													<option value="<?php echo htmlspecialchars($employee_id_value.' - '.$employee_username_value, ENT_QUOTES, 'UTF-8'); ?>"></option>
+												<?php endif; ?>
+											<?php endforeach; ?>
+										</datalist>
+									</div>
+										<button type="submit" class="account-submit delete">Hapus Akun</button>
+									</form>
+								</article>
+
+								<article class="account-card" id="employeeEditSourceCard">
+									<h3>Edit Akun Karyawan</h3>
+									<p>Ubah data akun karyawan terpilih. Password boleh dikosongkan jika tidak ingin diubah.</p>
+									<form method="post" action="<?php echo site_url('home/update_employee_account'); ?>" class="account-form" id="editEmployeeForm" enctype="multipart/form-data">
+									<div>
+										<p class="account-label">Pilih Karyawan</p>
+										<input
+											type="text"
+											name="edit_username"
+											id="editUsernameInput"
+											class="account-input"
+											list="editEmployeeUsernameList"
+											placeholder="Cari ID atau username karyawan"
+											autocomplete="off"
+											required
+										>
+										<datalist id="editEmployeeUsernameList">
+											<?php foreach ($employee_accounts as $employee): ?>
+												<?php
+												$employee_username_value = isset($employee['username']) ? trim((string) $employee['username']) : '';
+												if ($employee_username_value === '') {
+													continue;
+												}
+												$employee_id_value = isset($employee['employee_id']) ? trim((string) $employee['employee_id']) : '-';
+												?>
+												<option value="<?php echo htmlspecialchars($employee_username_value, ENT_QUOTES, 'UTF-8'); ?>" label="<?php echo htmlspecialchars($employee_id_value.' - '.$employee_username_value, ENT_QUOTES, 'UTF-8'); ?>"></option>
+												<?php if ($employee_id_value !== '' && $employee_id_value !== '-'): ?>
+													<option value="<?php echo htmlspecialchars($employee_id_value.' - '.$employee_username_value, ENT_QUOTES, 'UTF-8'); ?>"></option>
+												<?php endif; ?>
+											<?php endforeach; ?>
+										</datalist>
+									</div>
+									<div>
+										<p class="account-label">Username</p>
+										<input type="text" name="edit_new_username" id="editNewUsernameInput" class="account-input" placeholder="contoh: userbaru" autocomplete="off" autocapitalize="off" spellcheck="false" required>
+									</div>
+									<div>
+										<p class="account-label">Nama Lengkap</p>
+										<input type="text" name="edit_display_name" id="editDisplayNameInput" class="account-input" placeholder="contoh: Muhammad Ridwan K." autocomplete="off" required>
+									</div>
+									<div class="account-form-row two">
+										<div>
+											<p class="account-label">Password Baru (Opsional)</p>
+											<input type="text" name="edit_password" id="editPasswordInput" class="account-input" placeholder="Kosongkan jika tidak diubah">
+										</div>
+										<div>
+											<p class="account-label">No Telp</p>
+											<input type="text" name="edit_phone" id="editPhoneInput" class="account-input" placeholder="08xxxxxxxxxx" required>
+										</div>
+									</div>
+									<div class="account-form-row two">
+										<div>
+											<p class="account-label">Cabang</p>
+											<select name="edit_branch" id="editBranchInput" class="account-input" required>
+												<?php foreach ($branch_options as $branch_option): ?>
+													<?php $branch_option_value = trim((string) $branch_option); ?>
+													<?php if ($branch_option_value === ''): ?>
+														<?php continue; ?>
+													<?php endif; ?>
+													<option value="<?php echo htmlspecialchars($branch_option_value, ENT_QUOTES, 'UTF-8'); ?>"<?php echo strcasecmp($branch_option_value, $default_branch) === 0 ? ' selected' : ''; ?>>
+														<?php echo htmlspecialchars($branch_option_value, ENT_QUOTES, 'UTF-8'); ?>
+													</option>
+												<?php endforeach; ?>
+											</select>
+										</div>
+										<div>
+											<p class="account-label">Shift</p>
+											<select name="edit_shift" id="editShiftInput" class="account-input" required>
+												<option value="pagi">Shift Pagi - Sore (08:00 - 17:00)</option>
+												<option value="siang">Shift Siang - Malam (12:00 - 23:00)</option>
+											</select>
+										</div>
+									</div>
+									<div>
+										<p class="account-label">Gaji Pokok (Rp)</p>
+										<input type="text" name="edit_salary_monthly" id="editSalaryMonthlyInput" class="account-input" placeholder="contoh: 2500000" required>
+									</div>
+									<div class="account-form-row two">
+										<div>
+											<p class="account-label">Jabatan</p>
+											<select name="edit_job_title" id="editJobTitleInput" class="account-input" required>
+												<?php foreach ($job_title_options as $job_title_option): ?>
+													<?php $job_title_option_value = trim((string) $job_title_option); ?>
+													<?php if ($job_title_option_value === ''): ?>
+														<?php continue; ?>
+													<?php endif; ?>
+													<option value="<?php echo htmlspecialchars($job_title_option_value, ENT_QUOTES, 'UTF-8'); ?>"<?php echo $job_title_option_value === $default_job_title ? ' selected' : ''; ?>>
+														<?php echo htmlspecialchars($job_title_option_value, ENT_QUOTES, 'UTF-8'); ?>
+													</option>
+												<?php endforeach; ?>
+											</select>
+										</div>
+										<div>
+											<p class="account-label">Hari Masuk / Bulan</p>
+											<input type="number" min="1" max="31" name="edit_work_days" id="editWorkDaysInput" class="account-input" value="28">
+										</div>
+									</div>
+									<div>
+										<p class="account-label">Alamat</p>
+										<input type="text" name="edit_address" id="editAddressInput" class="account-input" placeholder="Kp. Kesekian Kalinya, Pandenglang, Banten">
+									</div>
+									<div>
+										<p class="account-label">Ganti PP (Opsional)</p>
+										<input type="file" name="edit_profile_photo" id="editProfilePhotoInput" class="account-input" accept=".png,.jpg,.jpeg,.heic">
+									</div>
+										<button type="submit" class="account-submit">Simpan Perubahan Akun</button>
+									</form>
+								</article>
+								<?php if ($can_manage_feature_accounts): ?>
+									<article class="account-card" id="privilegedFeatureSourceCard">
+										<h3>Edit Fitur Akun</h3>
+										<p>Khusus Developer/Bos. Developer bisa mengubah fitur akun bos/admin. Bos tidak bisa mengubah fitur akun developer.</p>
+										<?php if (empty($admin_feature_accounts)): ?>
+											<p class="text-secondary mb-0">Belum ada akun admin yang bisa diubah fiturnya.</p>
+										<?php else: ?>
+											<form method="post" action="<?php echo site_url('home/update_feature_admin_account_permissions'); ?>" class="account-form" id="editFeatureAdminForm">
+												<div>
+													<p class="account-label">Target Akun</p>
+													<select name="feature_target_account" id="featureTargetAccountInput" class="account-input" required>
+														<?php foreach ($admin_feature_accounts as $feature_account): ?>
+															<?php
+															$feature_username = isset($feature_account['username']) ? trim((string) $feature_account['username']) : '';
+															$feature_display_name = isset($feature_account['display_name']) ? trim((string) $feature_account['display_name']) : '';
+															if ($feature_username === '') {
+																continue;
+															}
+															$feature_option_label = $feature_display_name !== '' ? $feature_display_name.' ('.$feature_username.')' : $feature_username;
+															?>
+															<option value="<?php echo htmlspecialchars($feature_username, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($feature_option_label, ENT_QUOTES, 'UTF-8'); ?></option>
+														<?php endforeach; ?>
+													</select>
+												</div>
+												<div>
+													<p class="account-label">Fitur Akses</p>
+													<div class="d-flex flex-column gap-2">
+														<?php foreach ($admin_feature_catalog as $feature_key => $feature_label): ?>
+															<?php $feature_key_value = trim((string) $feature_key); ?>
+															<?php if ($feature_key_value === ''): ?>
+																<?php continue; ?>
+															<?php endif; ?>
+															<label class="d-flex align-items-center gap-2">
+																<input type="checkbox" name="feature_permissions[]" value="<?php echo htmlspecialchars($feature_key_value, ENT_QUOTES, 'UTF-8'); ?>" data-feature-permission-checkbox>
+																<span><?php echo htmlspecialchars((string) $feature_label, ENT_QUOTES, 'UTF-8'); ?></span>
+															</label>
+														<?php endforeach; ?>
+													</div>
+												</div>
+												<button type="submit" class="account-submit">Simpan Fitur</button>
+											</form>
+										<?php endif; ?>
+									</article>
+								<?php endif; ?>
+							</div>
 						</div>
-						<div class="account-pagination-wrap" id="employeeAccountPaginationWrap"></div>
-					</div>
+
+						<div class="table-wrap">
+							<?php if (!empty($employee_accounts)): ?>
+								<div class="account-table-toolbar">
+									<input
+										type="text"
+										id="employeeAccountSearchInput"
+										class="account-search-input"
+										placeholder="Cari ID atau nama karyawan"
+										autocomplete="off"
+									>
+								</div>
+							<?php endif; ?>
+							<div class="table-responsive">
+								<table class="table table-custom account-table">
+									<thead>
+										<tr>
+											<th>ID</th>
+											<th>Username</th>
+											<th>Jabatan</th>
+											<th>Telp</th>
+											<th>Cabang</th>
+											<th>Shift</th>
+											<th>Gaji Pokok</th>
+										</tr>
+									</thead>
+									<tbody id="employeeAccountTableBody">
+										<?php if (empty($employee_accounts)): ?>
+											<tr class="employee-account-empty">
+												<td colspan="7" class="text-center py-4 text-secondary">Belum ada akun karyawan.</td>
+											</tr>
+										<?php else: ?>
+											<?php foreach ($employee_accounts as $employee): ?>
+												<tr class="employee-account-row">
+													<td><?php echo htmlspecialchars(isset($employee['employee_id']) ? (string) $employee['employee_id'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
+													<td><?php echo htmlspecialchars(isset($employee['username']) ? (string) $employee['username'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
+													<td><?php echo htmlspecialchars(isset($employee['job_title']) ? (string) $employee['job_title'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
+													<td><?php echo htmlspecialchars(isset($employee['phone']) ? (string) $employee['phone'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
+													<td><?php echo htmlspecialchars(isset($employee['branch']) ? (string) $employee['branch'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
+													<td><?php echo htmlspecialchars(isset($employee['shift_name']) ? (string) $employee['shift_name'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
+													<td>
+														<?php
+														$salary_monthly_value = isset($employee['salary_monthly']) ? (int) $employee['salary_monthly'] : 0;
+														echo htmlspecialchars($salary_monthly_value > 0 ? 'Rp '.number_format($salary_monthly_value, 0, ',', '.') : '-', ENT_QUOTES, 'UTF-8');
+														?>
+													</td>
+												</tr>
+											<?php endforeach; ?>
+										<?php endif; ?>
+									</tbody>
+								</table>
+							</div>
+							<div class="account-pagination-wrap" id="employeeAccountPaginationWrap"></div>
+						</div>
+					<?php endif; ?>
 				</section>
 
 				<section id="riwayat-absen" class="mb-4">
@@ -1934,12 +2357,135 @@ $logo_url = $base_path.'/'.$logo_path;
 		})();
 
 		(function () {
+			var modalGroups = [
+				{
+					bodyId: 'employeeCreateModalBody',
+					cardIds: ['createEmployeeSourceCard']
+				},
+				{
+					bodyId: 'employeeManageModalBody',
+					cardIds: ['employeeDeleteSourceCard', 'employeeEditSourceCard']
+				},
+				{
+					bodyId: 'privilegedManageModalBody',
+					cardIds: ['privilegedPasswordSourceCard', 'privilegedFeatureSourceCard', 'privilegedCreateSourceCard']
+				}
+			];
+			for (var groupIndex = 0; groupIndex < modalGroups.length; groupIndex += 1) {
+				var group = modalGroups[groupIndex];
+				var modalBody = document.getElementById(group.bodyId);
+				if (!modalBody || !group.cardIds || !group.cardIds.length) {
+					continue;
+				}
+
+				for (var cardIndex = 0; cardIndex < group.cardIds.length; cardIndex += 1) {
+					var sourceCard = document.getElementById(group.cardIds[cardIndex]);
+					if (!sourceCard) {
+						continue;
+					}
+					sourceCard.classList.add('manage-modal-section');
+					modalBody.appendChild(sourceCard);
+				}
+			}
+
+			var sourceWrap = document.getElementById('manageAccountSourceWrap');
+			if (sourceWrap) {
+				sourceWrap.setAttribute('aria-hidden', 'true');
+			}
+
+			var modalTriggers = document.querySelectorAll('[data-manage-modal-open]');
+			var modals = document.querySelectorAll('[data-manage-modal]');
+			if (!modalTriggers.length || !modals.length) {
+				return;
+			}
+
+			var activeModal = null;
+			var lastTrigger = null;
+
+			var closeModal = function (modal) {
+				if (!modal) {
+					return;
+				}
+				modal.classList.remove('show');
+				modal.setAttribute('aria-hidden', 'true');
+
+				if (activeModal === modal) {
+					activeModal = null;
+					document.body.classList.remove('manage-modal-open');
+					if (lastTrigger && typeof lastTrigger.focus === 'function') {
+						lastTrigger.focus();
+					}
+					lastTrigger = null;
+				}
+			};
+
+			var openModal = function (modal, trigger) {
+				if (!modal) {
+					return;
+				}
+
+				if (activeModal && activeModal !== modal) {
+					closeModal(activeModal);
+				}
+
+				lastTrigger = trigger || null;
+				activeModal = modal;
+				modal.classList.add('show');
+				modal.setAttribute('aria-hidden', 'false');
+				document.body.classList.add('manage-modal-open');
+
+				var firstField = modal.querySelector('input, select, textarea, button');
+				if (firstField && typeof firstField.focus === 'function') {
+					window.setTimeout(function () {
+						firstField.focus();
+					}, 0);
+				}
+			};
+
+			for (var triggerIndex = 0; triggerIndex < modalTriggers.length; triggerIndex += 1) {
+				modalTriggers[triggerIndex].addEventListener('click', function (event) {
+					event.preventDefault();
+					var modalId = String(this.getAttribute('data-manage-modal-open') || '').trim();
+					if (modalId === '') {
+						return;
+					}
+					openModal(document.getElementById(modalId), this);
+				});
+			}
+
+			var closeButtons = document.querySelectorAll('[data-manage-modal-close]');
+			for (var closeIndex = 0; closeIndex < closeButtons.length; closeIndex += 1) {
+				closeButtons[closeIndex].addEventListener('click', function () {
+					closeModal(this.closest('[data-manage-modal]'));
+				});
+			}
+
+			for (var modalIndex = 0; modalIndex < modals.length; modalIndex += 1) {
+				modals[modalIndex].addEventListener('click', function (event) {
+					if (event.target !== this) {
+						return;
+					}
+					closeModal(this);
+				});
+			}
+
+			document.addEventListener('keydown', function (event) {
+				if (event.key !== 'Escape' || !activeModal) {
+					return;
+				}
+				closeModal(activeModal);
+			});
+		})();
+
+		(function () {
 			var deleteForm = document.getElementById('deleteEmployeeForm');
 			var deleteUserInput = document.getElementById('deleteUsernameInput');
 			var editForm = document.getElementById('editEmployeeForm');
 			var newUsernameInput = document.getElementById('newUsernameInput');
+			var privilegedNewUsernameInput = document.getElementById('privilegedNewUsernameInput');
 			var editUserInput = document.getElementById('editUsernameInput');
 			var editNewUsernameInput = document.getElementById('editNewUsernameInput');
+			var editDisplayNameInput = document.getElementById('editDisplayNameInput');
 			var editPasswordInput = document.getElementById('editPasswordInput');
 			var editPhoneInput = document.getElementById('editPhoneInput');
 			var editBranchInput = document.getElementById('editBranchInput');
@@ -2036,7 +2582,7 @@ $logo_url = $base_path.'/'.$logo_path;
 				});
 			}
 
-			if (!editForm || !editUserInput || !editNewUsernameInput || !editPasswordInput || !editPhoneInput || !editBranchInput || !editShiftInput || !editSalaryMonthlyInput || !editJobTitleInput || !editWorkDaysInput || !editAddressInput) {
+			if (!editForm || !editUserInput || !editNewUsernameInput || !editDisplayNameInput || !editPasswordInput || !editPhoneInput || !editBranchInput || !editShiftInput || !editSalaryMonthlyInput || !editJobTitleInput || !editWorkDaysInput || !editAddressInput) {
 				return;
 			}
 
@@ -2063,6 +2609,11 @@ $logo_url = $base_path.'/'.$logo_path;
 					newUsernameInput.value = normalizeUsername(newUsernameInput.value);
 				});
 			}
+			if (privilegedNewUsernameInput) {
+				privilegedNewUsernameInput.addEventListener('input', function () {
+					privilegedNewUsernameInput.value = normalizeUsername(privilegedNewUsernameInput.value);
+				});
+			}
 			if (editNewUsernameInput) {
 				editNewUsernameInput.addEventListener('input', function () {
 					editNewUsernameInput.value = normalizeUsername(editNewUsernameInput.value);
@@ -2074,6 +2625,7 @@ $logo_url = $base_path.'/'.$logo_path;
 				var row = usernameKey !== '' && accountMap[usernameKey] ? accountMap[usernameKey] : null;
 				if (!row) {
 					editNewUsernameInput.value = '';
+					editDisplayNameInput.value = '';
 					editPasswordInput.value = '';
 					editPhoneInput.value = '';
 					editBranchInput.value = defaultBranch;
@@ -2086,6 +2638,7 @@ $logo_url = $base_path.'/'.$logo_path;
 				}
 
 				editNewUsernameInput.value = String(row.username || '');
+				editDisplayNameInput.value = String(row.display_name || row.username || '');
 				editPasswordInput.value = '';
 				editPhoneInput.value = String(row.phone || '');
 				editBranchInput.value = String(row.branch || defaultBranch || '');
@@ -2366,6 +2919,54 @@ $logo_url = $base_path.'/'.$logo_path;
 		})();
 
 		(function () {
+			var featureForm = document.getElementById('editFeatureAdminForm');
+			var targetInput = document.getElementById('featureTargetAccountInput');
+			if (!featureForm || !targetInput) {
+				return;
+			}
+
+			var featureAccounts = <?php echo $admin_feature_accounts_json; ?>;
+			if (!Array.isArray(featureAccounts) || !featureAccounts.length) {
+				return;
+			}
+
+			var permissionMap = {};
+			for (var i = 0; i < featureAccounts.length; i += 1) {
+				var row = featureAccounts[i] || {};
+				var username = String(row.username || '').trim().toLowerCase();
+				if (username === '') {
+					continue;
+				}
+				var permissions = Array.isArray(row.feature_permissions) ? row.feature_permissions : [];
+				var normalized = [];
+				for (var p = 0; p < permissions.length; p += 1) {
+					var key = String(permissions[p] || '').trim().toLowerCase();
+					if (key === '') {
+						continue;
+					}
+					if (normalized.indexOf(key) === -1) {
+						normalized.push(key);
+					}
+				}
+				permissionMap[username] = normalized;
+			}
+
+			var checkboxes = featureForm.querySelectorAll('input[data-feature-permission-checkbox]');
+			var syncFeatureCheckboxes = function () {
+				var targetUsername = String(targetInput.value || '').trim().toLowerCase();
+				var activePermissions = permissionMap[targetUsername] || [];
+				for (var idx = 0; idx < checkboxes.length; idx += 1) {
+					var checkbox = checkboxes[idx];
+					var featureKey = String(checkbox.value || '').trim().toLowerCase();
+					checkbox.checked = activePermissions.indexOf(featureKey) !== -1;
+				}
+			};
+
+			targetInput.addEventListener('change', syncFeatureCheckboxes);
+			syncFeatureCheckboxes();
+		})();
+
+		(function () {
 			var wraps = document.querySelectorAll('.table-wrap');
 			if (!wraps.length) {
 				return;
@@ -2460,6 +3061,7 @@ $logo_url = $base_path.'/'.$logo_path;
 
 		(function () {
 			var summaryUrl = <?php echo json_encode(site_url('home/admin_dashboard_live_summary')); ?>;
+			var statusLabelFixed = <?php echo json_encode($dashboard_status_label, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
 			var statusPill = document.getElementById('summaryStatusPill');
 			var checkInEl = document.getElementById('summaryCheckInTime');
 			var checkOutEl = document.getElementById('summaryCheckOutTime');
@@ -2490,6 +3092,10 @@ $logo_url = $base_path.'/'.$logo_path;
 					statusPill.classList.add('status-info');
 					return;
 				}
+				if (text.indexOf('ringkasan') !== -1 || text.indexOf('monitoring') !== -1 || text.indexOf('operasional') !== -1) {
+					statusPill.classList.add('status-info');
+					return;
+				}
 				statusPill.classList.add('status-default');
 			};
 
@@ -2507,7 +3113,7 @@ $logo_url = $base_path.'/'.$logo_path;
 				}
 
 				if (statusPill) {
-					var statusValue = String(summary.status_hari_ini || 'Monitoring Hari Ini');
+					var statusValue = String(statusLabelFixed || 'Ringkasan Operasional Harian');
 					statusPill.textContent = statusValue;
 					setStatusClass(statusValue);
 				}

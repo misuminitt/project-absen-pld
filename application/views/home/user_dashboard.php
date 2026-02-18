@@ -4,6 +4,14 @@ $summary = isset($summary) && is_array($summary) ? $summary : array();
 $recent_logs = isset($recent_logs) && is_array($recent_logs) ? $recent_logs : array();
 $recent_loans = isset($recent_loans) && is_array($recent_loans) ? $recent_loans : array();
 $username = isset($username) && $username !== '' ? (string) $username : 'user';
+$profile_photo = isset($profile_photo) && trim((string) $profile_photo) !== ''
+	? (string) $profile_photo
+	: '/src/assets/fotoku.JPG';
+$profile_photo_url = $profile_photo;
+if (strpos($profile_photo_url, 'data:') !== 0 && preg_match('/^https?:\/\//i', $profile_photo_url) !== 1)
+{
+	$profile_photo_url = base_url(ltrim($profile_photo_url, '/'));
+}
 $job_title = isset($job_title) && $job_title !== '' ? (string) $job_title : 'Teknisi';
 $shift_name = isset($shift_name) && $shift_name !== '' ? (string) $shift_name : 'Shift Pagi - Sore';
 $shift_time = isset($shift_time) && $shift_time !== '' ? (string) $shift_time : '08:00 - 17:00';
@@ -193,6 +201,22 @@ $logo_url = base_url($logo_file);
 			border-radius: 18px;
 			padding: 1rem;
 			box-shadow: 0 14px 30px rgba(11, 51, 93, 0.08);
+		}
+
+		.hero-greeting {
+			display: flex;
+			align-items: center;
+			gap: 0.72rem;
+		}
+
+		.hero-avatar {
+			width: 52px;
+			height: 52px;
+			border-radius: 999px;
+			object-fit: cover;
+			flex-shrink: 0;
+			border: 2px solid #d3e5f7;
+			background: #e5f0fb;
 		}
 
 		.hero-title {
@@ -1108,6 +1132,15 @@ $logo_url = base_url($logo_file);
 				font-size: 1.3rem;
 			}
 
+			.hero-greeting {
+				gap: 0.58rem;
+			}
+
+			.hero-avatar {
+				width: 44px;
+				height: 44px;
+			}
+
 			.modal-panel {
 				margin: 1rem auto;
 				max-height: calc(100dvh - 2rem);
@@ -1153,7 +1186,10 @@ $logo_url = base_url($logo_file);
 	<main class="container">
 		<section class="hero">
 			<p class="pill" id="summaryStatusPill"><?php echo htmlspecialchars(isset($summary['status_hari_ini']) ? (string) $summary['status_hari_ini'] : 'Belum Absen', ENT_QUOTES, 'UTF-8'); ?></p>
-			<h1 class="hero-title">Halo, <?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?>. Siap absen hari ini?</h1>
+			<div class="hero-greeting">
+				<img class="hero-avatar" src="<?php echo htmlspecialchars($profile_photo_url, ENT_QUOTES, 'UTF-8'); ?>" alt="PP <?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?>">
+				<h1 class="hero-title">Halo, <?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?>. Siap absen hari ini?</h1>
+			</div>
 			<p class="hero-subtitle">Setiap absen wajib kamera dan GPS aktif. Ambil foto langsung dari popup absensi sebelum menyimpan.</p>
 			<p class="hero-note">Absen masuk dibuka mulai 06:30 WIB. Batas maksimal absen pulang adalah 23:59 WIB.</p>
 			<p class="shift-badge">Jabatan: <?php echo htmlspecialchars($job_title, ENT_QUOTES, 'UTF-8'); ?></p>

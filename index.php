@@ -36,6 +36,74 @@
  * @filesource
  */
 
+if (!function_exists('ci_load_env_file'))
+{
+	/**
+	 * Minimal .env loader for CI3 (works for web + CLI).
+	 */
+	function ci_load_env_file($file_path)
+	{
+		$path = trim((string) $file_path);
+		if ($path === '' || !is_file($path))
+		{
+			return;
+		}
+
+		$lines = @file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+		if (!is_array($lines))
+		{
+			return;
+		}
+
+		for ($i = 0; $i < count($lines); $i += 1)
+		{
+			$line = trim((string) $lines[$i]);
+			if ($line === '' || strpos($line, '#') === 0 || strpos($line, ';') === 0)
+			{
+				continue;
+			}
+
+			$separator_pos = strpos($line, '=');
+			if ($separator_pos === FALSE)
+			{
+				continue;
+			}
+
+			$key = trim((string) substr($line, 0, $separator_pos));
+			if ($key === '' || !preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $key))
+			{
+				continue;
+			}
+
+			$value = trim((string) substr($line, $separator_pos + 1));
+			if (strlen($value) >= 2)
+			{
+				$first = substr($value, 0, 1);
+				$last = substr($value, -1);
+				if (($first === '"' && $last === '"') || ($first === "'" && $last === "'"))
+				{
+					$value = substr($value, 1, -1);
+				}
+			}
+
+			$current = getenv($key);
+			if ($current !== FALSE && $current !== '')
+			{
+				continue;
+			}
+
+			putenv($key.'='.$value);
+			$_ENV[$key] = $value;
+			$_SERVER[$key] = $value;
+		}
+	}
+}
+
+$ci_env_local_path = __DIR__.DIRECTORY_SEPARATOR.'.env.local';
+$ci_env_path = __DIR__.DIRECTORY_SEPARATOR.'.env';
+ci_load_env_file($ci_env_local_path);
+ci_load_env_file($ci_env_path);
+
 /*
  *---------------------------------------------------------------
  * APPLICATION ENVIRONMENT

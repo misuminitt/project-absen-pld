@@ -1,0 +1,12 @@
+<IfModule mod_php.c>
+    php_value upload_max_filesize 3M
+    php_value post_max_size 4M
+</IfModule>
+<IfModule mod_php7.c>
+    php_value upload_max_filesize 3M
+    php_value post_max_size 4M
+</IfModule>
+<IfModule mod_php8.c>
+    php_value upload_max_filesize 3M
+    php_value post_max_size 4M
+</IfModule>

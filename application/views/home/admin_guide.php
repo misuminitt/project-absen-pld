@@ -680,6 +680,23 @@ $logo_url = $base_path.'/'.$logo_path;
 		</section>
 
 		<section class="section">
+			<h2>Update Fitur Terbaru (Kolaborasi Admin)</h2>
+			<p>Berikut fitur baru yang ditambahkan untuk mencegah data saling timpa saat dashboard dikelola bersama oleh beberapa admin.</p>
+			<ul>
+				<li><strong>Notifikasi perubahan admin (popup):</strong> muncul saat login dan saat sedang di dashboard ketika ada perubahan data dari admin lain.</li>
+				<li><strong>Sync lock global:</strong> saat satu admin sedang proses sync, admin lain sementara ditahan sampai lock selesai.</li>
+				<li><strong>Optimistic lock (versi data):</strong> simpan/edit akan ditolak jika data yang sama sudah diubah admin lain, lalu muncul info konflik versi.</li>
+				<li><strong>Draft saat refresh paksa:</strong> ketika sedang edit lalu ada update baru, sistem bisa simpan draft sementara di browser lalu rekonsiliasi ulang.</li>
+				<li><strong>Rekonsiliasi per field:</strong> jika nilai server dan draft berbeda di field yang sama, admin bisa pilih pakai nilai server atau draft.</li>
+				<li><strong>Strict logout saat pending sync:</strong> logout ditolak jika masih ada perubahan admin yang belum di-sync ke sheet.</li>
+				<li><strong>Kontrol sync lebih aman:</strong> arah sinkronisasi tetap manual per tombol, dengan validasi konflik dan status lock.</li>
+			</ul>
+			<div class="warn-box">
+				Tips operasional: selesai edit data web, segera jalankan <strong>Sync Data Web ke Sheet</strong> sebelum lanjut pekerjaan lain atau logout.
+			</div>
+		</section>
+
+		<section class="section">
 			<h2>Fitur Lainnya</h2>
 			<ul>
 				<li>Dashboard menampilkan ringkasan realtime (total hadir, telat, izin/cuti, alpha) dan grafik per periode.</li>

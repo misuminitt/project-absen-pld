@@ -8,14 +8,19 @@ class Home extends CI_Controller {
 	const OFFICE_ALT_LNG = 106.120800;
 	const OFFICE_RADIUS_M = 100;
 	const MAX_GPS_ACCURACY_M = 50;
-	const CHECK_IN_MIN_TIME = '06:30:00';
+	const CHECK_IN_MIN_TIME = '07:00:00';
 	const CHECK_IN_MAX_TIME = '17:00:00';
 	const CHECK_OUT_MAX_TIME = '23:59:00';
+	const MULTISHIFT_CHECK_IN_MAX_TIME = '23:00:00';
+	const MULTISHIFT_ONTIME_MORNING_END = '08:00:00';
+	const MULTISHIFT_ONTIME_AFTERNOON_START = '13:30:00';
+	const MULTISHIFT_ONTIME_AFTERNOON_END = '14:00:00';
 	const ATTENDANCE_TIME_BYPASS_USERS = array();
 	const ATTENDANCE_FORCE_LATE_USERS = array();
 	const ATTENDANCE_FORCE_LATE_DURATION = '00:30:00';
-	const ATTENDANCE_REMINDER_SLOTS = array('11:00', '13:00', '17:00');
+	const ATTENDANCE_REMINDER_SLOTS = array('11:00', '13:00', '15:00');
 	const ATTENDANCE_REMINDER_SLOT_GRACE_MINUTES = 59;
+	const SUBMISSION_NOTIFY_ADMIN_PHONE = '62895329871876';
 	const LATE_TOLERANCE_SECONDS = 600;
 	const WORK_DAYS_DEFAULT = 22;
 	const MIN_EFFECTIVE_WORK_DAYS = 20;
@@ -28,6 +33,11 @@ class Home extends CI_Controller {
 	const PROFILE_PHOTO_JPEG_QUALITY = 82;
 	const PROFILE_PHOTO_THUMB_SIZE = 160;
 	const PROFILE_PHOTO_THUMB_JPEG_QUALITY = 76;
+	const COLLAB_STATE_STORE_KEY = 'admin_collab_state';
+	const COLLAB_STATE_EVENT_LIMIT = 600;
+	const COLLAB_STATE_DEFAULT_POLL_MS = 10000;
+	const COLLAB_SYNC_LOCK_TTL_SECONDS = 240;
+	const COLLAB_SYNC_LOCK_WAIT_REFRESH_SECONDS = 5;
 
 	public function __construct()
 	{
@@ -106,7 +116,7 @@ class Home extends CI_Controller {
 					: $this->default_employee_profile_photo(),
 				'job_title' => $job_title,
 				'shift_name' => $shift_name !== '' ? $shift_name : 'Shift Pagi - Sore',
-				'shift_time' => $shift_time !== '' ? $shift_time : '08:00 - 23:00',
+				'shift_time' => $shift_time !== '' ? $shift_time : '07:00 - 17:00',
 				'summary' => isset($dashboard_snapshot['summary']) && is_array($dashboard_snapshot['summary'])
 					? $dashboard_snapshot['summary']
 					: array(),
@@ -176,7 +186,13 @@ class Home extends CI_Controller {
 			'admin_feature_accounts' => $this->build_manageable_admin_feature_account_options(),
 			'privileged_password_targets' => $this->build_privileged_password_target_options(),
 			'account_notice_success' => (string) $this->session->flashdata('account_notice_success'),
-			'account_notice_error' => (string) $this->session->flashdata('account_notice_error')
+			'account_notice_error' => (string) $this->session->flashdata('account_notice_error'),
+			'collab_revision' => $this->collab_current_revision(),
+			'collab_feed_url' => site_url('home/admin_change_feed'),
+			'collab_sync_lock_url' => site_url('home/sync_lock_status'),
+			'collab_poll_ms' => self::COLLAB_STATE_DEFAULT_POLL_MS,
+			'collab_actor' => $this->current_actor_username(),
+			'collab_lock_wait_refresh_seconds' => self::COLLAB_SYNC_LOCK_WAIT_REFRESH_SECONDS
 		);
 		$this->load->view('home/index', $data);
 	}
@@ -524,6 +540,10 @@ class Home extends CI_Controller {
 			redirect('home');
 			return;
 		}
+		if (!$this->assert_expected_revision_or_redirect('home', 'account_notice_error'))
+		{
+			return;
+		}
 
 		$username_key = $this->normalize_username_key($this->input->post('new_username', TRUE));
 		$display_name_input = trim((string) $this->input->post('new_display_name', TRUE));
@@ -685,6 +705,7 @@ class Home extends CI_Controller {
 			'coordinate_point' => $coordinate_point,
 			'employee_status' => 'Aktif',
 			'force_password_change' => 1,
+			'record_version' => 1,
 			'sheet_row' => 0,
 			'sheet_sync_source' => 'web',
 			'sheet_last_sync_at' => ''
@@ -783,6 +804,10 @@ class Home extends CI_Controller {
 			redirect('home');
 			return;
 		}
+		if (!$this->assert_expected_revision_or_redirect('home', 'account_notice_error'))
+		{
+			return;
+		}
 
 		$actor = strtolower(trim((string) $this->session->userdata('absen_username')));
 		if ($actor === '')
@@ -790,34 +815,54 @@ class Home extends CI_Controller {
 			$actor = 'admin';
 		}
 		$actor_context = $this->build_sync_actor_context($actor);
-		$result = $this->absen_sheet_sync->sync_accounts_from_sheet(array(
-			'force' => TRUE,
-			'actor' => $actor,
-			'actor_context' => $actor_context
-		));
-		if (isset($result['success']) && $result['success'] === TRUE)
+		$lock_result = $this->collab_try_acquire_sync_lock($actor, 'sync_sheet_accounts');
+		if (!isset($lock_result['success']) || $lock_result['success'] !== TRUE)
 		{
-			$created = isset($result['created']) ? (int) $result['created'] : 0;
-			$updated = isset($result['updated']) ? (int) $result['updated'] : 0;
-			$this->session->set_flashdata('account_notice_success', 'Sync spreadsheet selesai. Buat baru: '.$created.', update: '.$updated.'.');
-			$this->log_activity_event(
-				'sync_accounts_from_sheet',
-				'spreadsheet_data',
-				'',
-				'',
-				'Menjalankan Sync Akun dari Sheet.',
-				array(
-					'sheet' => 'DATABASE',
-					'new_value' => 'created='.$created.', updated='.$updated
-				)
+			$lock_wait = isset($lock_result['remaining_seconds']) ? (int) $lock_result['remaining_seconds'] : 0;
+			$lock_owner = isset($lock_result['owner']) ? trim((string) $lock_result['owner']) : 'admin lain';
+			$this->session->set_flashdata(
+				'account_notice_error',
+				'Sync lock sedang aktif oleh '.$lock_owner.'. Tunggu '.max(1, $lock_wait).' detik lalu coba lagi.'
 			);
+			redirect('home');
+			return;
 		}
-		else
+		$lock_token = isset($lock_result['token']) ? trim((string) $lock_result['token']) : '';
+		try
 		{
-			$message = isset($result['message']) && trim((string) $result['message']) !== ''
-				? (string) $result['message']
-				: 'Sinkronisasi spreadsheet gagal.';
-			$this->session->set_flashdata('account_notice_error', $message);
+			$result = $this->absen_sheet_sync->sync_accounts_from_sheet(array(
+				'force' => TRUE,
+				'actor' => $actor,
+				'actor_context' => $actor_context
+			));
+			if (isset($result['success']) && $result['success'] === TRUE)
+			{
+				$created = isset($result['created']) ? (int) $result['created'] : 0;
+				$updated = isset($result['updated']) ? (int) $result['updated'] : 0;
+				$this->session->set_flashdata('account_notice_success', 'Sync spreadsheet selesai. Buat baru: '.$created.', update: '.$updated.'.');
+				$this->log_activity_event(
+					'sync_accounts_from_sheet',
+					'spreadsheet_data',
+					'',
+					'',
+					'Menjalankan Sync Akun dari Sheet.',
+					array(
+						'sheet' => 'DATABASE',
+						'new_value' => 'created='.$created.', updated='.$updated
+					)
+				);
+			}
+			else
+			{
+				$message = isset($result['message']) && trim((string) $result['message']) !== ''
+					? (string) $result['message']
+					: 'Sinkronisasi spreadsheet gagal.';
+				$this->session->set_flashdata('account_notice_error', $message);
+			}
+		}
+		finally
+		{
+			$this->collab_release_sync_lock($lock_token, $actor);
 		}
 
 		redirect('home');
@@ -843,6 +888,10 @@ class Home extends CI_Controller {
 			redirect('home');
 			return;
 		}
+		if (!$this->assert_expected_revision_or_redirect('home', 'account_notice_error'))
+		{
+			return;
+		}
 
 		$actor = strtolower(trim((string) $this->session->userdata('absen_username')));
 		if ($actor === '')
@@ -851,62 +900,84 @@ class Home extends CI_Controller {
 		}
 		$actor_context = $this->build_sync_actor_context($actor);
 		$branch_scope = $this->is_branch_scoped_admin() ? $this->current_actor_branch() : '';
-		$result = $this->absen_sheet_sync->sync_attendance_from_sheet(array(
-			'force' => TRUE,
-			'overwrite_web_source' => FALSE,
-			'prune_missing_attendance' => FALSE,
-			'actor' => $actor,
-			'actor_context' => $actor_context,
-			'branch_scope' => $branch_scope
-		));
-		if (isset($result['success']) && $result['success'] === TRUE)
+		$lock_result = $this->collab_try_acquire_sync_lock($actor, 'sync_sheet_attendance');
+		if (!isset($lock_result['success']) || $lock_result['success'] !== TRUE)
 		{
-			$this->clear_admin_dashboard_live_summary_cache();
-			$created_accounts = isset($result['created_accounts']) ? (int) $result['created_accounts'] : 0;
-			$updated_accounts = isset($result['updated_accounts']) ? (int) $result['updated_accounts'] : 0;
-			$created_attendance = isset($result['created_attendance']) ? (int) $result['created_attendance'] : 0;
-			$updated_attendance = isset($result['updated_attendance']) ? (int) $result['updated_attendance'] : 0;
-			$pruned_attendance = isset($result['pruned_attendance']) ? (int) $result['pruned_attendance'] : 0;
-			$skipped_rows = isset($result['skipped_rows']) ? (int) $result['skipped_rows'] : 0;
-			$backfilled_phone_cells = isset($result['backfilled_phone_cells']) ? (int) $result['backfilled_phone_cells'] : 0;
-			$backfilled_branch_cells = isset($result['backfilled_branch_cells']) ? (int) $result['backfilled_branch_cells'] : 0;
-			$phone_backfill_error = isset($result['phone_backfill_error']) ? trim((string) $result['phone_backfill_error']) : '';
-			$branch_backfill_error = isset($result['branch_backfill_error']) ? trim((string) $result['branch_backfill_error']) : '';
+			$lock_wait = isset($lock_result['remaining_seconds']) ? (int) $lock_result['remaining_seconds'] : 0;
+			$lock_owner = isset($lock_result['owner']) ? trim((string) $lock_result['owner']) : 'admin lain';
 			$this->session->set_flashdata(
-				'account_notice_success',
-				'Sync Data Absen selesai. Akun baru: '.$created_accounts.', akun update: '.$updated_accounts.
-				', absen baru: '.$created_attendance.', absen update: '.$updated_attendance.
-				', absen stale terhapus: '.$pruned_attendance.
-				', baris dilewati: '.$skipped_rows.
-				', tlp terisi otomatis: '.$backfilled_phone_cells.
-				', cabang terisi otomatis: '.$backfilled_branch_cells.'.'
+				'account_notice_error',
+				'Sync lock sedang aktif oleh '.$lock_owner.'. Tunggu '.max(1, $lock_wait).' detik lalu coba lagi.'
 			);
-			if ($phone_backfill_error !== '')
-			{
-				$this->session->set_flashdata('account_notice_error', 'Data web berhasil sync, tapi isi balik kolom Tlp ke sheet gagal: '.$phone_backfill_error);
-			}
-			elseif ($branch_backfill_error !== '')
-			{
-				$this->session->set_flashdata('account_notice_error', 'Data web berhasil sync, tapi isi balik kolom Cabang ke sheet gagal: '.$branch_backfill_error);
-			}
-			$this->log_activity_event(
-				'sync_attendance_from_sheet',
-				'spreadsheet_data',
-				'',
-				'',
-				'Menjalankan Sync Data Absen dari Sheet.',
-				array(
-					'sheet' => 'Data Absen',
-					'new_value' => 'account_created='.$created_accounts.', account_updated='.$updated_accounts.', attendance_created='.$created_attendance.', attendance_updated='.$updated_attendance
-				)
-			);
+			redirect('home');
+			return;
 		}
-		else
+		$lock_token = isset($lock_result['token']) ? trim((string) $lock_result['token']) : '';
+		try
 		{
-			$message = isset($result['message']) && trim((string) $result['message']) !== ''
-				? (string) $result['message']
-				: 'Sinkronisasi Data Absen gagal.';
-			$this->session->set_flashdata('account_notice_error', $message);
+			$result = $this->absen_sheet_sync->sync_attendance_from_sheet(array(
+				'force' => TRUE,
+				// Sync manual dari dashboard diperlakukan sebagai mirror dari sheet.
+				// Tujuannya agar reset/manual edit di sheet benar-benar ikut ke data web.
+				'overwrite_web_source' => TRUE,
+				'prune_missing_attendance' => TRUE,
+				'actor' => $actor,
+				'actor_context' => $actor_context,
+				'branch_scope' => $branch_scope
+			));
+			if (isset($result['success']) && $result['success'] === TRUE)
+			{
+				$this->clear_admin_dashboard_live_summary_cache();
+				$created_accounts = isset($result['created_accounts']) ? (int) $result['created_accounts'] : 0;
+				$updated_accounts = isset($result['updated_accounts']) ? (int) $result['updated_accounts'] : 0;
+				$created_attendance = isset($result['created_attendance']) ? (int) $result['created_attendance'] : 0;
+				$updated_attendance = isset($result['updated_attendance']) ? (int) $result['updated_attendance'] : 0;
+				$pruned_attendance = isset($result['pruned_attendance']) ? (int) $result['pruned_attendance'] : 0;
+				$skipped_rows = isset($result['skipped_rows']) ? (int) $result['skipped_rows'] : 0;
+				$backfilled_phone_cells = isset($result['backfilled_phone_cells']) ? (int) $result['backfilled_phone_cells'] : 0;
+				$backfilled_branch_cells = isset($result['backfilled_branch_cells']) ? (int) $result['backfilled_branch_cells'] : 0;
+				$phone_backfill_error = isset($result['phone_backfill_error']) ? trim((string) $result['phone_backfill_error']) : '';
+				$branch_backfill_error = isset($result['branch_backfill_error']) ? trim((string) $result['branch_backfill_error']) : '';
+				$this->session->set_flashdata(
+					'account_notice_success',
+					'Sync Data Absen selesai. Akun baru: '.$created_accounts.', akun update: '.$updated_accounts.
+					', absen baru: '.$created_attendance.', absen update: '.$updated_attendance.
+					', absen stale terhapus: '.$pruned_attendance.
+					', baris dilewati: '.$skipped_rows.
+					', tlp terisi otomatis: '.$backfilled_phone_cells.
+					', cabang terisi otomatis: '.$backfilled_branch_cells.'.'
+				);
+				if ($phone_backfill_error !== '')
+				{
+					$this->session->set_flashdata('account_notice_error', 'Data web berhasil sync, tapi isi balik kolom Tlp ke sheet gagal: '.$phone_backfill_error);
+				}
+				elseif ($branch_backfill_error !== '')
+				{
+					$this->session->set_flashdata('account_notice_error', 'Data web berhasil sync, tapi isi balik kolom Cabang ke sheet gagal: '.$branch_backfill_error);
+				}
+				$this->log_activity_event(
+					'sync_attendance_from_sheet',
+					'spreadsheet_data',
+					'',
+					'',
+					'Menjalankan Sync Data Absen dari Sheet.',
+					array(
+						'sheet' => 'Data Absen',
+						'new_value' => 'account_created='.$created_accounts.', account_updated='.$updated_accounts.', attendance_created='.$created_attendance.', attendance_updated='.$updated_attendance
+					)
+				);
+			}
+			else
+			{
+				$message = isset($result['message']) && trim((string) $result['message']) !== ''
+					? (string) $result['message']
+					: 'Sinkronisasi Data Absen gagal.';
+				$this->session->set_flashdata('account_notice_error', $message);
+			}
+		}
+		finally
+		{
+			$this->collab_release_sync_lock($lock_token, $actor);
 		}
 
 		redirect('home');
@@ -932,6 +1003,10 @@ class Home extends CI_Controller {
 			redirect('home');
 			return;
 		}
+		if (!$this->assert_expected_revision_or_redirect('home', 'account_notice_error'))
+		{
+			return;
+		}
 
 		$actor = strtolower(trim((string) $this->session->userdata('absen_username')));
 		if ($actor === '')
@@ -940,46 +1015,66 @@ class Home extends CI_Controller {
 		}
 		$actor_context = $this->build_sync_actor_context($actor);
 		$branch_scope = $this->is_branch_scoped_admin() ? $this->current_actor_branch() : '';
-		$result = $this->absen_sheet_sync->sync_attendance_to_sheet(array(
-			'force' => TRUE,
-			'actor' => $actor,
-			'actor_context' => $actor_context,
-			'branch_scope' => $branch_scope
-		));
-		if (isset($result['success']) && $result['success'] === TRUE)
+		$lock_result = $this->collab_try_acquire_sync_lock($actor, 'sync_web_to_sheet');
+		if (!isset($lock_result['success']) || $lock_result['success'] !== TRUE)
 		{
-			$month = isset($result['month']) ? (string) $result['month'] : date('Y-m');
-			$processed_users = isset($result['processed_users']) ? (int) $result['processed_users'] : 0;
-			$updated_rows = isset($result['updated_rows']) ? (int) $result['updated_rows'] : 0;
-			$appended_rows = isset($result['appended_rows']) ? (int) $result['appended_rows'] : 0;
-			$pruned_rows = isset($result['pruned_rows']) ? (int) $result['pruned_rows'] : 0;
-			$prune_error = isset($result['prune_error']) ? trim((string) $result['prune_error']) : '';
+			$lock_wait = isset($lock_result['remaining_seconds']) ? (int) $lock_result['remaining_seconds'] : 0;
+			$lock_owner = isset($lock_result['owner']) ? trim((string) $lock_result['owner']) : 'admin lain';
 			$this->session->set_flashdata(
-				'account_notice_success',
-				'Sync data web -> Data Absen selesai. Bulan: '.$month.', user diproses: '.$processed_users.', row update: '.$updated_rows.', row baru: '.$appended_rows.', row stale terhapus: '.$pruned_rows.'.'
+				'account_notice_error',
+				'Sync lock sedang aktif oleh '.$lock_owner.'. Tunggu '.max(1, $lock_wait).' detik lalu coba lagi.'
 			);
-			if ($prune_error !== '')
-			{
-				$this->session->set_flashdata('account_notice_error', 'Data web berhasil sync, tapi hapus row stale gagal: '.$prune_error);
-			}
-			$this->log_activity_event(
-				'sync_web_to_sheet',
-				'web_data',
-				'',
-				'',
-				'Menjalankan Sync Data Web ke Sheet.',
-				array(
-					'sheet' => 'Data Absen',
-					'new_value' => 'month='.$month.', processed='.$processed_users.', updated='.$updated_rows.', appended='.$appended_rows.', pruned='.$pruned_rows
-				)
-			);
+			redirect('home');
+			return;
 		}
-		else
+		$lock_token = isset($lock_result['token']) ? trim((string) $lock_result['token']) : '';
+		try
 		{
-			$message = isset($result['message']) && trim((string) $result['message']) !== ''
-				? (string) $result['message']
-				: 'Sinkronisasi data web -> Data Absen gagal.';
-			$this->session->set_flashdata('account_notice_error', $message);
+			$result = $this->absen_sheet_sync->sync_attendance_to_sheet(array(
+				'force' => TRUE,
+				'actor' => $actor,
+				'actor_context' => $actor_context,
+				'branch_scope' => $branch_scope
+			));
+			if (isset($result['success']) && $result['success'] === TRUE)
+			{
+				$month = isset($result['month']) ? (string) $result['month'] : date('Y-m');
+				$processed_users = isset($result['processed_users']) ? (int) $result['processed_users'] : 0;
+				$updated_rows = isset($result['updated_rows']) ? (int) $result['updated_rows'] : 0;
+				$appended_rows = isset($result['appended_rows']) ? (int) $result['appended_rows'] : 0;
+				$pruned_rows = isset($result['pruned_rows']) ? (int) $result['pruned_rows'] : 0;
+				$prune_error = isset($result['prune_error']) ? trim((string) $result['prune_error']) : '';
+				$this->session->set_flashdata(
+					'account_notice_success',
+					'Sync data web -> Data Absen selesai. Bulan: '.$month.', user diproses: '.$processed_users.', row update: '.$updated_rows.', row baru: '.$appended_rows.', row stale terhapus: '.$pruned_rows.'.'
+				);
+				if ($prune_error !== '')
+				{
+					$this->session->set_flashdata('account_notice_error', 'Data web berhasil sync, tapi hapus row stale gagal: '.$prune_error);
+				}
+				$this->log_activity_event(
+					'sync_web_to_sheet',
+					'web_data',
+					'',
+					'',
+					'Menjalankan Sync Data Web ke Sheet.',
+					array(
+						'sheet' => 'Data Absen',
+						'new_value' => 'month='.$month.', processed='.$processed_users.', updated='.$updated_rows.', appended='.$appended_rows.', pruned='.$pruned_rows
+					)
+				);
+			}
+			else
+			{
+				$message = isset($result['message']) && trim((string) $result['message']) !== ''
+					? (string) $result['message']
+					: 'Sinkronisasi data web -> Data Absen gagal.';
+				$this->session->set_flashdata('account_notice_error', $message);
+			}
+		}
+		finally
+		{
+			$this->collab_release_sync_lock($lock_token, $actor);
 		}
 
 		redirect('home');
@@ -1035,8 +1130,9 @@ class Home extends CI_Controller {
 
 		$result = $this->absen_sheet_sync->sync_attendance_from_sheet(array(
 			'force' => TRUE,
-			'overwrite_web_source' => FALSE,
-			'prune_missing_attendance' => FALSE,
+			// CLI manual mengikuti perilaku tombol dashboard: mirror sheet -> web.
+			'overwrite_web_source' => TRUE,
+			'prune_missing_attendance' => TRUE,
 			'actor' => 'cli',
 			'actor_context' => $this->build_sync_actor_context('cli', TRUE)
 		));
@@ -2065,6 +2161,10 @@ class Home extends CI_Controller {
 			redirect('home');
 			return;
 		}
+		if (!$this->assert_expected_revision_or_redirect('home', 'account_notice_error'))
+		{
+			return;
+		}
 
 		$username_key = strtolower(trim((string) $this->input->post('delete_username', TRUE)));
 		if ($username_key === '')
@@ -2095,6 +2195,23 @@ class Home extends CI_Controller {
 		if ($role !== 'user')
 		{
 			$this->session->set_flashdata('account_notice_error', 'Hanya akun karyawan yang bisa dihapus.');
+			redirect('home');
+			return;
+		}
+		$current_record_version = isset($account_book[$username_key]['record_version'])
+			? (int) $account_book[$username_key]['record_version']
+			: 1;
+		if ($current_record_version <= 0)
+		{
+			$current_record_version = 1;
+		}
+		$expected_record_version = (int) $this->input->post('expected_version', TRUE);
+		if ($expected_record_version <= 0 || $expected_record_version !== $current_record_version)
+		{
+			$this->session->set_flashdata(
+				'account_notice_error',
+				'Konflik versi data akun '.$username_key.'. Data sudah diubah admin lain. Muat ulang dashboard lalu coba lagi.'
+			);
 			redirect('home');
 			return;
 		}
@@ -2174,6 +2291,10 @@ class Home extends CI_Controller {
 		if ($this->input->method(TRUE) !== 'POST')
 		{
 			redirect('home');
+			return;
+		}
+		if (!$this->assert_expected_revision_or_redirect('home#manajemen-karyawan', 'account_notice_error'))
+		{
 			return;
 		}
 
@@ -2263,6 +2384,23 @@ class Home extends CI_Controller {
 		if ($role !== 'user')
 		{
 			$this->session->set_flashdata('account_notice_error', 'Hanya akun karyawan yang bisa diedit.');
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+		$current_record_version = isset($account_book[$username_key]['record_version'])
+			? (int) $account_book[$username_key]['record_version']
+			: 1;
+		if ($current_record_version <= 0)
+		{
+			$current_record_version = 1;
+		}
+		$expected_record_version = (int) $this->input->post('expected_version', TRUE);
+		if ($expected_record_version <= 0 || $expected_record_version !== $current_record_version)
+		{
+			$this->session->set_flashdata(
+				'account_notice_error',
+				'Konflik versi data akun '.$username_key.'. Data sudah diubah admin lain. Muat ulang dashboard lalu coba lagi.'
+			);
 			redirect('home#manajemen-karyawan');
 			return;
 		}
@@ -2384,6 +2522,7 @@ class Home extends CI_Controller {
 				? (string) $current_row['employee_status']
 				: 'Aktif',
 			'force_password_change' => isset($current_row['force_password_change']) && (int) $current_row['force_password_change'] === 1 ? 1 : 0,
+			'record_version' => $current_record_version + 1,
 			'password_changed_at' => isset($current_row['password_changed_at']) ? (string) $current_row['password_changed_at'] : '',
 			'sheet_row' => isset($current_row['sheet_row']) ? (int) $current_row['sheet_row'] : 0,
 			'sheet_sync_source' => 'web',
@@ -2590,6 +2729,10 @@ class Home extends CI_Controller {
 		if ($this->input->method(TRUE) !== 'POST')
 		{
 			redirect('home#manajemen-karyawan');
+			return;
+		}
+		if (!$this->assert_expected_revision_or_redirect('home#manajemen-karyawan', 'account_notice_error'))
+		{
 			return;
 		}
 
@@ -2913,6 +3056,10 @@ class Home extends CI_Controller {
 			redirect('home#manajemen-karyawan');
 			return;
 		}
+		if (!$this->assert_expected_revision_or_redirect('home#manajemen-karyawan', 'account_notice_error'))
+		{
+			return;
+		}
 
 		$actor_username = $this->current_actor_username();
 		$target_username = strtolower(trim((string) $this->input->post('target_account', TRUE)));
@@ -3023,6 +3170,10 @@ class Home extends CI_Controller {
 		if ($this->input->method(TRUE) !== 'POST')
 		{
 			redirect('home#manajemen-karyawan');
+			return;
+		}
+		if (!$this->assert_expected_revision_or_redirect('home#manajemen-karyawan', 'account_notice_error'))
+		{
 			return;
 		}
 
@@ -3152,6 +3303,10 @@ class Home extends CI_Controller {
 		if ($this->input->method(TRUE) !== 'POST')
 		{
 			redirect('home#manajemen-karyawan');
+			return;
+		}
+		if (!$this->assert_expected_revision_or_redirect('home#manajemen-karyawan', 'account_notice_error'))
+		{
 			return;
 		}
 
@@ -3315,6 +3470,77 @@ class Home extends CI_Controller {
 		$this->json_response(array_merge(array('success' => TRUE), $payload));
 	}
 
+	public function admin_change_feed()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			$this->json_response(array('success' => FALSE, 'message' => 'Sesi login sudah habis.'), 401);
+			return;
+		}
+
+		if ((string) $this->session->userdata('absen_role') === 'user')
+		{
+			$this->json_response(array('success' => FALSE, 'message' => 'Akses ditolak.'), 403);
+			return;
+		}
+
+		$since_id = (int) $this->input->get('since_id', TRUE);
+		if ($since_id < 0)
+		{
+			$since_id = 0;
+		}
+		$limit = (int) $this->input->get('limit', TRUE);
+		if ($limit <= 0)
+		{
+			$limit = 25;
+		}
+		if ($limit > 120)
+		{
+			$limit = 120;
+		}
+		$bootstrap = (int) $this->input->get('bootstrap', TRUE) === 1;
+
+		$state = $this->collab_load_state();
+		$events = $this->collab_state_feed_events($state, $since_id, $limit, $bootstrap);
+		$lock_info = $this->collab_sync_lock_info_from_state($state);
+		$actor = $this->current_actor_username();
+		$pending_sync = $this->collab_actor_pending_sync_status($state, $actor);
+
+		$this->json_response(array(
+			'success' => TRUE,
+			'revision' => isset($state['revision']) ? (int) $state['revision'] : 0,
+			'events' => $events,
+			'lock' => $lock_info,
+			'actor' => $actor,
+			'pending_sync' => $pending_sync,
+			'server_time' => date('Y-m-d H:i:s')
+		));
+	}
+
+	public function sync_lock_status()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			$this->json_response(array('success' => FALSE, 'message' => 'Sesi login sudah habis.'), 401);
+			return;
+		}
+
+		if ((string) $this->session->userdata('absen_role') === 'user')
+		{
+			$this->json_response(array('success' => FALSE, 'message' => 'Akses ditolak.'), 403);
+			return;
+		}
+
+		$state = $this->collab_load_state();
+		$this->json_response(array(
+			'success' => TRUE,
+			'lock' => $this->collab_sync_lock_info_from_state($state),
+			'actor' => $this->current_actor_username(),
+			'revision' => isset($state['revision']) ? (int) $state['revision'] : 0,
+			'server_time' => date('Y-m-d H:i:s')
+		));
+	}
+
 	public function submit_attendance()
 	{
 		if ($this->session->userdata('absen_logged_in') !== TRUE)
@@ -3418,7 +3644,7 @@ class Home extends CI_Controller {
 			$check_in_window = $this->resolve_shift_check_in_window($shift_key);
 			$check_in_start_time = isset($check_in_window['start']) ? (string) $check_in_window['start'] : self::CHECK_IN_MIN_TIME;
 			$check_in_end_time = isset($check_in_window['end']) ? (string) $check_in_window['end'] : self::CHECK_IN_MAX_TIME;
-			$check_in_start_label = isset($check_in_window['start_label']) ? (string) $check_in_window['start_label'] : '06:30';
+			$check_in_start_label = isset($check_in_window['start_label']) ? (string) $check_in_window['start_label'] : '07:00';
 			$check_in_end_label = isset($check_in_window['end_label']) ? (string) $check_in_window['end_label'] : '17:00';
 
 			if (!$is_time_window_bypassed && $current_seconds < $this->time_to_seconds($check_in_start_time))
@@ -3499,12 +3725,18 @@ class Home extends CI_Controller {
 				'check_out_lng' => '',
 				'check_out_accuracy_m' => '',
 				'check_out_distance_m' => '',
+				'record_version' => 1,
 				'updated_at' => date('Y-m-d H:i:s')
 			);
 			$record_index = count($records) - 1;
 		}
 
 		$record = $records[$record_index];
+		$current_record_version = isset($record['record_version']) ? (int) $record['record_version'] : 1;
+		if ($current_record_version <= 0)
+		{
+			$current_record_version = 1;
+		}
 		$record['shift_name'] = $shift_name;
 		$record['shift_time'] = $shift_time;
 		$record['branch'] = $attendance_branch;
@@ -3517,7 +3749,7 @@ class Home extends CI_Controller {
 		if ($action === 'masuk')
 		{
 			$record['check_in_time'] = $current_time;
-			$record['check_in_late'] = $this->calculate_late_duration($current_time, $shift_time);
+			$record['check_in_late'] = $this->calculate_late_duration($current_time, $shift_time, $shift_name);
 			$is_force_late_user = $this->should_force_late_attendance($username);
 			if ($is_force_late_user && $this->duration_to_seconds($record['check_in_late']) <= 0)
 			{
@@ -3584,6 +3816,7 @@ class Home extends CI_Controller {
 		}
 
 		$record['updated_at'] = date('Y-m-d H:i:s');
+		$record['record_version'] = $current_record_version + 1;
 		$records[$record_index] = $record;
 
 		$this->save_attendance_records($records);
@@ -3823,6 +4056,7 @@ class Home extends CI_Controller {
 			{
 				$check_in_time = isset($records[$i]['check_in_time']) ? trim((string) $records[$i]['check_in_time']) : '';
 				$shift_time = isset($records[$i]['shift_time']) ? trim((string) $records[$i]['shift_time']) : '';
+				$shift_name = isset($records[$i]['shift_name']) ? trim((string) $records[$i]['shift_name']) : '';
 				if ($check_in_time === '')
 				{
 					$records[$i]['check_in_late'] = '00:00:00';
@@ -3833,9 +4067,9 @@ class Home extends CI_Controller {
 				else
 				{
 					$late_duration = isset($records[$i]['check_in_late']) ? trim((string) $records[$i]['check_in_late']) : '';
-					if ($late_duration === '' && $shift_time !== '')
+					if ($late_duration === '' && ($shift_time !== '' || $shift_name !== ''))
 					{
-						$late_duration = $this->calculate_late_duration($check_in_time, $shift_time);
+						$late_duration = $this->calculate_late_duration($check_in_time, $shift_time, $shift_name);
 					}
 					if ($late_duration === '')
 					{
@@ -3915,7 +4149,8 @@ class Home extends CI_Controller {
 
 		$data = array(
 			'title' => 'Data Absensi Karyawan',
-			'records' => $records
+			'records' => $records,
+			'can_edit_attendance_datetime' => $this->can_access_super_admin_features()
 		);
 		$this->load->view('home/employee_attendance', $data);
 	}
@@ -4250,14 +4485,15 @@ class Home extends CI_Controller {
 				$late_seconds = 0;
 				$late_category = '';
 				$shift_time = isset($row['shift_time']) ? trim((string) $row['shift_time']) : '';
+				$shift_name = isset($row['shift_name']) ? trim((string) $row['shift_name']) : '';
 				$stored_late = isset($row['check_in_late']) ? trim((string) $row['check_in_late']) : '';
 				if ($stored_late !== '')
 				{
 					$late_seconds = $this->duration_to_seconds($stored_late);
 				}
-				elseif ($shift_time !== '')
+				elseif ($shift_time !== '' || $shift_name !== '')
 				{
-					$late_seconds = $this->duration_to_seconds($this->calculate_late_duration($check_in_time, $shift_time));
+					$late_seconds = $this->duration_to_seconds($this->calculate_late_duration($check_in_time, $shift_time, $shift_name));
 				}
 
 				if ($late_seconds > 0 && $late_seconds <= 1800)
@@ -4736,6 +4972,10 @@ class Home extends CI_Controller {
 		$salary_cut_raw = trim((string) $this->input->post('salary_cut_amount', TRUE));
 		$salary_cut_digits = preg_replace('/\D+/', '', $salary_cut_raw);
 		$salary_cut_amount = $salary_cut_digits === '' ? 0 : (int) $salary_cut_digits;
+		$edit_date_raw = trim((string) $this->input->post('edit_date', TRUE));
+		$edit_check_in_raw = trim((string) $this->input->post('edit_check_in_time', TRUE));
+		$edit_check_out_raw = trim((string) $this->input->post('edit_check_out_time', TRUE));
+		$can_edit_datetime = $this->can_access_super_admin_features();
 
 		if ($username === '' || $date_key === '')
 		{
@@ -4769,18 +5009,173 @@ class Home extends CI_Controller {
 			redirect('home/employee_data');
 			return;
 		}
+		$current_record_version = isset($records[$record_index]['record_version'])
+			? (int) $records[$record_index]['record_version']
+			: 1;
+		if ($current_record_version <= 0)
+		{
+			$current_record_version = 1;
+		}
+		$expected_record_version = (int) $this->input->post('expected_version', TRUE);
+		if ($expected_record_version <= 0 || $expected_record_version !== $current_record_version)
+		{
+			$this->session->set_flashdata(
+				'attendance_notice_error',
+				'Konflik versi data absensi '.$username.' tanggal '.$date_key.'. Muat ulang tabel lalu coba lagi.'
+			);
+			redirect('home/employee_data');
+			return;
+		}
+
+		$original_date_key = isset($records[$record_index]['date']) ? trim((string) $records[$record_index]['date']) : $date_key;
+		$original_check_in = isset($records[$record_index]['check_in_time']) ? trim((string) $records[$record_index]['check_in_time']) : '';
+		$original_check_out = isset($records[$record_index]['check_out_time']) ? trim((string) $records[$record_index]['check_out_time']) : '';
+		$new_date_key = $original_date_key !== '' ? $original_date_key : $date_key;
+		$new_check_in = $original_check_in;
+		$new_check_out = $original_check_out;
+		$date_time_changed = FALSE;
+
+		if ($edit_date_raw !== '' || $edit_check_in_raw !== '' || $edit_check_out_raw !== '')
+		{
+			if (!$can_edit_datetime)
+			{
+				$this->session->set_flashdata(
+					'attendance_notice_error',
+					'Hanya akun bos/developer yang diizinkan mengubah tanggal atau jam absensi.'
+				);
+				redirect('home/employee_data');
+				return;
+			}
+
+			if ($edit_date_raw !== '')
+			{
+				if (!$this->is_valid_date_format($edit_date_raw))
+				{
+					$this->session->set_flashdata('attendance_notice_error', 'Format tanggal absensi tidak valid. Gunakan YYYY-MM-DD.');
+					redirect('home/employee_data');
+					return;
+				}
+				$new_date_key = $edit_date_raw;
+			}
+
+			$normalize_clock_input = function ($raw_value, &$is_valid) {
+				$text = trim((string) $raw_value);
+				if ($text === '')
+				{
+					$is_valid = TRUE;
+					return '';
+				}
+				if (preg_match('/^(\d{1,2})\:(\d{2})(?:\:(\d{2}))?$/', $text, $matches) !== 1)
+				{
+					$is_valid = FALSE;
+					return '';
+				}
+				$hour = isset($matches[1]) ? (int) $matches[1] : 0;
+				$minute = isset($matches[2]) ? (int) $matches[2] : 0;
+				$second = isset($matches[3]) && $matches[3] !== '' ? (int) $matches[3] : 0;
+				if ($hour < 0 || $hour > 23 || $minute < 0 || $minute > 59 || $second < 0 || $second > 59)
+				{
+					$is_valid = FALSE;
+					return '';
+				}
+				$is_valid = TRUE;
+				return sprintf('%02d:%02d:%02d', $hour, $minute, $second);
+			};
+
+			$check_in_valid = TRUE;
+			$check_out_valid = TRUE;
+			$new_check_in = $normalize_clock_input($edit_check_in_raw, $check_in_valid);
+			$new_check_out = $normalize_clock_input($edit_check_out_raw, $check_out_valid);
+			if (!$check_in_valid || !$check_out_valid)
+			{
+				$this->session->set_flashdata('attendance_notice_error', 'Format jam absensi tidak valid. Gunakan HH:MM atau HH:MM:SS.');
+				redirect('home/employee_data');
+				return;
+			}
+
+			if ($new_check_out !== '' && $new_check_in === '')
+			{
+				$this->session->set_flashdata('attendance_notice_error', 'Jam pulang tidak boleh diisi jika jam masuk masih kosong.');
+				redirect('home/employee_data');
+				return;
+			}
+			if ($new_check_in !== '' && $new_check_out !== '')
+			{
+				$check_in_seconds = $this->time_to_seconds($new_check_in);
+				$check_out_seconds = $this->time_to_seconds($new_check_out);
+				if ($check_out_seconds < $check_in_seconds)
+				{
+					$this->session->set_flashdata('attendance_notice_error', 'Jam pulang tidak boleh lebih awal dari jam masuk.');
+					redirect('home/employee_data');
+					return;
+				}
+			}
+
+			if ($new_date_key !== $original_date_key)
+			{
+				for ($duplicate_i = 0; $duplicate_i < count($records); $duplicate_i += 1)
+				{
+					if ($duplicate_i === $record_index || !isset($records[$duplicate_i]) || !is_array($records[$duplicate_i]))
+					{
+						continue;
+					}
+					$duplicate_username = isset($records[$duplicate_i]['username']) ? (string) $records[$duplicate_i]['username'] : '';
+					$duplicate_date = isset($records[$duplicate_i]['date']) ? trim((string) $records[$duplicate_i]['date']) : '';
+					if ($duplicate_username === $username && $duplicate_date === $new_date_key)
+					{
+						$this->session->set_flashdata(
+							'attendance_notice_error',
+							'Tanggal absensi '.$new_date_key.' untuk '.$username.' sudah ada. Ubah tanggal lain atau hapus data duplikat dulu.'
+						);
+						redirect('home/employee_data');
+						return;
+					}
+				}
+			}
+
+			$date_time_changed =
+				($new_date_key !== $original_date_key) ||
+				($new_check_in !== $original_check_in) ||
+				($new_check_out !== $original_check_out);
+		}
 
 		$records[$record_index]['salary_cut_amount'] = number_format(max(0, $salary_cut_amount), 0, '.', '');
 		$records[$record_index]['salary_cut_rule'] = $salary_cut_amount > 0
 			? 'Disesuaikan admin'
 			: 'Disesuaikan admin (potongan dihapus)';
+		if ($date_time_changed)
+		{
+			$records[$record_index]['date'] = $new_date_key;
+			$records[$record_index]['date_label'] = date('d-m-Y', strtotime($new_date_key));
+			$records[$record_index]['sheet_month'] = substr($new_date_key, 0, 7);
+			$records[$record_index]['sheet_tanggal_absen'] = $new_date_key;
+			$records[$record_index]['check_in_time'] = $new_check_in;
+			$records[$record_index]['check_out_time'] = $new_check_out;
+			$records[$record_index]['work_duration'] = $this->calculate_work_duration($new_check_in, $new_check_out);
+			$shift_time = isset($records[$record_index]['shift_time']) ? trim((string) $records[$record_index]['shift_time']) : '';
+			$shift_name = isset($records[$record_index]['shift_name']) ? trim((string) $records[$record_index]['shift_name']) : '';
+			$records[$record_index]['check_in_late'] = $new_check_in !== '' && ($shift_time !== '' || $shift_name !== '')
+				? $this->calculate_late_duration($new_check_in, $shift_time, $shift_name)
+				: '00:00:00';
+			if ($records[$record_index]['check_in_late'] === '00:00:00')
+			{
+				$records[$record_index]['late_reason'] = '';
+			}
+		}
 		$records[$record_index]['salary_cut_adjusted_by'] = (string) $this->session->userdata('absen_username');
 		$records[$record_index]['salary_cut_adjusted_at'] = date('Y-m-d H:i:s');
+		$records[$record_index]['record_version'] = $current_record_version + 1;
 		$records[$record_index]['updated_at'] = date('Y-m-d H:i:s');
 
 		$this->save_attendance_records($records);
-		$deduction_note = 'Ubah potongan absensi pada data web.';
+		$this->clear_admin_dashboard_live_summary_cache();
+		$deduction_note = 'Ubah data absensi pada data web.';
 		$deduction_note .= ' Tanggal '.$date_key.'.';
+		if ($date_time_changed)
+		{
+			$deduction_note .= ' Update tanggal/jam: '.$original_date_key.' '.$original_check_in.'-'.$original_check_out;
+			$deduction_note .= ' -> '.$new_date_key.' '.$new_check_in.'-'.$new_check_out.'.';
+		}
 		$this->log_activity_event(
 			'update_attendance_deduction',
 			'web_data',
@@ -4789,15 +5184,30 @@ class Home extends CI_Controller {
 			$deduction_note,
 			array(
 				'field' => 'salary_cut_amount',
-				'new_value' => (string) $salary_cut_amount
+				'new_value' => (string) $salary_cut_amount,
+				'target_id' => strtolower($username).'|'.$new_date_key
 			)
 		);
 
-		if ($salary_cut_amount > 0)
+		if ($salary_cut_amount > 0 && $date_time_changed)
+		{
+			$this->session->set_flashdata(
+				'attendance_notice_success',
+				'Data absensi '.$username.' berhasil diperbarui (tanggal/jam + potongan Rp '.number_format($salary_cut_amount, 0, ',', '.').').'
+			);
+		}
+		elseif ($salary_cut_amount > 0)
 		{
 			$this->session->set_flashdata(
 				'attendance_notice_success',
 				'Potongan gaji untuk '.$username.' berhasil diperbarui menjadi Rp '.number_format($salary_cut_amount, 0, ',', '.').'.'
+			);
+		}
+		elseif ($date_time_changed)
+		{
+			$this->session->set_flashdata(
+				'attendance_notice_success',
+				'Data absensi '.$username.' berhasil diperbarui (tanggal/jam).'
 			);
 		}
 		else
@@ -4863,6 +5273,23 @@ class Home extends CI_Controller {
 		if ($record_index < 0)
 		{
 			$this->session->set_flashdata('attendance_notice_error', 'Data absensi tidak ditemukan atau sudah dihapus.');
+			redirect('home/employee_data');
+			return;
+		}
+		$current_record_version = isset($records[$record_index]['record_version'])
+			? (int) $records[$record_index]['record_version']
+			: 1;
+		if ($current_record_version <= 0)
+		{
+			$current_record_version = 1;
+		}
+		$expected_record_version = (int) $this->input->post('expected_version', TRUE);
+		if ($expected_record_version <= 0 || $expected_record_version !== $current_record_version)
+		{
+			$this->session->set_flashdata(
+				'attendance_notice_error',
+				'Konflik versi data absensi '.$username.' tanggal '.$date_key.'. Muat ulang tabel lalu coba lagi.'
+			);
 			redirect('home/employee_data');
 			return;
 		}
@@ -5029,6 +5456,15 @@ class Home extends CI_Controller {
 				'new_value' => $start_date.' s/d '.$end_date
 			)
 		);
+		$latest_leave_request = count($request_records) > 0
+			? $request_records[count($request_records) - 1]
+			: array();
+		$admin_notify_result = $this->notify_admin_new_submission('leave', $latest_leave_request);
+		if (!isset($admin_notify_result['success']) || $admin_notify_result['success'] !== TRUE)
+		{
+			$notify_reason = isset($admin_notify_result['message']) ? (string) $admin_notify_result['message'] : 'unknown error';
+			log_message('error', 'Notifikasi WA pengajuan leave gagal: '.$notify_reason);
+		}
 
 		$request_type_message = $request_type === 'cuti'
 			? 'cuti'
@@ -5132,6 +5568,15 @@ class Home extends CI_Controller {
 				'new_value' => 'amount='.(int) $amount.', tenor='.(int) $tenor_months
 			)
 		);
+		$latest_loan_request = count($loan_records) > 0
+			? $loan_records[count($loan_records) - 1]
+			: array();
+		$admin_notify_result = $this->notify_admin_new_submission('loan', $latest_loan_request);
+		if (!isset($admin_notify_result['success']) || $admin_notify_result['success'] !== TRUE)
+		{
+			$notify_reason = isset($admin_notify_result['message']) ? (string) $admin_notify_result['message'] : 'unknown error';
+			log_message('error', 'Notifikasi WA pengajuan pinjaman gagal: '.$notify_reason);
+		}
 
 		$this->json_response(array(
 			'success' => TRUE,
@@ -6370,7 +6815,7 @@ class Home extends CI_Controller {
 		}
 		if ($shift_time === '')
 		{
-			$shift_time = '08:00 - 23:00';
+			$shift_time = '07:00 - 17:00';
 		}
 
 		$today_key = date('Y-m-d');
@@ -6422,6 +6867,7 @@ class Home extends CI_Controller {
 
 			$row_check_in = isset($records[$i]['check_in_time']) ? trim((string) $records[$i]['check_in_time']) : '';
 			$row_check_out = isset($records[$i]['check_out_time']) ? trim((string) $records[$i]['check_out_time']) : '';
+			$row_shift_name = isset($records[$i]['shift_name']) ? trim((string) $records[$i]['shift_name']) : '';
 			$row_shift_time = isset($records[$i]['shift_time']) ? trim((string) $records[$i]['shift_time']) : '';
 			if ($row_shift_time === '')
 			{
@@ -6431,7 +6877,7 @@ class Home extends CI_Controller {
 			$late_duration = isset($records[$i]['check_in_late']) ? trim((string) $records[$i]['check_in_late']) : '';
 			if ($late_duration === '' && $row_check_in !== '')
 			{
-				$late_duration = $this->calculate_late_duration($row_check_in, $row_shift_time);
+				$late_duration = $this->calculate_late_duration($row_check_in, $row_shift_time, $row_shift_name);
 			}
 			if ($late_duration === '')
 			{
@@ -7220,8 +7666,9 @@ class Home extends CI_Controller {
 			$late_duration = isset($records[$i]['check_in_late']) ? trim((string) $records[$i]['check_in_late']) : '';
 			if ($late_duration === '' && $check_in !== '')
 			{
+				$row_shift_name = isset($records[$i]['shift_name']) ? (string) $records[$i]['shift_name'] : '';
 				$row_shift_time = isset($records[$i]['shift_time']) ? (string) $records[$i]['shift_time'] : '';
-				$late_duration = $this->calculate_late_duration($check_in, $row_shift_time);
+				$late_duration = $this->calculate_late_duration($check_in, $row_shift_time, $row_shift_name);
 			}
 			$is_late = $this->duration_to_seconds($late_duration) > 0;
 			$status_label = $check_in !== '' ? ($is_late ? 'Terlambat' : 'Hadir') : '-';
@@ -7283,6 +7730,7 @@ class Home extends CI_Controller {
 		$employees = $this->scoped_employee_usernames();
 		$employee_lookup = array();
 		$weekly_day_off_by_username = array();
+		$shift_key_by_username = array();
 		$employee_profiles = $this->employee_profile_book();
 		for ($i = 0; $i < count($employees); $i += 1)
 		{
@@ -7298,6 +7746,7 @@ class Home extends CI_Controller {
 			$weekly_day_off_by_username[$username_key] = isset($profile['weekly_day_off'])
 				? $this->resolve_employee_weekly_day_off($profile['weekly_day_off'])
 				: $this->default_weekly_day_off();
+			$shift_key_by_username[$username_key] = $this->resolve_shift_key_from_profile($profile);
 		}
 
 		$checkin_seconds_by_date = array();
@@ -7340,8 +7789,9 @@ class Home extends CI_Controller {
 				$late_duration = isset($records[$i]['check_in_late']) ? trim((string) $records[$i]['check_in_late']) : '';
 				if ($late_duration === '')
 				{
+					$row_shift_name = isset($records[$i]['shift_name']) ? (string) $records[$i]['shift_name'] : '';
 					$row_shift_time = isset($records[$i]['shift_time']) ? (string) $records[$i]['shift_time'] : '';
-					$late_duration = $this->calculate_late_duration($check_in, $row_shift_time);
+					$late_duration = $this->calculate_late_duration($check_in, $row_shift_time, $row_shift_name);
 				}
 				if ($this->duration_to_seconds($late_duration) > 0)
 				{
@@ -7422,6 +7872,7 @@ class Home extends CI_Controller {
 			'employee_count' => count($employee_lookup),
 			'has_any_activity' => $has_any_activity ? TRUE : FALSE,
 			'weekly_day_off_by_username' => $weekly_day_off_by_username,
+			'shift_key_by_username' => $shift_key_by_username,
 			'checkin_seconds_by_date' => $checkin_seconds_by_date,
 			'checkout_seconds_by_date' => $checkout_seconds_by_date,
 			'late_by_date' => $late_by_date,
@@ -7631,21 +8082,12 @@ class Home extends CI_Controller {
 			$izin_cuti = $day_leave_count;
 		$alpha = 0;
 		$today_key = date('Y-m-d');
-		$check_in_max_seconds = $this->time_to_seconds(self::CHECK_IN_MAX_TIME);
-		$is_alpha_open = TRUE;
-			$has_day_activity = !empty($day_checkins) || !empty($day_checkouts) || $day_leave_count > 0;
-		if ($date_key === $today_key)
-		{
-			if ($hour_cutoff !== NULL)
-			{
-				$is_alpha_open = (int) $hour_cutoff >= $check_in_max_seconds;
-			}
-			else
-			{
-				$is_alpha_open = $this->time_to_seconds(date('H:i:s')) >= $check_in_max_seconds;
-			}
-		}
-		if ($is_alpha_open && $has_day_activity)
+		$has_day_activity = !empty($day_checkins) || !empty($day_checkouts) || $day_leave_count > 0;
+		$current_cutoff_seconds = $hour_cutoff !== NULL
+			? (int) $hour_cutoff
+			: $this->time_to_seconds(date('H:i:s'));
+		$enforce_today_cutoff = ($date_key === $today_key);
+		if ($has_day_activity)
 		{
 			$weekday_n = (int) date('N', strtotime($date_key.' 00:00:00'));
 			$employee_lookup = isset($metric_maps['employee_lookup']) && is_array($metric_maps['employee_lookup'])
@@ -7653,6 +8095,9 @@ class Home extends CI_Controller {
 				: array();
 			$weekly_day_off_by_username = isset($metric_maps['weekly_day_off_by_username']) && is_array($metric_maps['weekly_day_off_by_username'])
 				? $metric_maps['weekly_day_off_by_username']
+				: array();
+			$shift_key_by_username = isset($metric_maps['shift_key_by_username']) && is_array($metric_maps['shift_key_by_username'])
+				? $metric_maps['shift_key_by_username']
 				: array();
 			$target_headcount = 0;
 			foreach ($employee_lookup as $username_key => $is_active)
@@ -7666,6 +8111,17 @@ class Home extends CI_Controller {
 					: $this->default_weekly_day_off();
 				if ($weekday_n !== $user_weekly_off)
 				{
+					if ($enforce_today_cutoff)
+					{
+						$user_shift_key = isset($shift_key_by_username[$username_key])
+							? (string) $shift_key_by_username[$username_key]
+							: 'pagi';
+						$user_alpha_cutoff = $this->resolve_shift_alpha_cutoff_seconds($user_shift_key);
+						if ($current_cutoff_seconds < $user_alpha_cutoff)
+						{
+							continue;
+						}
+					}
 					$target_headcount += 1;
 				}
 			}
@@ -7682,6 +8138,17 @@ class Home extends CI_Controller {
 					: $this->default_weekly_day_off();
 				if ($weekday_n !== $user_weekly_off)
 				{
+					if ($enforce_today_cutoff)
+					{
+						$user_shift_key = isset($shift_key_by_username[$leave_username_key])
+							? (string) $shift_key_by_username[$leave_username_key]
+							: 'pagi';
+						$user_alpha_cutoff = $this->resolve_shift_alpha_cutoff_seconds($user_shift_key);
+						if ($current_cutoff_seconds < $user_alpha_cutoff)
+						{
+							continue;
+						}
+					}
 					$izin_cuti_target += 1;
 				}
 			}
@@ -7896,7 +8363,7 @@ class Home extends CI_Controller {
 			$rows = absen_data_store_load_value('attendance_records', NULL, $file_path);
 			if (is_array($rows))
 			{
-				return array_values($rows);
+				return $this->normalize_attendance_record_versions(array_values($rows));
 			}
 		}
 
@@ -7923,13 +8390,13 @@ class Home extends CI_Controller {
 			return array();
 		}
 
-		return $data;
+		return $this->normalize_attendance_record_versions($data);
 	}
 
 	private function save_attendance_records($records)
 	{
 		$file_path = $this->attendance_file_path();
-		$normalized = array_values(is_array($records) ? $records : array());
+		$normalized = $this->normalize_attendance_record_versions(array_values(is_array($records) ? $records : array()));
 		if (function_exists('absen_data_store_save_value'))
 		{
 			$saved_to_store = absen_data_store_save_value('attendance_records', $normalized, $file_path);
@@ -7946,6 +8413,27 @@ class Home extends CI_Controller {
 		}
 		$payload = json_encode($normalized, JSON_PRETTY_PRINT);
 		@file_put_contents($file_path, $payload);
+	}
+
+	private function normalize_attendance_record_versions($records)
+	{
+		$rows = is_array($records) ? array_values($records) : array();
+		for ($i = 0; $i < count($rows); $i += 1)
+		{
+			if (!isset($rows[$i]) || !is_array($rows[$i]))
+			{
+				$rows[$i] = array('record_version' => 1);
+				continue;
+			}
+			$current_version = isset($rows[$i]['record_version']) ? (int) $rows[$i]['record_version'] : 1;
+			if ($current_version <= 0)
+			{
+				$current_version = 1;
+			}
+			$rows[$i]['record_version'] = $current_version;
+		}
+
+		return $rows;
 	}
 
 	private function leave_requests_file_path()
@@ -8339,7 +8827,8 @@ class Home extends CI_Controller {
 				'address' => isset($profile['address']) ? (string) $profile['address'] : $this->default_employee_address(),
 				'coordinate_point' => isset($profile['coordinate_point']) ? (string) $profile['coordinate_point'] : '',
 				'work_days' => $work_days_current,
-				'weekly_day_off' => $weekly_day_off_current
+				'weekly_day_off' => $weekly_day_off_current,
+				'record_version' => isset($profile['record_version']) ? max(1, (int) $profile['record_version']) : 1
 			);
 		}
 
@@ -8364,8 +8853,13 @@ class Home extends CI_Controller {
 	{
 		$shift_name = strtolower(trim((string) $shift_name));
 		$shift_time = strtolower(trim((string) $shift_time));
-		if (strpos($shift_name, 'multi') !== FALSE ||
-			(strpos($shift_time, '06:30') !== FALSE && strpos($shift_time, '23:59') !== FALSE))
+		if (
+			strpos($shift_name, 'multi') !== FALSE ||
+			(
+				(strpos($shift_time, '06:30') !== FALSE || strpos($shift_time, '07:00') !== FALSE) &&
+				(strpos($shift_time, '23:59') !== FALSE || strpos($shift_time, '23:00') !== FALSE)
+			)
+		)
 		{
 			return 'multishift';
 		}
@@ -8397,16 +8891,16 @@ class Home extends CI_Controller {
 		{
 			return array(
 				'start' => self::CHECK_IN_MIN_TIME,
-				'end' => self::CHECK_OUT_MAX_TIME,
-				'start_label' => '06:30',
-				'end_label' => '23:59'
+				'end' => self::MULTISHIFT_CHECK_IN_MAX_TIME,
+				'start_label' => '07:00',
+				'end_label' => '23:00'
 			);
 		}
 
 		return array(
-			'start' => '07:30:00',
+			'start' => '07:00:00',
 			'end' => self::CHECK_IN_MAX_TIME,
-			'start_label' => '07:30',
+			'start_label' => '07:00',
 			'end_label' => '17:00'
 		);
 	}
@@ -8426,6 +8920,17 @@ class Home extends CI_Controller {
 			'end' => '23:00:00',
 			'end_label' => '23:00'
 		);
+	}
+
+	private function resolve_shift_alpha_cutoff_seconds($shift_key = '')
+	{
+		$shift_key = strtolower(trim((string) $shift_key));
+		if ($shift_key === 'siang' || $shift_key === 'multishift')
+		{
+			return $this->time_to_seconds(self::MULTISHIFT_CHECK_IN_MAX_TIME);
+		}
+
+		return $this->time_to_seconds(self::CHECK_IN_MAX_TIME);
 	}
 
 	private function resolve_attendance_branch_for_user($username = '', $profile = array())
@@ -10226,7 +10731,7 @@ class Home extends CI_Controller {
 				),
 				'phone' => isset($account['phone']) ? (string) $account['phone'] : '',
 				'shift_name' => isset($account['shift_name']) ? (string) $account['shift_name'] : 'Shift Pagi - Sore',
-				'shift_time' => isset($account['shift_time']) ? (string) $account['shift_time'] : '08:00 - 23:00',
+				'shift_time' => isset($account['shift_time']) ? (string) $account['shift_time'] : '07:00 - 17:00',
 				'job_title' => $job_title,
 				'salary_tier' => isset($account['salary_tier']) ? (string) $account['salary_tier'] : 'A',
 				'salary_monthly' => isset($account['salary_monthly']) ? (int) $account['salary_monthly'] : 0,
@@ -10354,6 +10859,145 @@ class Home extends CI_Controller {
 		}
 
 		return $digits;
+	}
+
+	private function submission_notify_enabled()
+	{
+		$raw = strtolower(trim((string) getenv('WA_SUBMISSION_NOTIFY_ENABLED')));
+		if ($raw === '')
+		{
+			return TRUE;
+		}
+
+		return in_array($raw, array('1', 'true', 'yes', 'on'), TRUE);
+	}
+
+	private function resolve_submission_notify_admin_phone()
+	{
+		$target = trim((string) getenv('WA_SUBMISSION_NOTIFY_TARGET'));
+		if ($target === '')
+		{
+			$target = trim((string) getenv('WA_ADMIN_SUBMISSION_NOTIFY_TARGET'));
+		}
+		if ($target === '')
+		{
+			$target = self::SUBMISSION_NOTIFY_ADMIN_PHONE;
+		}
+
+		return $target;
+	}
+
+	private function resolve_requestor_display_name($username = '')
+	{
+		$username_key = strtolower(trim((string) $username));
+		if ($username_key === '')
+		{
+			return 'Karyawan';
+		}
+
+		$profile = $this->get_employee_profile($username_key);
+		if (is_array($profile))
+		{
+			$display_name = isset($profile['display_name']) ? trim((string) $profile['display_name']) : '';
+			if ($display_name !== '')
+			{
+				return $display_name;
+			}
+		}
+
+		return $username_key;
+	}
+
+	private function build_new_leave_submission_admin_whatsapp_message($request_row)
+	{
+		$request_row = is_array($request_row) ? $request_row : array();
+		$username = isset($request_row['username']) ? trim((string) $request_row['username']) : '';
+		$display_name = $this->resolve_requestor_display_name($username);
+		$request_id = isset($request_row['id']) ? trim((string) $request_row['id']) : '-';
+		$type_label = isset($request_row['request_type_label']) ? trim((string) $request_row['request_type_label']) : '';
+		if ($type_label === '')
+		{
+			$type_label = 'Cuti / Izin';
+		}
+		$start_date_label = isset($request_row['start_date_label']) ? trim((string) $request_row['start_date_label']) : '-';
+		$end_date_label = isset($request_row['end_date_label']) ? trim((string) $request_row['end_date_label']) : '-';
+		$duration_days = isset($request_row['duration_days']) ? max(1, (int) $request_row['duration_days']) : 1;
+		$reason = isset($request_row['reason']) ? trim((string) $request_row['reason']) : '';
+		if ($reason === '')
+		{
+			$reason = '-';
+		}
+
+		return "Notifikasi Pengajuan Baru\n".
+			"Jenis: ".$type_label."\n".
+			"ID: ".$request_id."\n".
+			"Karyawan: ".$display_name." (".$username.")\n".
+			"Periode: ".$start_date_label." s/d ".$end_date_label." (".$duration_days." hari)\n".
+			"Alasan: ".$reason."\n".
+			"Waktu submit: ".date('d-m-Y H:i:s')." WIB\n".
+			"Silakan buka web admin untuk proses pengajuan.\n".
+			"https://absenpanha.com/home/leave_requests";
+	}
+
+	private function build_new_loan_submission_admin_whatsapp_message($request_row)
+	{
+		$request_row = is_array($request_row) ? $request_row : array();
+		$username = isset($request_row['username']) ? trim((string) $request_row['username']) : '';
+		$display_name = $this->resolve_requestor_display_name($username);
+		$request_id = isset($request_row['id']) ? trim((string) $request_row['id']) : '-';
+		$request_date_label = isset($request_row['request_date_label']) ? trim((string) $request_row['request_date_label']) : date('d-m-Y');
+		$amount = isset($request_row['amount']) ? (int) $request_row['amount'] : 0;
+		$amount_label = 'Rp '.number_format(max(0, $amount), 0, ',', '.');
+		$tenor_months = isset($request_row['tenor_months']) ? max(1, (int) $request_row['tenor_months']) : 1;
+		$reason = isset($request_row['reason']) ? trim((string) $request_row['reason']) : '';
+		if ($reason === '')
+		{
+			$reason = '-';
+		}
+
+		return "Notifikasi Pengajuan Baru\n".
+			"Jenis: Pinjaman\n".
+			"ID: ".$request_id."\n".
+			"Karyawan: ".$display_name." (".$username.")\n".
+			"Tanggal: ".$request_date_label."\n".
+			"Nominal: ".$amount_label."\n".
+			"Tenor: ".$tenor_months." bulan\n".
+			"Alasan: ".$reason."\n".
+			"Waktu submit: ".date('d-m-Y H:i:s')." WIB\n".
+			"Silakan buka web admin untuk proses pengajuan.\n".
+			"https://absenpanha.com/home/loan_requests";
+	}
+
+	private function notify_admin_new_submission($submission_type, $request_row)
+	{
+		if ($this->submission_notify_enabled() !== TRUE)
+		{
+			return array(
+				'success' => FALSE,
+				'message' => 'Notifikasi pengajuan baru dinonaktifkan.'
+			);
+		}
+
+		$target_phone = $this->resolve_submission_notify_admin_phone();
+		if ($target_phone === '')
+		{
+			return array(
+				'success' => FALSE,
+				'message' => 'Nomor WA tujuan notifikasi pengajuan belum diatur.'
+			);
+		}
+
+		$type_key = strtolower(trim((string) $submission_type));
+		if ($type_key === 'loan')
+		{
+			$message = $this->build_new_loan_submission_admin_whatsapp_message($request_row);
+		}
+		else
+		{
+			$message = $this->build_new_leave_submission_admin_whatsapp_message($request_row);
+		}
+
+		return $this->send_whatsapp_notification($target_phone, $message);
 	}
 
 	private function build_leave_status_whatsapp_message($request_row)
@@ -11277,7 +11921,7 @@ class Home extends CI_Controller {
 		$lines[] = '';
 		$lines[] = 'Jam cek: '.$slot_label.' WIB';
 
-		if ($slot_label === '17:00')
+		if ($this->is_final_attendance_reminder_slot($slot_label))
 		{
 			$alpha_names = isset($payload['alpha_names']) && is_array($payload['alpha_names']) ? $payload['alpha_names'] : array();
 			$alpha_count = isset($payload['alpha_count']) ? (int) $payload['alpha_count'] : count($alpha_names);
@@ -11308,12 +11952,43 @@ class Home extends CI_Controller {
 		}
 
 		$slot_label = trim((string) $slot);
-		if ($slot_label === '17:00')
+		if ($this->is_final_attendance_reminder_slot($slot_label))
 		{
-			return "Halo ".$name.",\nSampai last call jam 17:00 WIB kamu belum absen masuk hari ini.\nMohon segera konfirmasi ke admin jika ada kendala.\nTerima kasih.";
+			return "Halo ".$name.",\nSampai last call jam ".$slot_label." WIB kamu belum absen masuk hari ini.\nMohon segera konfirmasi ke admin jika ada kendala.\nTerima kasih.";
 		}
 
 		return "Halo ".$name.",\nSampai jam ".$slot_label." WIB kamu belum melakukan absen masuk hari ini.\nMohon segera absen dari dashboard.\nTerima kasih.";
+	}
+
+	private function is_final_attendance_reminder_slot($slot_label)
+	{
+		$target_slot = trim((string) $slot_label);
+		if (!preg_match('/^\d{2}\:\d{2}$/', $target_slot))
+		{
+			return FALSE;
+		}
+
+		$slots = self::ATTENDANCE_REMINDER_SLOTS;
+		$final_slot = '';
+		$final_slot_minutes = -1;
+		for ($i = 0; $i < count($slots); $i += 1)
+		{
+			$slot_value = isset($slots[$i]) ? trim((string) $slots[$i]) : '';
+			if (!preg_match('/^\d{2}\:\d{2}$/', $slot_value))
+			{
+				continue;
+			}
+
+			$parts = explode(':', $slot_value);
+			$slot_minutes = ((int) $parts[0]) * 60 + ((int) $parts[1]);
+			if ($slot_minutes > $final_slot_minutes)
+			{
+				$final_slot_minutes = $slot_minutes;
+				$final_slot = $slot_value;
+			}
+		}
+
+		return $final_slot !== '' && $target_slot === $final_slot;
 	}
 
 	private function http_post_request($url, $payload, $headers = array())
@@ -11380,9 +12055,21 @@ class Home extends CI_Controller {
 		);
 	}
 
-	private function calculate_late_duration($check_in_time, $shift_time)
+	private function calculate_late_duration($check_in_time, $shift_time, $shift_name = '')
 	{
-		if ($check_in_time === '' || $shift_time === '')
+		$check_in_time = trim((string) $check_in_time);
+		$shift_time = trim((string) $shift_time);
+		$shift_name = trim((string) $shift_name);
+		if ($check_in_time === '')
+		{
+			return '00:00:00';
+		}
+		$shift_key = $this->resolve_shift_key_from_shift_values($shift_name, $shift_time);
+		if ($shift_key === 'multishift')
+		{
+			return $this->calculate_multishift_late_duration($check_in_time);
+		}
+		if ($shift_time === '')
 		{
 			return '00:00:00';
 		}
@@ -11413,6 +12100,38 @@ class Home extends CI_Controller {
 
 		$diff = $check_seconds - $late_threshold_seconds;
 		return gmdate('H:i:s', $diff);
+	}
+
+	private function calculate_multishift_late_duration($check_in_time)
+	{
+		$check_in_seconds = $this->time_to_seconds($check_in_time);
+		if ($check_in_seconds <= 0)
+		{
+			return '00:00:00';
+		}
+
+		$morning_ontime_end = $this->time_to_seconds(self::MULTISHIFT_ONTIME_MORNING_END);
+		$afternoon_ontime_start = $this->time_to_seconds(self::MULTISHIFT_ONTIME_AFTERNOON_START);
+		$afternoon_ontime_end = $this->time_to_seconds(self::MULTISHIFT_ONTIME_AFTERNOON_END);
+
+		if ($check_in_seconds <= $morning_ontime_end)
+		{
+			return '00:00:00';
+		}
+		if ($check_in_seconds >= $afternoon_ontime_start && $check_in_seconds <= $afternoon_ontime_end)
+		{
+			return '00:00:00';
+		}
+
+		$late_seconds = $check_in_seconds < $afternoon_ontime_start
+			? ($check_in_seconds - $morning_ontime_end)
+			: ($check_in_seconds - $afternoon_ontime_end);
+		if ($late_seconds <= 0)
+		{
+			return '00:00:00';
+		}
+
+		return gmdate('H:i:s', $late_seconds);
 	}
 
 	private function calculate_work_duration($check_in_time, $check_out_time)
@@ -12906,6 +13625,476 @@ class Home extends CI_Controller {
 		);
 
 		$this->append_data_log($entry);
+		$this->collab_register_activity_event($entry);
+	}
+
+	private function collab_state_file_path()
+	{
+		return APPPATH.'cache/admin_collab_state.json';
+	}
+
+	private function collab_default_state()
+	{
+		return array(
+			'revision' => 0,
+			'last_event_id' => 0,
+			'events' => array(),
+			'last_synced_revision' => 0,
+			'pending_sync' => array(),
+			'sync_lock' => array(
+				'active' => FALSE,
+				'owner' => '',
+				'context' => '',
+				'token' => '',
+				'started_at' => '',
+				'expires_at' => ''
+			)
+		);
+	}
+
+	private function collab_load_state()
+	{
+		$file_path = $this->collab_state_file_path();
+		$loaded = NULL;
+		if (function_exists('absen_data_store_load_value'))
+		{
+			$loaded = absen_data_store_load_value(self::COLLAB_STATE_STORE_KEY, NULL, $file_path);
+		}
+		elseif (is_file($file_path))
+		{
+			$content = @file_get_contents($file_path);
+			if ($content !== FALSE && trim((string) $content) !== '')
+			{
+				$decoded = json_decode((string) $content, TRUE);
+				if (is_array($decoded))
+				{
+					$loaded = $decoded;
+				}
+			}
+		}
+
+		$state = is_array($loaded) ? $loaded : $this->collab_default_state();
+		$state['revision'] = isset($state['revision']) ? max(0, (int) $state['revision']) : 0;
+		$state['last_event_id'] = isset($state['last_event_id']) ? max(0, (int) $state['last_event_id']) : 0;
+		$state['last_synced_revision'] = isset($state['last_synced_revision']) ? max(0, (int) $state['last_synced_revision']) : 0;
+		$state['events'] = isset($state['events']) && is_array($state['events']) ? array_values($state['events']) : array();
+		$state['pending_sync'] = isset($state['pending_sync']) && is_array($state['pending_sync']) ? $state['pending_sync'] : array();
+		$state['sync_lock'] = isset($state['sync_lock']) && is_array($state['sync_lock']) ? $state['sync_lock'] : array();
+
+		$this->collab_cleanup_expired_sync_lock($state, FALSE);
+		return $state;
+	}
+
+	private function collab_save_state($state)
+	{
+		$normalized = is_array($state) ? $state : $this->collab_default_state();
+		$file_path = $this->collab_state_file_path();
+		if (function_exists('absen_data_store_save_value'))
+		{
+			$saved = absen_data_store_save_value(self::COLLAB_STATE_STORE_KEY, $normalized, $file_path);
+			if ($saved)
+			{
+				return TRUE;
+			}
+		}
+
+		$directory = dirname($file_path);
+		if (!is_dir($directory))
+		{
+			@mkdir($directory, 0755, TRUE);
+		}
+		$payload = json_encode($normalized, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+		if (!is_string($payload) || $payload === '')
+		{
+			return FALSE;
+		}
+
+		return @file_put_contents($file_path, $payload) !== FALSE;
+	}
+
+	private function collab_current_revision()
+	{
+		$state = $this->collab_load_state();
+		return isset($state['revision']) ? (int) $state['revision'] : 0;
+	}
+
+	private function collab_cleanup_expired_sync_lock(&$state, $persist = FALSE)
+	{
+		if (!is_array($state))
+		{
+			$state = $this->collab_default_state();
+			return FALSE;
+		}
+		$lock = isset($state['sync_lock']) && is_array($state['sync_lock']) ? $state['sync_lock'] : array();
+		$active = isset($lock['active']) ? (bool) $lock['active'] : FALSE;
+		if (!$active)
+		{
+			$state['sync_lock'] = array(
+				'active' => FALSE,
+				'owner' => '',
+				'context' => '',
+				'token' => '',
+				'started_at' => '',
+				'expires_at' => ''
+			);
+			return FALSE;
+		}
+
+		$expires_at = isset($lock['expires_at']) ? trim((string) $lock['expires_at']) : '';
+		$expires_ts = $expires_at !== '' ? strtotime($expires_at) : 0;
+		if ($expires_ts > 0 && $expires_ts > time())
+		{
+			return FALSE;
+		}
+
+		$state['sync_lock'] = array(
+			'active' => FALSE,
+			'owner' => '',
+			'context' => '',
+			'token' => '',
+			'started_at' => '',
+			'expires_at' => ''
+		);
+		if ($persist)
+		{
+			$this->collab_save_state($state);
+		}
+
+		return TRUE;
+	}
+
+	private function collab_sync_lock_info_from_state($state)
+	{
+		$payload = array(
+			'active' => FALSE,
+			'owner' => '',
+			'context' => '',
+			'started_at' => '',
+			'expires_at' => '',
+			'remaining_seconds' => 0
+		);
+		if (!is_array($state))
+		{
+			return $payload;
+		}
+		$lock = isset($state['sync_lock']) && is_array($state['sync_lock']) ? $state['sync_lock'] : array();
+		$active = isset($lock['active']) ? (bool) $lock['active'] : FALSE;
+		if (!$active)
+		{
+			return $payload;
+		}
+
+		$expires_at = isset($lock['expires_at']) ? trim((string) $lock['expires_at']) : '';
+		$expires_ts = $expires_at !== '' ? strtotime($expires_at) : 0;
+		if ($expires_ts <= 0 || $expires_ts <= time())
+		{
+			return $payload;
+		}
+
+		$payload['active'] = TRUE;
+		$payload['owner'] = isset($lock['owner']) ? trim((string) $lock['owner']) : '';
+		$payload['context'] = isset($lock['context']) ? trim((string) $lock['context']) : '';
+		$payload['started_at'] = isset($lock['started_at']) ? trim((string) $lock['started_at']) : '';
+		$payload['expires_at'] = $expires_at;
+		$payload['remaining_seconds'] = max(1, $expires_ts - time());
+		return $payload;
+	}
+
+	private function collab_try_acquire_sync_lock($actor, $context = '')
+	{
+		$actor_key = strtolower(trim((string) $actor));
+		if ($actor_key === '')
+		{
+			$actor_key = 'admin';
+		}
+		$state = $this->collab_load_state();
+		$this->collab_cleanup_expired_sync_lock($state, FALSE);
+		$lock_info = $this->collab_sync_lock_info_from_state($state);
+		if (isset($lock_info['active']) && $lock_info['active'] === TRUE)
+		{
+			$current_owner = isset($lock_info['owner']) ? strtolower(trim((string) $lock_info['owner'])) : '';
+			if ($current_owner !== '' && $current_owner !== $actor_key)
+			{
+				return array(
+					'success' => FALSE,
+					'owner' => $current_owner,
+					'remaining_seconds' => isset($lock_info['remaining_seconds']) ? (int) $lock_info['remaining_seconds'] : 1
+				);
+			}
+		}
+
+		$token = md5($actor_key.'|'.microtime(TRUE).'|'.mt_rand(1000, 9999));
+		$started_at = date('Y-m-d H:i:s');
+		$expires_at = date('Y-m-d H:i:s', time() + max(30, (int) self::COLLAB_SYNC_LOCK_TTL_SECONDS));
+		$state['sync_lock'] = array(
+			'active' => TRUE,
+			'owner' => $actor_key,
+			'context' => trim((string) $context),
+			'token' => $token,
+			'started_at' => $started_at,
+			'expires_at' => $expires_at
+		);
+		$this->collab_save_state($state);
+
+		return array(
+			'success' => TRUE,
+			'token' => $token,
+			'owner' => $actor_key,
+			'started_at' => $started_at,
+			'expires_at' => $expires_at
+		);
+	}
+
+	private function collab_release_sync_lock($token = '', $actor = '')
+	{
+		$state = $this->collab_load_state();
+		$lock = isset($state['sync_lock']) && is_array($state['sync_lock']) ? $state['sync_lock'] : array();
+		$active = isset($lock['active']) ? (bool) $lock['active'] : FALSE;
+		if (!$active)
+		{
+			return TRUE;
+		}
+
+		$lock_owner = isset($lock['owner']) ? strtolower(trim((string) $lock['owner'])) : '';
+		$actor_key = strtolower(trim((string) $actor));
+		$token_key = trim((string) $token);
+		$lock_token = isset($lock['token']) ? trim((string) $lock['token']) : '';
+		if ($token_key !== '' && $lock_token !== '' && !hash_equals($lock_token, $token_key))
+		{
+			if ($actor_key !== '' && $actor_key !== $lock_owner)
+			{
+				return FALSE;
+			}
+		}
+		elseif ($token_key === '' && $actor_key !== '' && $lock_owner !== '' && $actor_key !== $lock_owner)
+		{
+			return FALSE;
+		}
+
+		$state['sync_lock'] = array(
+			'active' => FALSE,
+			'owner' => '',
+			'context' => '',
+			'token' => '',
+			'started_at' => '',
+			'expires_at' => ''
+		);
+		return $this->collab_save_state($state);
+	}
+
+	private function collab_should_publish_event($entry)
+	{
+		$entry = is_array($entry) ? $entry : array();
+		$actor = strtolower(trim((string) (isset($entry['actor']) ? $entry['actor'] : '')));
+		if ($actor === '' || $actor === 'system' || $actor === 'cli')
+		{
+			return FALSE;
+		}
+		$account_book = function_exists('absen_load_account_book')
+			? absen_load_account_book()
+			: array();
+		if (!is_array($account_book) || !isset($account_book[$actor]) || !is_array($account_book[$actor]))
+		{
+			return FALSE;
+		}
+		$role = strtolower(trim((string) (isset($account_book[$actor]['role']) ? $account_book[$actor]['role'] : 'user')));
+		return $role === 'admin';
+	}
+
+	private function collab_event_requires_sync($action, $source)
+	{
+		$action_key = strtolower(trim((string) $action));
+		$source_key = strtolower(trim((string) $source));
+		if ($action_key === '')
+		{
+			return FALSE;
+		}
+		if (strpos($action_key, 'sync_') === 0)
+		{
+			return FALSE;
+		}
+		return $source_key === 'web_data' || $source_key === 'account_data';
+	}
+
+	private function collab_register_activity_event($entry)
+	{
+		$entry = is_array($entry) ? $entry : array();
+		if (!$this->collab_should_publish_event($entry))
+		{
+			return;
+		}
+
+		$state = $this->collab_load_state();
+		$this->collab_cleanup_expired_sync_lock($state, FALSE);
+		$state['revision'] = isset($state['revision']) ? max(0, (int) $state['revision']) + 1 : 1;
+		$state['last_event_id'] = isset($state['last_event_id']) ? max(0, (int) $state['last_event_id']) + 1 : 1;
+
+		$action = isset($entry['action']) ? trim((string) $entry['action']) : '';
+		$source = isset($entry['source']) ? trim((string) $entry['source']) : '';
+		$actor = strtolower(trim((string) (isset($entry['actor']) ? $entry['actor'] : 'admin')));
+		$requires_sync = $this->collab_event_requires_sync($action, $source);
+		$event_type = strpos(strtolower($action), 'sync_') === 0 ? 'sync' : 'change';
+
+		$event = array(
+			'id' => (int) $state['last_event_id'],
+			'revision' => (int) $state['revision'],
+			'created_at' => isset($entry['logged_at']) && trim((string) $entry['logged_at']) !== ''
+				? trim((string) $entry['logged_at'])
+				: date('Y-m-d H:i:s'),
+			'actor' => $actor,
+			'action' => $action,
+			'source' => $source,
+			'note' => isset($entry['note']) ? trim((string) $entry['note']) : '',
+			'target_username' => isset($entry['username']) ? trim((string) $entry['username']) : '',
+			'target_display_name' => isset($entry['display_name']) ? trim((string) $entry['display_name']) : '',
+			'requires_sync' => $requires_sync,
+			'event_type' => $event_type
+		);
+		$state['events'][] = $event;
+		$max_events = (int) self::COLLAB_STATE_EVENT_LIMIT;
+		if ($max_events < 120)
+		{
+			$max_events = 120;
+		}
+		if (count($state['events']) > $max_events)
+		{
+			$state['events'] = array_slice($state['events'], count($state['events']) - $max_events);
+		}
+
+		if (!isset($state['pending_sync']) || !is_array($state['pending_sync']))
+		{
+			$state['pending_sync'] = array();
+		}
+		if ($event_type === 'sync' && strtolower($action) === 'sync_web_to_sheet')
+		{
+			$state['last_synced_revision'] = (int) $state['revision'];
+			$state['pending_sync'] = array();
+		}
+		elseif ($requires_sync)
+		{
+			$state['pending_sync'][$actor] = array(
+				'revision' => (int) $state['revision'],
+				'updated_at' => $event['created_at'],
+				'action' => $action,
+				'source' => $source
+			);
+		}
+
+		$this->collab_save_state($state);
+	}
+
+	private function collab_state_feed_events($state, $since_id = 0, $limit = 25, $bootstrap = FALSE)
+	{
+		$events = isset($state['events']) && is_array($state['events']) ? array_values($state['events']) : array();
+		$since_id = max(0, (int) $since_id);
+		$limit = (int) $limit;
+		if ($limit <= 0)
+		{
+			$limit = 25;
+		}
+		if ($limit > 120)
+		{
+			$limit = 120;
+		}
+
+		$selected = array();
+		if ($since_id > 0)
+		{
+			for ($i = 0; $i < count($events); $i += 1)
+			{
+				$event_id = isset($events[$i]['id']) ? (int) $events[$i]['id'] : 0;
+				if ($event_id > $since_id)
+				{
+					$selected[] = $events[$i];
+				}
+			}
+		}
+		elseif ($bootstrap)
+		{
+			$selected = $events;
+		}
+
+		if (count($selected) > $limit)
+		{
+			$selected = array_slice($selected, count($selected) - $limit);
+		}
+
+		$result = array();
+		for ($i = 0; $i < count($selected); $i += 1)
+		{
+			$row = is_array($selected[$i]) ? $selected[$i] : array();
+			$result[] = array(
+				'id' => isset($row['id']) ? (int) $row['id'] : 0,
+				'revision' => isset($row['revision']) ? (int) $row['revision'] : 0,
+				'created_at' => isset($row['created_at']) ? (string) $row['created_at'] : '',
+				'actor' => isset($row['actor']) ? (string) $row['actor'] : '',
+				'action' => isset($row['action']) ? (string) $row['action'] : '',
+				'source' => isset($row['source']) ? (string) $row['source'] : '',
+				'note' => isset($row['note']) ? (string) $row['note'] : '',
+				'target_username' => isset($row['target_username']) ? (string) $row['target_username'] : '',
+				'target_display_name' => isset($row['target_display_name']) ? (string) $row['target_display_name'] : '',
+				'requires_sync' => isset($row['requires_sync']) && $row['requires_sync'] ? TRUE : FALSE,
+				'event_type' => isset($row['event_type']) ? (string) $row['event_type'] : 'change'
+			);
+		}
+
+		return $result;
+	}
+
+	private function collab_actor_pending_sync_status($state, $actor)
+	{
+		$actor_key = strtolower(trim((string) $actor));
+		$pending_map = isset($state['pending_sync']) && is_array($state['pending_sync']) ? $state['pending_sync'] : array();
+		$last_synced_revision = isset($state['last_synced_revision']) ? (int) $state['last_synced_revision'] : 0;
+		$pending_revision = 0;
+		$pending_by_actor = 0;
+		foreach ($pending_map as $pending_actor => $pending_row)
+		{
+			$pending_item = is_array($pending_row) ? $pending_row : array();
+			$pending_item_revision = isset($pending_item['revision']) ? (int) $pending_item['revision'] : 0;
+			if ($pending_item_revision <= $last_synced_revision)
+			{
+				continue;
+			}
+			$pending_by_actor += 1;
+			if (strtolower(trim((string) $pending_actor)) === $actor_key && $pending_item_revision > $pending_revision)
+			{
+				$pending_revision = $pending_item_revision;
+			}
+		}
+
+		return array(
+			'has_pending' => $pending_revision > $last_synced_revision,
+			'pending_revision' => $pending_revision,
+			'last_synced_revision' => $last_synced_revision,
+			'pending_actor_count' => $pending_by_actor
+		);
+	}
+
+	private function assert_expected_revision_or_redirect($redirect_url = 'home', $flash_key = 'account_notice_error')
+	{
+		$expected_raw = $this->input->post('expected_revision', TRUE);
+		if ($expected_raw === NULL || trim((string) $expected_raw) === '')
+		{
+			return TRUE;
+		}
+		$expected_revision = (int) $expected_raw;
+		if ($expected_revision < 0)
+		{
+			$expected_revision = 0;
+		}
+		$current_revision = $this->collab_current_revision();
+		if ($expected_revision === $current_revision)
+		{
+			return TRUE;
+		}
+
+		$this->session->set_flashdata(
+			$flash_key,
+			'Konflik versi data. Data sudah diperbarui admin lain. Muat ulang halaman lalu ulangi proses simpan/sync.'
+		);
+		redirect($redirect_url);
+		return FALSE;
 	}
 
 	private function evaluate_geofence($distance_m, $accuracy_m, $office_label = '')

@@ -8,7 +8,7 @@ if (!function_exists('absen_shift_profile_book'))
 		return array(
 			'pagi' => array(
 				'shift_name' => 'Shift Pagi - Sore',
-				'shift_time' => '08:00 - 23:00'
+				'shift_time' => '07:00 - 17:00'
 			),
 			'siang' => array(
 				'shift_name' => 'Shift Siang - Malam',
@@ -16,7 +16,7 @@ if (!function_exists('absen_shift_profile_book'))
 			),
 			'multishift' => array(
 				'shift_name' => 'Multi Shift',
-				'shift_time' => '06:30 - 23:59'
+				'shift_time' => '07:00 - 23:59'
 			)
 		);
 	}
@@ -735,8 +735,13 @@ if (!function_exists('absen_sanitize_account_book'))
 				$fallback_shift_key = 'pagi';
 				$shift_name_lower = strtolower($shift_name);
 				$shift_time_lower = strtolower($shift_time);
-				if (strpos($shift_name_lower, 'multi') !== FALSE ||
-					(strpos($shift_time_lower, '06:30') !== FALSE && strpos($shift_time_lower, '23:59') !== FALSE))
+				if (
+					strpos($shift_name_lower, 'multi') !== FALSE ||
+					(
+						(strpos($shift_time_lower, '06:30') !== FALSE || strpos($shift_time_lower, '07:00') !== FALSE) &&
+						(strpos($shift_time_lower, '23:59') !== FALSE || strpos($shift_time_lower, '23:00') !== FALSE)
+					)
+				)
 				{
 					$fallback_shift_key = 'multishift';
 				}

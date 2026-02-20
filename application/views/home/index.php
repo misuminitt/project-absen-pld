@@ -99,8 +99,25 @@ elseif (is_file(FCPATH.'src/assts/pns_dashboard.png')) {
 $logo_url = $base_path.'/'.$logo_path;
 $home_index_css_file = 'src/assets/css/home-index.css';
 $home_index_js_file = 'src/assets/js/home-index.js';
+$home_index_collab_js_file = 'src/assets/js/home-index-collab.js';
 $home_index_css_version = is_file(FCPATH.$home_index_css_file) ? (string) filemtime(FCPATH.$home_index_css_file) : '1';
 $home_index_js_version = is_file(FCPATH.$home_index_js_file) ? (string) filemtime(FCPATH.$home_index_js_file) : '1';
+$home_index_collab_js_version = is_file(FCPATH.$home_index_collab_js_file) ? (string) filemtime(FCPATH.$home_index_collab_js_file) : '1';
+$collab_revision = isset($collab_revision) ? (int) $collab_revision : 0;
+if ($collab_revision < 0) {
+	$collab_revision = 0;
+}
+$collab_feed_url = isset($collab_feed_url) ? trim((string) $collab_feed_url) : site_url('home/admin_change_feed');
+$collab_sync_lock_url = isset($collab_sync_lock_url) ? trim((string) $collab_sync_lock_url) : site_url('home/sync_lock_status');
+$collab_actor = isset($collab_actor) ? trim((string) $collab_actor) : '';
+$collab_poll_ms = isset($collab_poll_ms) ? (int) $collab_poll_ms : 10000;
+if ($collab_poll_ms < 3000) {
+	$collab_poll_ms = 3000;
+}
+$collab_lock_wait_refresh_seconds = isset($collab_lock_wait_refresh_seconds) ? (int) $collab_lock_wait_refresh_seconds : 5;
+if ($collab_lock_wait_refresh_seconds < 3) {
+	$collab_lock_wait_refresh_seconds = 3;
+}
 $home_index_config_json = json_encode(array(
 	'accountRows' => $employee_accounts,
 	'defaultJobTitle' => $default_job_title,
@@ -109,7 +126,13 @@ $home_index_config_json = json_encode(array(
 	'featureAccounts' => $admin_feature_accounts,
 	'summaryUrl' => site_url('home/admin_dashboard_live_summary'),
 	'statusLabelFixed' => $dashboard_status_label,
-	'chartEndpoint' => site_url('home/admin_metric_chart_data')
+	'chartEndpoint' => site_url('home/admin_metric_chart_data'),
+	'collabRevision' => $collab_revision,
+	'collabFeedUrl' => $collab_feed_url,
+	'collabSyncLockUrl' => $collab_sync_lock_url,
+	'collabActor' => $collab_actor,
+	'collabPollMs' => $collab_poll_ms,
+	'collabLockWaitRefreshSeconds' => $collab_lock_wait_refresh_seconds
 ), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
 if ($home_index_config_json === FALSE) {
 	$home_index_config_json = '{}';
@@ -140,7 +163,7 @@ if ($home_index_config_json === FALSE) {
 						<?php if ($can_view_log_data): ?>
 							<a href="<?php echo site_url('home/log_data'); ?>" class="logout">Log Data</a>
 						<?php endif; ?>
-						<a href="<?php echo site_url('logout'); ?>" class="logout">Logout</a>
+						<a href="<?php echo site_url('logout'); ?>" class="logout" id="adminLogoutLink">Logout</a>
 					</div>
 				</div>
 			</div>
@@ -270,14 +293,14 @@ if ($home_index_config_json === FALSE) {
 							<?php endif; ?>
 							<div class="d-flex flex-wrap gap-2">
 								<?php if ($can_sync_sheet_accounts): ?>
-									<form method="post" action="<?php echo site_url('home/sync_sheet_accounts_now'); ?>">
+									<form method="post" action="<?php echo site_url('home/sync_sheet_accounts_now'); ?>" class="sync-control-form" data-sync-direction="sheet_to_web_account" data-sync-label="Sync Akun dari Sheet">
 										<button type="submit" class="account-submit">Sync Akun dari Sheet</button>
 									</form>
 								<?php endif; ?>
-								<form method="post" action="<?php echo site_url('home/sync_sheet_attendance_now'); ?>">
+								<form method="post" action="<?php echo site_url('home/sync_sheet_attendance_now'); ?>" class="sync-control-form" data-sync-direction="sheet_to_web_attendance" data-sync-label="Sync Data Absen dari Sheet">
 									<button type="submit" class="account-submit">Sync Data Absen dari Sheet</button>
 								</form>
-								<form method="post" action="<?php echo site_url('home/sync_web_attendance_to_sheet_now'); ?>">
+								<form method="post" action="<?php echo site_url('home/sync_web_attendance_to_sheet_now'); ?>" class="sync-control-form" data-sync-direction="web_to_sheet" data-sync-label="Sync Data Web ke Sheet">
 									<button type="submit" class="account-submit">Sync Data Web ke Sheet</button>
 								</form>
 							</div>
@@ -373,9 +396,9 @@ if ($home_index_config_json === FALSE) {
 										<div>
 											<p class="account-label">Shift</p>
 											<select name="new_shift" class="account-input" required>
-												<option value="pagi">Shift Pagi - Sore (08:00 - 23:00)</option>
+												<option value="pagi">Shift Pagi - Sore (07:00 - 17:00)</option>
 												<option value="siang">Shift Siang - Malam (14:00 - 23:00)</option>
-												<option value="multishift">Multi Shift (06:30 - 23:59)</option>
+												<option value="multishift">Multi Shift (07:00 - 23:59)</option>
 											</select>
 										</div>
 									</div>
@@ -574,6 +597,7 @@ if ($home_index_config_json === FALSE) {
 											<?php endforeach; ?>
 										</datalist>
 									</div>
+										<input type="hidden" name="expected_version" id="deleteExpectedVersionInput" value="1">
 										<button type="submit" class="account-submit delete">Hapus Akun</button>
 									</form>
 								</article>
@@ -646,9 +670,9 @@ if ($home_index_config_json === FALSE) {
 										<div>
 											<p class="account-label">Shift</p>
 											<select name="edit_shift" id="editShiftInput" class="account-input" required>
-												<option value="pagi">Shift Pagi - Sore (08:00 - 23:00)</option>
+												<option value="pagi">Shift Pagi - Sore (07:00 - 17:00)</option>
 												<option value="siang">Shift Siang - Malam (14:00 - 23:00)</option>
-												<option value="multishift">Multi Shift (06:30 - 23:59)</option>
+												<option value="multishift">Multi Shift (07:00 - 23:59)</option>
 											</select>
 										</div>
 									</div>
@@ -701,6 +725,7 @@ if ($home_index_config_json === FALSE) {
 										<p class="account-label">Ganti PP (Opsional)</p>
 										<input type="file" name="edit_profile_photo" id="editProfilePhotoInput" class="account-input" accept=".png,.jpg,.jpeg,.heic">
 									</div>
+										<input type="hidden" name="expected_version" id="editExpectedVersionInput" value="1">
 										<button type="submit" class="account-submit">Simpan Perubahan Akun</button>
 									</form>
 								</article>
@@ -886,10 +911,11 @@ if ($home_index_config_json === FALSE) {
 		</main>
 	</div>
 
-		<script>
+	<script>
 		window.__HOME_INDEX_CONFIG = <?php echo $home_index_config_json; ?>;
 	</script>
 	<script defer src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js"></script>
 	<script defer src="<?php echo htmlspecialchars($base_path.'/'.$home_index_js_file, ENT_QUOTES, 'UTF-8'); ?>?v=<?php echo rawurlencode($home_index_js_version); ?>"></script>
+	<script defer src="<?php echo htmlspecialchars($base_path.'/'.$home_index_collab_js_file, ENT_QUOTES, 'UTF-8'); ?>?v=<?php echo rawurlencode($home_index_collab_js_version); ?>"></script>
 </body>
 </html>

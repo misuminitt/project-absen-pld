@@ -36,6 +36,7 @@ for ($record_i = 0; $record_i < count($records_source); $record_i += 1)
 <?php
 $notice_success = $this->session->flashdata('attendance_notice_success');
 $notice_error = $this->session->flashdata('attendance_notice_error');
+$can_edit_attendance_datetime = isset($can_edit_attendance_datetime) && $can_edit_attendance_datetime === TRUE;
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -771,6 +772,11 @@ $notice_error = $this->session->flashdata('attendance_notice_error');
 								$late_reason_display = '-';
 								$salary_cut_amount = isset($row['salary_cut_amount']) ? (float) $row['salary_cut_amount'] : 0;
 								$salary_cut_display = '-';
+								$row_record_version = isset($row['record_version']) ? (int) $row['record_version'] : 1;
+								if ($row_record_version <= 0)
+								{
+									$row_record_version = 1;
+								}
 								$row_username = isset($row['username']) ? (string) $row['username'] : '';
 								$row_employee_id = isset($row['employee_id']) && trim((string) $row['employee_id']) !== ''
 									? (string) $row['employee_id']
@@ -848,7 +854,7 @@ $notice_error = $this->session->flashdata('attendance_notice_error');
 									$shift_short = 'Multi';
 								}
 								?>
-								<tr class="attendance-row" data-id="<?php echo htmlspecialchars(strtolower($row_employee_id), ENT_QUOTES, 'UTF-8'); ?>" data-name="<?php echo htmlspecialchars(strtolower($row_username), ENT_QUOTES, 'UTF-8'); ?>" data-date-key="<?php echo htmlspecialchars($row_date_key, ENT_QUOTES, 'UTF-8'); ?>" data-date-label="<?php echo htmlspecialchars(isset($row['date_label']) ? (string) $row['date_label'] : '-', ENT_QUOTES, 'UTF-8'); ?>">
+								<tr class="attendance-row" data-id="<?php echo htmlspecialchars(strtolower($row_employee_id), ENT_QUOTES, 'UTF-8'); ?>" data-name="<?php echo htmlspecialchars(strtolower($row_username), ENT_QUOTES, 'UTF-8'); ?>" data-date-key="<?php echo htmlspecialchars($row_date_key, ENT_QUOTES, 'UTF-8'); ?>" data-date-label="<?php echo htmlspecialchars(isset($row['date_label']) ? (string) $row['date_label'] : '-', ENT_QUOTES, 'UTF-8'); ?>" data-record-version="<?php echo (int) $row_record_version; ?>">
 									<td class="row-no"><?php echo $no; ?></td>
 									<td><?php echo htmlspecialchars($row_employee_id, ENT_QUOTES, 'UTF-8'); ?></td>
 									<td>
@@ -921,11 +927,15 @@ $notice_error = $this->session->flashdata('attendance_notice_error');
 												data-username="<?php echo htmlspecialchars($row_username, ENT_QUOTES, 'UTF-8'); ?>"
 												data-date="<?php echo htmlspecialchars($row_date_key, ENT_QUOTES, 'UTF-8'); ?>"
 												data-date-label="<?php echo htmlspecialchars(isset($row['date_label']) ? (string) $row['date_label'] : '-', ENT_QUOTES, 'UTF-8'); ?>"
+												data-check-in-time="<?php echo htmlspecialchars($check_in_raw, ENT_QUOTES, 'UTF-8'); ?>"
+												data-check-out-time="<?php echo htmlspecialchars($check_out_raw, ENT_QUOTES, 'UTF-8'); ?>"
 												data-current-cut="<?php echo htmlspecialchars((string) max(0, (int) round($salary_cut_amount)), ENT_QUOTES, 'UTF-8'); ?>"
+												data-record-version="<?php echo (int) $row_record_version; ?>"
 											>Edit</button>
 											<form method="post" action="<?php echo site_url('home/delete_attendance_record'); ?>" class="row-delete-form" onsubmit="return window.confirm('Hapus data absensi ini?');">
 												<input type="hidden" name="username" value="<?php echo htmlspecialchars($row_username, ENT_QUOTES, 'UTF-8'); ?>">
 												<input type="hidden" name="date" value="<?php echo htmlspecialchars($row_date_key, ENT_QUOTES, 'UTF-8'); ?>">
+												<input type="hidden" name="expected_version" value="<?php echo (int) $row_record_version; ?>">
 												<button type="submit" class="delete-btn">Hapus</button>
 											</form>
 										</div>
@@ -947,7 +957,7 @@ $notice_error = $this->session->flashdata('attendance_notice_error');
 		<div class="modal-overlay" data-edit-close></div>
 		<section class="edit-panel" role="dialog" aria-modal="true" aria-labelledby="deductionModalTitle">
 			<div class="edit-head">
-				<h2 id="deductionModalTitle" class="edit-title">Edit Potongan Gaji</h2>
+				<h2 id="deductionModalTitle" class="edit-title">Edit Data Absensi</h2>
 				<button type="button" class="edit-close" id="closeDeductionModal" aria-label="Tutup popup edit">&times;</button>
 			</div>
 			<div class="edit-body">
@@ -963,6 +973,22 @@ $notice_error = $this->session->flashdata('attendance_notice_error');
 				<form id="deductionForm" method="post" action="<?php echo site_url('home/update_attendance_deduction'); ?>">
 					<input type="hidden" id="deductionUsernameInput" name="username" value="">
 					<input type="hidden" id="deductionDateInput" name="date" value="">
+					<input type="hidden" id="deductionExpectedVersionInput" name="expected_version" value="1">
+					<?php if ($can_edit_attendance_datetime): ?>
+						<div class="edit-field">
+							<label for="deductionEditDateInput" class="edit-label">Tanggal Absensi (Edit)</label>
+							<input id="deductionEditDateInput" class="edit-input" type="date" name="edit_date" autocomplete="off">
+							<p class="edit-help">Khusus bos/developer. Format tanggal: YYYY-MM-DD.</p>
+						</div>
+						<div class="edit-field">
+							<label for="deductionCheckInInput" class="edit-label">Jam Masuk (Edit)</label>
+							<input id="deductionCheckInInput" class="edit-input" type="time" name="edit_check_in_time" step="1" autocomplete="off">
+						</div>
+						<div class="edit-field">
+							<label for="deductionCheckOutInput" class="edit-label">Jam Pulang (Edit)</label>
+							<input id="deductionCheckOutInput" class="edit-input" type="time" name="edit_check_out_time" step="1" autocomplete="off">
+						</div>
+					<?php endif; ?>
 					<div class="edit-field">
 						<label for="deductionAmountInput" class="edit-label">Potongan Gaji (Rp)</label>
 						<input id="deductionAmountInput" class="edit-input" type="text" name="salary_cut_amount" inputmode="numeric" autocomplete="off" placeholder="Contoh: 25000">
@@ -1119,6 +1145,10 @@ $notice_error = $this->session->flashdata('attendance_notice_error');
 			var dateValue = document.getElementById('deductionDateValue');
 			var usernameInput = document.getElementById('deductionUsernameInput');
 			var dateInput = document.getElementById('deductionDateInput');
+			var expectedVersionInput = document.getElementById('deductionExpectedVersionInput');
+			var editDateInput = document.getElementById('deductionEditDateInput');
+			var checkInInput = document.getElementById('deductionCheckInInput');
+			var checkOutInput = document.getElementById('deductionCheckOutInput');
 			var amountInput = document.getElementById('deductionAmountInput');
 			var clearButton = document.getElementById('clearDeductionButton');
 
@@ -1138,11 +1168,25 @@ $notice_error = $this->session->flashdata('attendance_notice_error');
 				return digits.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
 			};
 
+			var normalizeTimeForInput = function (value) {
+				var text = String(value || '').trim();
+				if (/^\d{2}:\d{2}:\d{2}$/.test(text) || /^\d{2}:\d{2}$/.test(text)) {
+					return text;
+				}
+				return '';
+			};
+
 			var openModal = function (button) {
 				var username = String(button.getAttribute('data-username') || '-');
 				var dateLabel = String(button.getAttribute('data-date-label') || '-');
 				var dateKey = String(button.getAttribute('data-date') || '');
+				var checkInTime = String(button.getAttribute('data-check-in-time') || '');
+				var checkOutTime = String(button.getAttribute('data-check-out-time') || '');
 				var currentCut = String(button.getAttribute('data-current-cut') || '0');
+				var recordVersion = parseInt(String(button.getAttribute('data-record-version') || '1'), 10);
+				if (!isFinite(recordVersion) || recordVersion <= 0) {
+					recordVersion = 1;
+				}
 
 				if (employeeValue) {
 					employeeValue.textContent = username;
@@ -1155,6 +1199,18 @@ $notice_error = $this->session->flashdata('attendance_notice_error');
 				}
 				if (dateInput) {
 					dateInput.value = dateKey;
+				}
+				if (editDateInput) {
+					editDateInput.value = dateKey;
+				}
+				if (checkInInput) {
+					checkInInput.value = normalizeTimeForInput(checkInTime);
+				}
+				if (checkOutInput) {
+					checkOutInput.value = normalizeTimeForInput(checkOutTime);
+				}
+				if (expectedVersionInput) {
+					expectedVersionInput.value = String(recordVersion);
 				}
 				amountInput.value = formatThousands(currentCut);
 

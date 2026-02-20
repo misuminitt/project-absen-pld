@@ -140,7 +140,7 @@ class Absen_sheet_sync {
 		$shift_profiles = function_exists('absen_shift_profile_book') ? absen_shift_profile_book() : array();
 		$default_shift = isset($shift_profiles['pagi']) && is_array($shift_profiles['pagi'])
 			? $shift_profiles['pagi']
-			: array('shift_name' => 'Shift Pagi - Sore', 'shift_time' => '08:00 - 23:00');
+			: array('shift_name' => 'Shift Pagi - Sore', 'shift_time' => '07:00 - 17:00');
 		$default_password = isset($this->config['default_user_password']) && trim((string) $this->config['default_user_password']) !== ''
 			? (string) $this->config['default_user_password']
 			: '123';
@@ -381,6 +381,11 @@ class Absen_sheet_sync {
 				? (string) $existing['profile_photo']
 				: '';
 			$coordinate_point = isset($existing['coordinate_point']) ? trim((string) $existing['coordinate_point']) : '';
+			$record_version = isset($existing['record_version']) ? (int) $existing['record_version'] : 1;
+			if ($record_version <= 0)
+			{
+				$record_version = 1;
+			}
 
 			$base_row = array(
 				'role' => 'user',
@@ -401,6 +406,7 @@ class Absen_sheet_sync {
 				'profile_photo' => $profile_photo,
 				'coordinate_point' => $coordinate_point,
 				'employee_status' => $status_value,
+				'record_version' => $record_version,
 				'sheet_row' => (int) $row_number,
 				'sheet_sync_source' => 'google_sheet'
 			);
@@ -451,6 +457,7 @@ class Absen_sheet_sync {
 			if (!isset($account_book[$username_key]) || !is_array($account_book[$username_key]))
 			{
 				$merged_row['sheet_last_sync_at'] = $sync_time;
+				$merged_row['record_version'] = 1;
 				$account_book[$username_key] = $merged_row;
 				$changed = TRUE;
 				$created += 1;
@@ -507,6 +514,12 @@ class Absen_sheet_sync {
 				}
 
 				$merged_row['sheet_last_sync_at'] = $sync_time;
+				$existing_record_version = isset($existing_row['record_version']) ? (int) $existing_row['record_version'] : 1;
+				if ($existing_record_version <= 0)
+				{
+					$existing_record_version = 1;
+				}
+				$merged_row['record_version'] = $existing_record_version + 1;
 				$account_book[$username_key] = $merged_row;
 				$changed = TRUE;
 				$updated += 1;
@@ -779,7 +792,7 @@ class Absen_sheet_sync {
 		$shift_profiles = function_exists('absen_shift_profile_book') ? absen_shift_profile_book() : array();
 		$default_shift = isset($shift_profiles['pagi']) && is_array($shift_profiles['pagi'])
 			? $shift_profiles['pagi']
-			: array('shift_name' => 'Shift Pagi - Sore', 'shift_time' => '08:00 - 23:00');
+			: array('shift_name' => 'Shift Pagi - Sore', 'shift_time' => '07:00 - 17:00');
 		$default_password = isset($this->config['default_user_password']) && trim((string) $this->config['default_user_password']) !== ''
 			? (string) $this->config['default_user_password']
 			: '123';
@@ -795,6 +808,7 @@ class Absen_sheet_sync {
 
 		$display_lookup = array();
 		$display_lookup_compact = array();
+		$employee_id_to_username = array();
 		$used_usernames = array();
 		foreach ($account_book as $username_key => $row)
 		{
@@ -829,6 +843,21 @@ class Absen_sheet_sync {
 			{
 				$display_lookup_compact[$name_compact] = $username_normalized;
 			}
+		}
+		$employee_id_lookup = $this->build_employee_id_lookup_from_accounts($account_book);
+		foreach ($employee_id_lookup as $employee_username => $employee_id)
+		{
+			$employee_username_key = strtolower(trim((string) $employee_username));
+			if ($employee_username_key === '')
+			{
+				continue;
+			}
+			$employee_id_key = $this->normalize_identifier_key($employee_id);
+			if ($employee_id_key === '' || isset($employee_id_to_username[$employee_id_key]))
+			{
+				continue;
+			}
+			$employee_id_to_username[$employee_id_key] = $employee_username_key;
 		}
 		$database_phone_lookup = $this->build_database_phone_lookup($account_book);
 		$attendance_phone_updates = array();
@@ -926,15 +955,21 @@ class Absen_sheet_sync {
 			$row = is_array($data_rows[$i]) ? $data_rows[$i] : array();
 			$row_number = $data_start_row + $i;
 			$name_value = $this->get_attendance_row_value($row, $field_indexes, 'name');
-			if ($name_value === '')
+			$employee_id_raw = $this->get_attendance_row_value($row, $field_indexes, 'employee_id');
+			if ($name_value === '' && trim((string) $employee_id_raw) === '')
 			{
 				continue;
 			}
 
 			$name_key = $this->normalize_name_key($name_value);
 			$name_compact = $this->normalize_name_lookup_key($name_value);
+			$employee_id_key = $this->normalize_identifier_key($employee_id_raw);
 			$username_key = '';
-			if ($name_key !== '' && isset($display_lookup[$name_key]))
+			if ($employee_id_key !== '' && isset($employee_id_to_username[$employee_id_key]))
+			{
+				$username_key = (string) $employee_id_to_username[$employee_id_key];
+			}
+			if ($username_key === '' && $name_key !== '' && isset($display_lookup[$name_key]))
 			{
 				$username_key = (string) $display_lookup[$name_key];
 			}
@@ -942,7 +977,7 @@ class Absen_sheet_sync {
 			{
 				$username_key = (string) $display_lookup_compact[$name_compact];
 			}
-			if ($username_key === '')
+			if ($username_key === '' && $name_value !== '')
 			{
 				$username_key = $this->build_unique_username_from_name($name_value, $used_usernames);
 			}
@@ -978,7 +1013,6 @@ class Absen_sheet_sync {
 				$branch_raw = $branch_attendance_raw;
 			}
 			$coordinate_raw = $this->get_attendance_row_value($row, $field_indexes, 'coordinate_point');
-			$employee_id_raw = $this->get_attendance_row_value($row, $field_indexes, 'employee_id');
 			$shift_name_raw = $this->get_attendance_row_value($row, $field_indexes, 'shift_name');
 			$cross_branch_raw = $this->get_attendance_row_value($row, $field_indexes, 'cross_branch_enabled');
 			$date_absen_raw = $this->get_attendance_row_value($row, $field_indexes, 'date_absen');
@@ -1138,8 +1172,10 @@ class Absen_sheet_sync {
 			$cross_branch_existing = $this->normalize_cross_branch_enabled_value(
 				isset($existing_account['cross_branch_enabled']) ? $existing_account['cross_branch_enabled'] : 0
 			);
-			$cross_branch_from_sheet = $this->normalize_cross_branch_enabled_value($cross_branch_raw);
-			$cross_branch_enabled = $cross_branch_from_sheet === 1 || $cross_branch_existing === 1 ? 1 : 0;
+			$cross_branch_raw_value = trim((string) $cross_branch_raw);
+			$cross_branch_enabled = $cross_branch_raw_value !== ''
+				? $this->normalize_cross_branch_enabled_value($cross_branch_raw_value)
+				: $cross_branch_existing;
 
 			$coordinate_raw_value = trim((string) $coordinate_raw);
 			$coordinate_existing = isset($existing_account['coordinate_point']) ? trim((string) $existing_account['coordinate_point']) : '';
@@ -1157,25 +1193,28 @@ class Absen_sheet_sync {
 				);
 			}
 
-			$shift_name_value = trim((string) $shift_name_raw);
 			$shift_name_existing = isset($existing_account['shift_name']) ? trim((string) $existing_account['shift_name']) : '';
-			if ($is_existing_account && $shift_name_existing !== '')
+			$shift_time_existing = isset($existing_account['shift_time']) ? trim((string) $existing_account['shift_time']) : '';
+			$shift_name_sheet = trim((string) $shift_name_raw);
+			$shift_time_sheet = $this->extract_shift_time_from_name($shift_name_sheet);
+			$shift_key_sheet = $this->resolve_shift_key_from_values($shift_name_sheet, $shift_time_sheet, '');
+			$shift_key_existing = $this->resolve_shift_key_from_values($shift_name_existing, $shift_time_existing, '');
+			$shift_key_value = $shift_key_sheet !== ''
+				? $shift_key_sheet
+				: ($shift_key_existing !== '' ? $shift_key_existing : 'pagi');
+			if (!isset($shift_profiles[$shift_key_value]) || !is_array($shift_profiles[$shift_key_value]))
 			{
-				$shift_name_value = $shift_name_existing;
+				$shift_key_value = 'pagi';
 			}
-			if ($shift_name_value === '')
-			{
-				$shift_name_value = isset($existing_account['shift_name']) && trim((string) $existing_account['shift_name']) !== ''
-					? (string) $existing_account['shift_name']
-					: (string) $default_shift['shift_name'];
-			}
-			$shift_time_value = $this->extract_shift_time_from_name($shift_name_value);
-			if ($shift_time_value === '')
-			{
-				$shift_time_value = isset($existing_account['shift_time']) && trim((string) $existing_account['shift_time']) !== ''
-					? (string) $existing_account['shift_time']
-					: (string) $default_shift['shift_time'];
-			}
+			$shift_profile_value = isset($shift_profiles[$shift_key_value]) && is_array($shift_profiles[$shift_key_value])
+				? $shift_profiles[$shift_key_value]
+				: $default_shift;
+			$shift_name_value = isset($shift_profile_value['shift_name'])
+				? (string) $shift_profile_value['shift_name']
+				: (string) $default_shift['shift_name'];
+			$shift_time_value = isset($shift_profile_value['shift_time'])
+				? (string) $shift_profile_value['shift_time']
+				: (string) $default_shift['shift_time'];
 
 			$password_value = isset($existing_account['password']) && trim((string) $existing_account['password']) !== ''
 				? (string) $existing_account['password']
@@ -1340,6 +1379,7 @@ class Absen_sheet_sync {
 					'jenis_pulang' => $this->get_attendance_row_value($row, $field_indexes, 'jenis_pulang'),
 					'alasan_izin_cuti' => $this->get_attendance_row_value($row, $field_indexes, 'alasan_izin_cuti'),
 					'alasan_alpha' => $this->get_attendance_row_value($row, $field_indexes, 'alasan_alpha'),
+					'record_version' => 1,
 					'sheet_sync_source' => 'google_sheet_attendance',
 					'sheet_sync_row' => (int) $row_number,
 					'sheet_month' => $month_key,
@@ -1444,7 +1484,13 @@ class Absen_sheet_sync {
 						}
 						if (!$this->attendance_rows_equal($existing_attendance, $merged_attendance))
 						{
+							$existing_record_version = isset($existing_attendance['record_version']) ? (int) $existing_attendance['record_version'] : 1;
+							if ($existing_record_version <= 0)
+							{
+								$existing_record_version = 1;
+							}
 							$merged_attendance['updated_at'] = $sync_time;
+							$merged_attendance['record_version'] = $existing_record_version + 1;
 							$attendance_records[$index_existing] = $merged_attendance;
 							$updated_attendance += 1;
 							$changed_attendance = TRUE;
@@ -1460,6 +1506,7 @@ class Absen_sheet_sync {
 				else
 				{
 					$attendance_row['updated_at'] = $sync_time;
+					$attendance_row['record_version'] = 1;
 					$attendance_records[] = $attendance_row;
 					$new_index = count($attendance_records) - 1;
 					$attendance_index[$attendance_key] = $new_index;
@@ -2250,6 +2297,7 @@ class Absen_sheet_sync {
 			$computed_late_1_3 = 0;
 			$computed_late_gt_4 = 0;
 				$baseline_totals = array(
+					'has_summary' => FALSE,
 					'hari_efektif' => 0,
 					'sudah_absen' => 0,
 					'total_hadir' => 0,
@@ -2313,11 +2361,16 @@ class Absen_sheet_sync {
 				}
 
 				$sheet_month = trim((string) (isset($row['sheet_month']) ? $row['sheet_month'] : ''));
-				if ($sheet_month === '' || $sheet_month === $target_month)
+				if ($sheet_month === '' && strlen($row_date) >= 7)
+				{
+					$sheet_month = substr($row_date, 0, 7);
+				}
+				if ($sheet_month === $target_month)
 				{
 					$has_summary = isset($row['sheet_total_hadir']) || isset($row['sheet_sudah_berapa_absen']) || isset($row['sheet_total_alpha']);
 					if ($has_summary)
 					{
+						$baseline_totals['has_summary'] = TRUE;
 						$baseline_totals['hari_efektif'] = max($baseline_totals['hari_efektif'], (int) (isset($row['sheet_hari_efektif']) ? $row['sheet_hari_efektif'] : 0));
 						$baseline_totals['sudah_absen'] = max($baseline_totals['sudah_absen'], (int) (isset($row['sheet_sudah_berapa_absen']) ? $row['sheet_sudah_berapa_absen'] : 0));
 							$baseline_totals['total_hadir'] = max($baseline_totals['total_hadir'], (int) (isset($row['sheet_total_hadir']) ? $row['sheet_total_hadir'] : 0));
@@ -2376,10 +2429,20 @@ class Absen_sheet_sync {
 			$computed_hadir = count($computed_hadir_dates);
 			$total_hadir = max($computed_hadir, $baseline_totals['total_hadir']);
 			$sudah_absen = max($total_hadir, $baseline_totals['sudah_absen']);
-				$total_telat_1_30 = max($computed_late_1_30, $baseline_totals['telat_1_30']);
-				$total_telat_31_60 = max($computed_late_31_60, $baseline_totals['telat_31_60']);
-				$total_telat_1_3 = max($computed_late_1_3, $baseline_totals['telat_1_3']);
-				$total_telat_gt_4 = max($computed_late_gt_4, $baseline_totals['telat_gt_4']);
+			if (!empty($baseline_totals['has_summary']))
+			{
+				$total_telat_1_30 = max(0, (int) $baseline_totals['telat_1_30']);
+				$total_telat_31_60 = max(0, (int) $baseline_totals['telat_31_60']);
+				$total_telat_1_3 = max(0, (int) $baseline_totals['telat_1_3']);
+				$total_telat_gt_4 = max(0, (int) $baseline_totals['telat_gt_4']);
+			}
+			else
+			{
+				$total_telat_1_30 = max(0, (int) $computed_late_1_30);
+				$total_telat_31_60 = max(0, (int) $computed_late_31_60);
+				$total_telat_1_3 = max(0, (int) $computed_late_1_3);
+				$total_telat_gt_4 = max(0, (int) $computed_late_gt_4);
+			}
 				$total_izin = max($total_izin, $baseline_totals['total_izin']);
 				$total_cuti = max($total_cuti, $baseline_totals['total_cuti']);
 				$total_izin_cuti = max($total_izin + $total_cuti, max($leave_count, $baseline_totals['total_izin_cuti']));
@@ -2403,49 +2466,56 @@ class Absen_sheet_sync {
 			}
 
 			$total_alpha = 0;
-			for ($activity_i = 0; $activity_i < count($activity_date_keys); $activity_i += 1)
+			if (!empty($baseline_totals['has_summary']))
 			{
-				$activity_date = (string) $activity_date_keys[$activity_i];
-				if (!$this->is_valid_attendance_date($activity_date))
+				$total_alpha = max(0, (int) $baseline_totals['total_alpha']);
+			}
+			else
+			{
+				for ($activity_i = 0; $activity_i < count($activity_date_keys); $activity_i += 1)
 				{
-					continue;
-				}
-				// Jangan menghitung tanggal di masa depan.
-				if (strcmp($activity_date, $today_key) > 0)
-				{
-					continue;
-				}
-				// Hari ini baru mulai hitung alpha setelah batas jam masuk.
-				if ($activity_date === $today_key && $current_seconds < $check_in_max_seconds)
-				{
-					continue;
-				}
+					$activity_date = (string) $activity_date_keys[$activity_i];
+					if (!$this->is_valid_attendance_date($activity_date))
+					{
+						continue;
+					}
+					// Jangan menghitung tanggal di masa depan.
+					if (strcmp($activity_date, $today_key) > 0)
+					{
+						continue;
+					}
+					// Hari ini baru mulai hitung alpha setelah batas jam masuk.
+					if ($activity_date === $today_key && $current_seconds < $check_in_max_seconds)
+					{
+						continue;
+					}
 
-				$day_has_activity =
-					(isset($checkin_by_date[$activity_date]) && !empty($checkin_by_date[$activity_date])) ||
-					(isset($checkout_by_date[$activity_date]) && !empty($checkout_by_date[$activity_date])) ||
-					(isset($leave_by_date[$activity_date]) && !empty($leave_by_date[$activity_date]));
-				if (!$day_has_activity)
-				{
-					continue;
-				}
+					$day_has_activity =
+						(isset($checkin_by_date[$activity_date]) && !empty($checkin_by_date[$activity_date])) ||
+						(isset($checkout_by_date[$activity_date]) && !empty($checkout_by_date[$activity_date])) ||
+						(isset($leave_by_date[$activity_date]) && !empty($leave_by_date[$activity_date]));
+					if (!$day_has_activity)
+					{
+						continue;
+					}
 
-				$weekday_n = (int) date('N', strtotime($activity_date.' 00:00:00'));
-				if ($weekday_n === $user_weekly_day_off)
-				{
-					continue;
-				}
+					$weekday_n = (int) date('N', strtotime($activity_date.' 00:00:00'));
+					if ($weekday_n === $user_weekly_day_off)
+					{
+						continue;
+					}
 
-				if (isset($checkin_by_date[$activity_date][$username_key]))
-				{
-					continue;
-				}
-				if (isset($leave_by_date[$activity_date][$username_key]))
-				{
-					continue;
-				}
+					if (isset($checkin_by_date[$activity_date][$username_key]))
+					{
+						continue;
+					}
+					if (isset($leave_by_date[$activity_date][$username_key]))
+					{
+						continue;
+					}
 
-				$total_alpha += 1;
+					$total_alpha += 1;
+				}
 			}
 
 			$range_end = $latest_activity_date;
@@ -2519,7 +2589,7 @@ class Absen_sheet_sync {
 				$alasan_alpha = $latest_record !== NULL && isset($latest_record['alasan_alpha'])
 					? trim((string) $latest_record['alasan_alpha'])
 					: '';
-				if ($alasan_alpha === '')
+				if ($alasan_alpha === '' && empty($baseline_totals['has_summary']))
 				{
 					$alasan_alpha = 'Tidak hadir';
 				}
@@ -4156,6 +4226,50 @@ class Absen_sheet_sync {
 		}
 
 		return '';
+	}
+
+	protected function resolve_shift_key_from_values($shift_name = '', $shift_time = '', $default_shift_key = '')
+	{
+		$shift_name_key = strtolower(trim((string) $shift_name));
+		$shift_time_key = strtolower(trim((string) $shift_time));
+		$default_key = strtolower(trim((string) $default_shift_key));
+
+		if ($shift_name_key === '' && $shift_time_key === '')
+		{
+			return $default_key;
+		}
+
+		if (
+			strpos($shift_name_key, 'multi') !== FALSE ||
+			(
+				(strpos($shift_time_key, '06:30') !== FALSE || strpos($shift_time_key, '07:00') !== FALSE) &&
+				(strpos($shift_time_key, '23:59') !== FALSE || strpos($shift_time_key, '23:00') !== FALSE)
+			)
+		)
+		{
+			return 'multishift';
+		}
+
+		if (
+			strpos($shift_name_key, 'siang') !== FALSE ||
+			strpos($shift_time_key, '14:00') !== FALSE ||
+			strpos($shift_time_key, '12:00') !== FALSE
+		)
+		{
+			return 'siang';
+		}
+
+		if (
+			strpos($shift_name_key, 'pagi') !== FALSE ||
+			strpos($shift_time_key, '07:00') !== FALSE ||
+			strpos($shift_time_key, '08:00') !== FALSE ||
+			strpos($shift_time_key, '07:30') !== FALSE
+		)
+		{
+			return 'pagi';
+		}
+
+		return $default_key;
 	}
 
 	protected function normalize_clock_time($value)

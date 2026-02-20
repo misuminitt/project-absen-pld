@@ -2,6 +2,7 @@
 defined('BASEPATH') OR exit('No direct script access allowed');
 
 class Login extends CI_Controller {
+	const COLLAB_STATE_STORE_KEY = 'admin_collab_state';
 
 	public function __construct()
 	{
@@ -150,7 +151,84 @@ class Login extends CI_Controller {
 
 	public function logout()
 	{
+		$is_logged_in = $this->session->userdata('absen_logged_in') === TRUE;
+		$role = strtolower(trim((string) $this->session->userdata('absen_role')));
+		$actor = strtolower(trim((string) $this->session->userdata('absen_username')));
+		if ($is_logged_in && $role === 'admin' && $actor !== '' && $this->collab_actor_has_pending_sync($actor))
+		{
+			$this->session->set_flashdata(
+				'account_notice_error',
+				'Logout ditolak. Perubahan kamu belum sync ke sheet. Jalankan "Sync Data Web ke Sheet" dulu, lalu logout.'
+			);
+			redirect('home');
+			return;
+		}
+
 		$this->session->sess_destroy();
 		redirect('login');
+	}
+
+	private function collab_state_file_path()
+	{
+		return APPPATH.'cache/admin_collab_state.json';
+	}
+
+	private function collab_load_state()
+	{
+		$file_path = $this->collab_state_file_path();
+		$loaded = NULL;
+		if (function_exists('absen_data_store_load_value'))
+		{
+			$loaded = absen_data_store_load_value(self::COLLAB_STATE_STORE_KEY, NULL, $file_path);
+		}
+		elseif (is_file($file_path))
+		{
+			$content = @file_get_contents($file_path);
+			if ($content !== FALSE && trim((string) $content) !== '')
+			{
+				$decoded = json_decode((string) $content, TRUE);
+				if (is_array($decoded))
+				{
+					$loaded = $decoded;
+				}
+			}
+		}
+
+		$state = is_array($loaded) ? $loaded : array();
+		$state['last_synced_revision'] = isset($state['last_synced_revision']) ? max(0, (int) $state['last_synced_revision']) : 0;
+		$state['pending_sync'] = isset($state['pending_sync']) && is_array($state['pending_sync']) ? $state['pending_sync'] : array();
+		return $state;
+	}
+
+	private function collab_actor_has_pending_sync($actor)
+	{
+		$actor_key = strtolower(trim((string) $actor));
+		if ($actor_key === '')
+		{
+			return FALSE;
+		}
+		$state = $this->collab_load_state();
+		$last_synced_revision = isset($state['last_synced_revision']) ? (int) $state['last_synced_revision'] : 0;
+		$pending_map = isset($state['pending_sync']) && is_array($state['pending_sync']) ? $state['pending_sync'] : array();
+		if (empty($pending_map))
+		{
+			return FALSE;
+		}
+
+		foreach ($pending_map as $pending_actor => $pending_row)
+		{
+			if (strtolower(trim((string) $pending_actor)) !== $actor_key)
+			{
+				continue;
+			}
+			$pending_item = is_array($pending_row) ? $pending_row : array();
+			$pending_revision = isset($pending_item['revision']) ? (int) $pending_item['revision'] : 0;
+			if ($pending_revision > $last_synced_revision)
+			{
+				return TRUE;
+			}
+		}
+
+		return FALSE;
 	}
 }

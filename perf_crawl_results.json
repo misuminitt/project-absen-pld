@@ -1,0 +1,182 @@
+{
+  "checked_at": "2026-02-19 16:22:06",
+  "base": "https://absenpanha.com",
+  "results": [
+    {
+      "role": "admin_bos",
+      "login": {
+        "ok": true,
+        "status": 200,
+        "final_url": "https://absenpanha.com/home",
+        "time_sec": 2.929
+      },
+      "pages": [
+        {
+          "requested": "https://absenpanha.com/home",
+          "final": "https://absenpanha.com/home",
+          "status": 200,
+          "time_sec": 1.863,
+          "bytes": 66400
+        },
+        {
+          "requested": "https://absenpanha.com/home/log_data",
+          "final": "https://absenpanha.com/home/log_data",
+          "status": 200,
+          "time_sec": 0.359,
+          "bytes": 32950
+        },
+        {
+          "requested": "https://absenpanha.com/home/employee_data",
+          "final": "https://absenpanha.com/home/employee_data",
+          "status": 200,
+          "time_sec": 0.745,
+          "bytes": 112903
+        },
+        {
+          "requested": "https://absenpanha.com/home/loan_requests",
+          "final": "https://absenpanha.com/home/loan_requests",
+          "status": 200,
+          "time_sec": 0.644,
+          "bytes": 14368
+        },
+        {
+          "requested": "https://absenpanha.com/home/leave_requests",
+          "final": "https://absenpanha.com/home/leave_requests",
+          "status": 200,
+          "time_sec": 0.654,
+          "bytes": 14810
+        },
+        {
+          "requested": "https://absenpanha.com/home/overtime_data",
+          "final": "https://absenpanha.com/home/overtime_data",
+          "status": 200,
+          "time_sec": 0.641,
+          "bytes": 19725
+        },
+        {
+          "requested": "https://absenpanha.com/home/cara_pakai",
+          "final": "https://absenpanha.com/home/cara_pakai",
+          "status": 200,
+          "time_sec": 0.353,
+          "bytes": 16566
+        },
+        {
+          "requested": "https://absenpanha.com/home/log_data?page=4",
+          "final": "https://absenpanha.com/home/log_data?page=4",
+          "status": 200,
+          "time_sec": 0.355,
+          "bytes": 33667
+        },
+        {
+          "requested": "https://absenpanha.com/home/log_data?page=2",
+          "final": "https://absenpanha.com/home/log_data?page=2",
+          "status": 200,
+          "time_sec": 0.357,
+          "bytes": 32802
+        },
+        {
+          "requested": "https://absenpanha.com/home/log_data?page=5",
+          "final": "https://absenpanha.com/home/log_data?page=5",
+          "status": 200,
+          "time_sec": 0.349,
+          "bytes": 33659
+        },
+        {
+          "requested": "https://absenpanha.com/home/log_data?page=3",
+          "final": "https://absenpanha.com/home/log_data?page=3",
+          "status": 200,
+          "time_sec": 0.352,
+          "bytes": 33415
+        },
+        {
+          "requested": "https://absenpanha.com/home/log_data?page=1",
+          "final": "https://absenpanha.com/home/log_data?page=1",
+          "status": 200,
+          "time_sec": 0.347,
+          "bytes": 32950
+        },
+        {
+          "requested": "https://absenpanha.com/home/employee_data_monthly",
+          "final": "https://absenpanha.com/home/employee_data_monthly",
+          "status": 200,
+          "time_sec": 0.672,
+          "bytes": 16703
+        },
+        {
+          "requested": "https://absenpanha.com/home/log_data?page=6",
+          "final": "https://absenpanha.com/home/log_data?page=6",
+          "status": 200,
+          "time_sec": 0.346,
+          "bytes": 34280
+        },
+        {
+          "requested": "https://absenpanha.com/home/log_data?page=7",
+          "final": "https://absenpanha.com/home/log_data?page=7",
+          "status": 200,
+          "time_sec": 0.361,
+          "bytes": 33522
+        },
+        {
+          "requested": "https://absenpanha.com/home/log_data?page=8",
+          "final": "https://absenpanha.com/home/log_data?page=8",
+          "status": 200,
+          "time_sec": 0.357,
+          "bytes": 33618
+        },
+        {
+          "requested": "https://absenpanha.com/home/log_data?page=9",
+          "final": "https://absenpanha.com/home/log_data?page=9",
+          "status": 200,
+          "time_sec": 0.384,
+          "bytes": 33620
+        },
+        {
+          "requested": "https://absenpanha.com/home/log_data?page=10",
+          "final": "https://absenpanha.com/home/log_data?page=10",
+          "status": 200,
+          "time_sec": 0.395,
+          "bytes": 35599
+        },
+        {
+          "requested": "https://absenpanha.com/home/log_data?page=11",
+          "final": "https://absenpanha.com/home/log_data?page=11",
+          "status": 200,
+          "time_sec": 0.409,
+          "bytes": 35656
+        },
+        {
+          "requested": "https://absenpanha.com/home/log_data?page=12",
+          "final": "https://absenpanha.com/home/log_data?page=12",
+          "status": 200,
+          "time_sec": 0.411,
+          "bytes": 33000
+        },
+        {
+          "requested": "https://absenpanha.com/home/log_data?page=13",
+          "final": "https://absenpanha.com/home/log_data?page=13",
+          "status": 200,
+          "time_sec": 0.353,
+          "bytes": 21920
+        }
+      ]
+    },
+    {
+      "role": "user_acep",
+      "login": {
+        "ok": true,
+        "status": 200,
+        "final_url": "https://absenpanha.com/home",
+        "time_sec": 1.536
+      },
+      "pages": [
+        {
+          "requested": "https://absenpanha.com/home",
+          "final": "https://absenpanha.com/home",
+          "status": 200,
+          "time_sec": 0.646,
+          "bytes": 16092
+        }
+      ]
+    }
+  ]
+}

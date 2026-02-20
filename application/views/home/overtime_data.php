@@ -44,6 +44,7 @@ if (empty($normalized_employee_options))
 
 $notice_success = $this->session->flashdata('overtime_notice_success');
 $notice_error = $this->session->flashdata('overtime_notice_error');
+$is_developer_actor = isset($is_developer_actor) && $is_developer_actor === TRUE;
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -310,6 +311,27 @@ $notice_error = $this->session->flashdata('overtime_notice_error');
 			white-space: nowrap;
 		}
 
+		.row-actions {
+			display: inline-flex;
+			align-items: center;
+			gap: 0.4rem;
+		}
+
+		.row-action-form {
+			margin: 0;
+		}
+
+		.row-delete-btn {
+			border: 0;
+			border-radius: 8px;
+			padding: 0.38rem 0.58rem;
+			font-size: 0.72rem;
+			font-weight: 700;
+			cursor: pointer;
+			color: #ffffff;
+			background: #8f2630;
+		}
+
 		.phone {
 			white-space: nowrap;
 			font-weight: 600;
@@ -388,7 +410,153 @@ $notice_error = $this->session->flashdata('overtime_notice_error');
 				grid-template-columns: 1fr;
 			}
 		}
-	</style>
+	
+		/* mobile-fix-20260219 */
+		@media (max-width: 860px) {
+			.page {
+				padding: 0.9rem 0.72rem 1.2rem;
+			}
+
+			.head {
+				flex-direction: column;
+				align-items: flex-start;
+				gap: 0.62rem;
+			}
+
+			.title {
+				font-size: 1.05rem;
+				line-height: 1.3;
+			}
+
+			.actions {
+				width: 100%;
+				display: grid;
+				grid-template-columns: 1fr;
+				gap: 0.42rem;
+			}
+
+			.btn {
+				width: 100%;
+				justify-content: center;
+			}
+
+			.table-tools {
+				padding: 0.62rem 0.72rem 0;
+			}
+
+			.search-input {
+				width: 100%;
+				max-width: 100%;
+			}
+
+			.search-help {
+				margin-top: 0.36rem;
+				font-size: 0.7rem;
+				line-height: 1.45;
+			}
+
+			.table-meta {
+				flex-direction: column;
+				align-items: flex-start;
+				gap: 0.3rem;
+				padding: 0.62rem 0.72rem;
+			}
+
+			.pager {
+				padding: 0 0.72rem 0.72rem;
+				gap: 0.35rem;
+			}
+
+			.pager-btn {
+				flex: 1 1 0;
+				min-width: 2.3rem;
+				height: 2.2rem;
+				padding: 0 0.5rem;
+				font-size: 0.75rem;
+			}
+
+			.pager-btn.wide {
+				min-width: 4.5rem;
+			}
+
+			.admin-actions,
+			.admin-action-form,
+			.row-actions {
+				flex-wrap: wrap;
+			}
+
+			.admin-action-form {
+				width: 100%;
+			}
+
+			.admin-btn,
+			.row-delete-btn {
+				width: 100%;
+				text-align: center;
+			}
+		}
+
+		@media (max-width: 520px) {
+			.page {
+				padding: 0.75rem 0.55rem 1rem;
+			}
+
+			.table-card,
+			.form-card {
+				border-radius: 12px;
+			}
+
+			th,
+			td {
+				padding: 0.5rem 0.46rem;
+				font-size: 0.74rem;
+			}
+		}
+		/* mobile-fix-20260219-overrides */
+		@media (max-width: 860px) {
+			.form-actions {
+				margin-top: 0.7rem;
+			}
+
+			.submit-btn {
+				width: 100%;
+			}
+		}
+
+		/* mobile-fix-20260219-navbar-compact */
+		@media (max-width: 860px) {
+			.head {
+				flex-direction: column;
+				align-items: flex-start;
+				gap: 0.55rem;
+			}
+
+			.actions {
+				width: 100%;
+				display: flex;
+				flex-wrap: wrap;
+				gap: 0.4rem;
+			}
+
+			.btn {
+				width: auto;
+				min-width: 0;
+				padding: 0.46rem 0.72rem;
+				font-size: 0.74rem;
+			}
+		}
+
+		@media (max-width: 520px) {
+			.actions .btn {
+				flex: 1 1 calc(50% - 0.4rem);
+				justify-content: center;
+			}
+
+			.actions .btn.primary {
+				flex-basis: 100%;
+			}
+		}
+</style>
 </head>
 <body>
 	<div class="page">
@@ -477,6 +645,9 @@ $notice_error = $this->session->flashdata('overtime_notice_error');
 								<th>Nominal</th>
 								<th>Alasan Lembur</th>
 								<th>Diinput</th>
+								<?php if ($is_developer_actor): ?>
+									<th>Aksi Developer</th>
+								<?php endif; ?>
 							</tr>
 						</thead>
 						<tbody id="overtimeTableBody">
@@ -496,7 +667,22 @@ $notice_error = $this->session->flashdata('overtime_notice_error');
 								$profile_photo_url = $profile_photo_value;
 								if (strpos($profile_photo_url, 'data:') !== 0 && preg_match('/^https?:\/\//i', $profile_photo_url) !== 1)
 								{
-									$profile_photo_url = base_url(ltrim($profile_photo_url, '/'));
+									$profile_photo_relative = ltrim($profile_photo_url, '/\\');
+									$profile_photo_info = pathinfo($profile_photo_relative);
+									$profile_photo_thumb_relative = '';
+									if (isset($profile_photo_info['filename']) && trim((string) $profile_photo_info['filename']) !== '')
+									{
+										$profile_photo_dir = isset($profile_photo_info['dirname']) ? (string) $profile_photo_info['dirname'] : '';
+										$profile_photo_thumb_relative = $profile_photo_dir !== '' && $profile_photo_dir !== '.'
+											? $profile_photo_dir.'/'.$profile_photo_info['filename'].'_thumb.jpg'
+											: $profile_photo_info['filename'].'_thumb.jpg';
+									}
+									if ($profile_photo_thumb_relative !== '' &&
+										is_file(FCPATH.str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $profile_photo_thumb_relative)))
+									{
+										$profile_photo_relative = $profile_photo_thumb_relative;
+									}
+									$profile_photo_url = base_url(ltrim($profile_photo_relative, '/'));
 								}
 								$job_title_value = isset($row['job_title']) && trim((string) $row['job_title']) !== ''
 									? (string) $row['job_title']
@@ -506,7 +692,7 @@ $notice_error = $this->session->flashdata('overtime_notice_error');
 									<td class="row-no"><?php echo $no; ?></td>
 									<td><?php echo htmlspecialchars($employee_id_value, ENT_QUOTES, 'UTF-8'); ?></td>
 									<td>
-										<img class="profile-avatar" src="<?php echo htmlspecialchars($profile_photo_url, ENT_QUOTES, 'UTF-8'); ?>" alt="PP <?php echo htmlspecialchars($username_value, ENT_QUOTES, 'UTF-8'); ?>">
+										<img class="profile-avatar" src="<?php echo htmlspecialchars($profile_photo_url, ENT_QUOTES, 'UTF-8'); ?>" alt="PP <?php echo htmlspecialchars($username_value, ENT_QUOTES, 'UTF-8'); ?>" loading="lazy" decoding="async">
 									</td>
 									<td><?php echo htmlspecialchars($username_value, ENT_QUOTES, 'UTF-8'); ?></td>
 									<td><span class="phone"><?php echo htmlspecialchars($phone_value, ENT_QUOTES, 'UTF-8'); ?></span></td>
@@ -516,6 +702,21 @@ $notice_error = $this->session->flashdata('overtime_notice_error');
 									<td class="money"><?php echo htmlspecialchars(isset($row['nominal_label']) ? (string) $row['nominal_label'] : 'Rp 0', ENT_QUOTES, 'UTF-8'); ?></td>
 									<td><?php echo htmlspecialchars(isset($row['reason']) ? (string) $row['reason'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
 									<td><?php echo htmlspecialchars(isset($row['created_at']) ? (string) $row['created_at'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
+									<?php if ($is_developer_actor): ?>
+										<td>
+											<?php $record_id = isset($row['id']) ? trim((string) $row['id']) : ''; ?>
+											<?php if ($record_id !== ''): ?>
+												<div class="row-actions">
+													<form method="post" action="<?php echo site_url('home/delete_overtime_record'); ?>" class="row-action-form" onsubmit="return window.confirm('Hapus data lembur ini?');">
+														<input type="hidden" name="record_id" value="<?php echo htmlspecialchars($record_id, ENT_QUOTES, 'UTF-8'); ?>">
+														<button type="submit" class="row-delete-btn">Hapus</button>
+													</form>
+												</div>
+											<?php else: ?>
+												-
+											<?php endif; ?>
+										</td>
+									<?php endif; ?>
 								</tr>
 								<?php $no += 1; ?>
 							<?php endforeach; ?>

@@ -128,6 +128,7 @@ class Login extends CI_Controller {
 						'absen_salary_tier' => isset($account['salary_tier']) ? (string) $account['salary_tier'] : '',
 						'absen_salary_monthly' => isset($account['salary_monthly']) ? (int) $account['salary_monthly'] : 0,
 						'absen_work_days' => isset($account['work_days']) ? (int) $account['work_days'] : 0,
+						'absen_weekly_day_off' => isset($account['weekly_day_off']) ? (int) $account['weekly_day_off'] : 1,
 						'absen_password_change_required' => $password_change_required ? 1 : 0,
 						'absen_last_activity_at' => time()
 					));

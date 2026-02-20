@@ -3,6 +3,28 @@
 $rows = isset($rows) && is_array($rows) ? $rows : array();
 $selected_month = isset($selected_month) ? (string) $selected_month : date('Y-m');
 $selected_month_label = isset($selected_month_label) ? (string) $selected_month_label : date('F Y');
+$month_pagination = isset($month_pagination) && is_array($month_pagination) ? $month_pagination : array();
+$current_page = isset($month_pagination['current_page']) ? (int) $month_pagination['current_page'] : 1;
+$total_pages = isset($month_pagination['total_pages']) ? (int) $month_pagination['total_pages'] : 1;
+if ($current_page < 1)
+{
+	$current_page = 1;
+}
+if ($total_pages < 1)
+{
+	$total_pages = 1;
+}
+$page_window = 5;
+$start_page = max(1, $current_page - (int) floor($page_window / 2));
+$end_page = min($total_pages, $start_page + $page_window - 1);
+if (($end_page - $start_page + 1) < $page_window)
+{
+	$start_page = max(1, $end_page - $page_window + 1);
+}
+$build_month_page_url = function ($page_number) {
+	$page_value = max(1, (int) $page_number);
+	return site_url('home/employee_data_monthly').'?page='.$page_value;
+};
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -175,6 +197,49 @@ $selected_month_label = isset($selected_month_label) ? (string) $selected_month_
 			font-weight: 600;
 		}
 
+		.month-pager {
+			display: flex;
+			align-items: center;
+			gap: 0.45rem;
+			padding: 0.65rem 0.85rem 0.2rem;
+			flex-wrap: wrap;
+		}
+
+		.pager-btn {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			min-width: 2.65rem;
+			height: 2.1rem;
+			padding: 0 0.72rem;
+			border-radius: 0.7rem;
+			border: 1px solid #b9cfe4;
+			background: #ffffff;
+			color: #1c4670;
+			font-size: 0.78rem;
+			font-weight: 700;
+			text-decoration: none;
+		}
+
+		.pager-btn:hover {
+			background: #f0f7ff;
+		}
+
+		.pager-btn.active {
+			background: linear-gradient(180deg, #1f6fbd 0%, #0f5c93 100%);
+			border-color: #0f5c93;
+			color: #ffffff;
+		}
+
+		.pager-btn.wide {
+			min-width: 5.8rem;
+		}
+
+		.pager-btn.is-disabled {
+			opacity: 0.46;
+			pointer-events: none;
+		}
+
 		.table-wrap {
 			overflow-x: auto;
 		}
@@ -266,7 +331,144 @@ $selected_month_label = isset($selected_month_label) ? (string) $selected_month_
 			font-size: 0.9rem;
 			color: #526a82;
 		}
-	</style>
+	
+		/* mobile-fix-20260219 */
+		@media (max-width: 860px) {
+			.page {
+				padding: 0.9rem 0.72rem 1.2rem;
+			}
+
+			.head {
+				flex-direction: column;
+				align-items: flex-start;
+				gap: 0.62rem;
+			}
+
+			.title {
+				font-size: 1.05rem;
+				line-height: 1.3;
+			}
+
+			.actions {
+				width: 100%;
+				display: grid;
+				grid-template-columns: 1fr;
+				gap: 0.42rem;
+			}
+
+			.btn,
+			.mode-link {
+				width: 100%;
+				justify-content: center;
+			}
+
+			.mode-tabs {
+				padding: 0.72rem 0.72rem 0;
+			}
+
+			.meta-line {
+				font-size: 0.76rem;
+				line-height: 1.45;
+			}
+
+			.table-tools {
+				padding: 0.62rem 0.72rem 0;
+				gap: 0.56rem;
+			}
+
+			.search-input {
+				width: 100%;
+				max-width: 100%;
+			}
+
+			.month-form {
+				width: 100%;
+				display: grid;
+				grid-template-columns: 1fr auto;
+				gap: 0.42rem;
+			}
+
+			.month-input {
+				width: 100%;
+				min-width: 0;
+			}
+
+			.month-pager {
+				padding: 0.55rem 0.72rem 0.1rem;
+				gap: 0.35rem;
+			}
+
+			.pager-btn {
+				flex: 1 1 0;
+				min-width: 2.3rem;
+				height: 2.2rem;
+				padding: 0 0.5rem;
+				font-size: 0.75rem;
+			}
+
+			.pager-btn.wide {
+				min-width: 4.5rem;
+			}
+		}
+
+		@media (max-width: 520px) {
+			.page {
+				padding: 0.75rem 0.55rem 1rem;
+			}
+
+			.table-card {
+				border-radius: 12px;
+			}
+
+			.month-form {
+				grid-template-columns: 1fr;
+			}
+
+			.month-submit {
+				width: 100%;
+			}
+
+			th,
+			td {
+				padding: 0.5rem 0.46rem;
+				font-size: 0.74rem;
+			}
+		}
+
+		/* mobile-fix-20260219-navbar-compact */
+		@media (max-width: 860px) {
+			.head {
+				flex-direction: column;
+				align-items: flex-start;
+				gap: 0.55rem;
+			}
+
+			.actions {
+				width: 100%;
+				display: flex;
+				flex-wrap: wrap;
+				gap: 0.4rem;
+			}
+
+			.btn {
+				width: auto;
+				min-width: 0;
+				padding: 0.46rem 0.72rem;
+				font-size: 0.74rem;
+			}
+		}
+
+		@media (max-width: 520px) {
+			.actions .btn {
+				flex: 1 1 calc(50% - 0.4rem);
+				justify-content: center;
+			}
+
+			.actions .btn.primary {
+				flex-basis: 100%;
+			}
+		}
+</style>
 </head>
 <body>
 	<div class="page">
@@ -278,13 +480,30 @@ $selected_month_label = isset($selected_month_label) ? (string) $selected_month_
 				<a href="<?php echo site_url('logout'); ?>" class="btn primary">Logout</a>
 			</div>
 		</div>
-		<p class="meta-line">Periode: <strong><?php echo htmlspecialchars($selected_month_label, ENT_QUOTES, 'UTF-8'); ?></strong></p>
+		<p class="meta-line">Periode: <strong><?php echo htmlspecialchars($selected_month_label, ENT_QUOTES, 'UTF-8'); ?></strong> | Halaman <?php echo (int) $current_page; ?> dari <?php echo (int) $total_pages; ?>.</p>
 
 		<div class="table-card">
 			<div class="mode-tabs">
 				<a href="<?php echo site_url('home/employee_data'); ?>" class="mode-link">Data Harian</a>
 				<a href="<?php echo site_url('home/employee_data_monthly'); ?>" class="mode-link active">Data Bulanan</a>
 			</div>
+			<?php if ($total_pages > 1): ?>
+				<div class="month-pager">
+					<?php if ($current_page > 1): ?>
+						<a href="<?php echo htmlspecialchars($build_month_page_url($current_page - 1), ENT_QUOTES, 'UTF-8'); ?>" class="pager-btn wide">Sebelumnya</a>
+					<?php else: ?>
+						<span class="pager-btn wide is-disabled">Sebelumnya</span>
+					<?php endif; ?>
+					<?php for ($page_number = $start_page; $page_number <= $end_page; $page_number += 1): ?>
+						<a href="<?php echo htmlspecialchars($build_month_page_url($page_number), ENT_QUOTES, 'UTF-8'); ?>" class="pager-btn<?php echo $page_number === $current_page ? ' active' : ''; ?>"><?php echo $page_number; ?></a>
+					<?php endfor; ?>
+					<?php if ($current_page < $total_pages): ?>
+						<a href="<?php echo htmlspecialchars($build_month_page_url($current_page + 1), ENT_QUOTES, 'UTF-8'); ?>" class="pager-btn wide">Berikutnya</a>
+					<?php else: ?>
+						<span class="pager-btn wide is-disabled">Berikutnya</span>
+					<?php endif; ?>
+				</div>
+			<?php endif; ?>
 
 			<?php if (empty($rows)): ?>
 				<div class="table-tools">
@@ -350,7 +569,22 @@ $selected_month_label = isset($selected_month_label) ? (string) $selected_month_
 								$profile_photo_url = $profile_photo;
 								if (strpos($profile_photo_url, 'data:') !== 0 && preg_match('/^https?:\/\//i', $profile_photo_url) !== 1)
 								{
-									$profile_photo_url = base_url(ltrim($profile_photo_url, '/'));
+									$profile_photo_relative = ltrim($profile_photo_url, '/\\');
+									$profile_photo_info = pathinfo($profile_photo_relative);
+									$profile_photo_thumb_relative = '';
+									if (isset($profile_photo_info['filename']) && trim((string) $profile_photo_info['filename']) !== '')
+									{
+										$profile_photo_dir = isset($profile_photo_info['dirname']) ? (string) $profile_photo_info['dirname'] : '';
+										$profile_photo_thumb_relative = $profile_photo_dir !== '' && $profile_photo_dir !== '.'
+											? $profile_photo_dir.'/'.$profile_photo_info['filename'].'_thumb.jpg'
+											: $profile_photo_info['filename'].'_thumb.jpg';
+									}
+									if ($profile_photo_thumb_relative !== '' &&
+										is_file(FCPATH.str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $profile_photo_thumb_relative)))
+									{
+										$profile_photo_relative = $profile_photo_thumb_relative;
+									}
+									$profile_photo_url = base_url(ltrim($profile_photo_relative, '/'));
 								}
 								$address = isset($row['address']) && trim((string) $row['address']) !== ''
 									? (string) $row['address']
@@ -366,7 +600,7 @@ $selected_month_label = isset($selected_month_label) ? (string) $selected_month_
 									<td><?php echo $no; ?></td>
 									<td><?php echo htmlspecialchars($employee_id, ENT_QUOTES, 'UTF-8'); ?></td>
 									<td>
-										<img class="profile-avatar" src="<?php echo htmlspecialchars($profile_photo_url, ENT_QUOTES, 'UTF-8'); ?>" alt="PP <?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?>">
+										<img class="profile-avatar" src="<?php echo htmlspecialchars($profile_photo_url, ENT_QUOTES, 'UTF-8'); ?>" alt="PP <?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?>" loading="lazy" decoding="async">
 									</td>
 									<td><?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?></td>
 									<td class="address-cell"><?php echo htmlspecialchars($address, ENT_QUOTES, 'UTF-8'); ?></td>

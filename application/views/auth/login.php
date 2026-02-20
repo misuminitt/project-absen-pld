@@ -328,7 +328,121 @@ $logo_url = $base_path.'/'.$logo_path;
 				font-size: 1.7rem;
 			}
 		}
-	</style>
+	
+		/* mobile-fix-20260219 */
+		@media (max-width: 760px) {
+			body {
+				overflow: auto;
+				padding: 20px 14px;
+			}
+
+			.login-card {
+				margin-top: -48px;
+				padding: 102px 20px 24px;
+				border-radius: 22px;
+			}
+
+			.logo-badge {
+				top: -170px;
+			}
+
+			.logo-image {
+				width: 270px;
+				height: 270px;
+			}
+
+			.subtitle {
+				margin: 10px 0 22px;
+				font-size: 0.9rem;
+			}
+		}
+
+		@media (max-width: 420px) {
+			.login-card {
+				margin-top: -40px;
+				padding: 96px 18px 22px;
+			}
+
+			h1 {
+				font-size: 1.45rem;
+			}
+
+			.label-line {
+				flex-direction: column;
+				align-items: flex-start;
+				gap: 6px;
+			}
+
+			.input-field {
+				height: 46px;
+				font-size: 0.9rem;
+			}
+		}
+
+		/* mobile-fix-20260219-logo-lock-center */
+		@media (max-width: 760px) {
+			body {
+				padding: 18px 12px;
+				overflow: auto;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+			}
+
+			.shell {
+				max-width: 460px;
+				width: 100%;
+				min-height: calc(100dvh - 36px);
+				padding-top: 0;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+			}
+
+			.login-card {
+				margin-top: 0;
+				width: 100%;
+				padding: 24px 18px 22px;
+				border-radius: 22px;
+			}
+
+			.logo-badge {
+				position: fixed;
+				top: -88px;
+				left: 50%;
+				transform: translateX(-50%);
+				z-index: 4;
+			}
+
+			.logo-image {
+				width: 300px;
+				height: 300px;
+			}
+		}
+
+		@media (max-width: 420px) {
+			.shell {
+				min-height: calc(100dvh - 36px);
+			}
+
+			.login-card {
+				padding: 20px 16px;
+			}
+
+			.logo-badge {
+				position: fixed;
+				top: -88px;
+				left: 50%;
+				transform: translateX(-50%);
+				z-index: 4;
+			}
+
+			.logo-image {
+				width: 300px;
+				height: 300px;
+			}
+		}
+</style>
 </head>
 <body>
 	<div class="bg-shape bg-shape-a"></div>

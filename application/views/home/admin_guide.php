@@ -12,16 +12,8 @@ if ($base_path === '/' || $base_path === '.')
 	$base_path = '';
 }
 
-$logo_path = 'src/assets/pns_dashboard.png';
-if (is_file(FCPATH.'src/assets/pns_dashboard.png'))
-{
-	$logo_path = 'src/assets/pns_dashboard.png';
-}
-elseif (is_file(FCPATH.'src/assts/pns_dashboard.png'))
-{
-	$logo_path = 'src/assts/pns_dashboard.png';
-}
-elseif (is_file(FCPATH.'src/assets/pns_logo_nav.png'))
+$logo_path = 'src/assets/pns_logo_nav.png';
+if (is_file(FCPATH.'src/assets/pns_logo_nav.png'))
 {
 	$logo_path = 'src/assets/pns_logo_nav.png';
 }
@@ -29,13 +21,21 @@ elseif (is_file(FCPATH.'src/assts/pns_logo_nav.png'))
 {
 	$logo_path = 'src/assts/pns_logo_nav.png';
 }
+elseif (is_file(FCPATH.'src/assets/pns_new.png'))
+{
+	$logo_path = 'src/assets/pns_new.png';
+}
 elseif (is_file(FCPATH.'src/assts/pns_new.png'))
 {
 	$logo_path = 'src/assts/pns_new.png';
 }
-elseif (is_file(FCPATH.'src/assets/pns_new.png'))
+elseif (is_file(FCPATH.'src/assets/pns_dashboard.png'))
 {
-	$logo_path = 'src/assets/pns_new.png';
+	$logo_path = 'src/assets/pns_dashboard.png';
+}
+elseif (is_file(FCPATH.'src/assts/pns_dashboard.png'))
+{
+	$logo_path = 'src/assts/pns_dashboard.png';
 }
 
 $logo_url = $base_path.'/'.$logo_path;
@@ -287,6 +287,23 @@ $logo_url = $base_path.'/'.$logo_path;
 			font-weight: 700;
 		}
 
+		.code-box {
+			margin-top: 0.72rem;
+			padding: 0.72rem 0.82rem;
+			border-radius: 10px;
+			background: #0f2f58;
+			color: #d9ecff;
+			border: 1px solid #27527f;
+		}
+
+		.code-box code {
+			display: block;
+			white-space: pre-wrap;
+			font-family: Consolas, 'Courier New', monospace;
+			font-size: 0.76rem;
+			line-height: 1.58;
+		}
+
 		.faq-list {
 			display: grid;
 			gap: 0.62rem;
@@ -373,7 +390,144 @@ $logo_url = $base_path.'/'.$logo_path;
 				justify-content: flex-end;
 			}
 		}
-	</style>
+	
+		/* mobile-fix-20260219 */
+		@media (max-width: 860px) {
+			.topbar-container {
+				padding: 0.78rem;
+			}
+
+			.topbar-inner {
+				flex-direction: column;
+				align-items: flex-start;
+				gap: 0.56rem;
+			}
+
+			.brand-text {
+				display: none;
+			}
+
+			.top-actions {
+				width: 100%;
+				display: grid;
+				grid-template-columns: repeat(2, minmax(0, 1fr));
+				gap: 0.4rem;
+			}
+
+			.back-btn,
+			.logout {
+				width: 100%;
+				padding: 0.48rem 0.68rem;
+				font-size: 0.76rem;
+			}
+
+			.page {
+				padding: 0.9rem 0.72rem 1.2rem;
+			}
+
+			.hero {
+				padding: 0.9rem;
+				border-radius: 14px;
+			}
+
+			.hero h1 {
+				font-size: 1.08rem;
+			}
+
+			.hero p {
+				font-size: 0.8rem;
+			}
+
+			.section {
+				padding: 0.82rem;
+				border-radius: 13px;
+			}
+
+			.section h2 {
+				font-size: 0.92rem;
+			}
+
+			.section p,
+			.section li {
+				font-size: 0.79rem;
+			}
+
+			.grid {
+				grid-template-columns: 1fr;
+			}
+		}
+
+		@media (max-width: 520px) {
+			.page {
+				padding: 0.75rem 0.55rem 1rem;
+			}
+
+			.top-actions {
+				grid-template-columns: 1fr;
+			}
+
+			table {
+				min-width: 520px;
+			}
+		}
+
+		/* mobile-fix-20260219-navbar-compact */
+		@media (max-width: 860px) {
+			.topbar-container {
+				padding: 0.72rem;
+			}
+
+			.topbar-inner {
+				display: flex;
+				flex-direction: column;
+				align-items: stretch;
+				gap: 0.48rem;
+			}
+
+			.brand-block {
+				min-width: 0;
+			}
+
+			.brand-logo {
+				height: 36px;
+			}
+
+			.brand-text {
+				display: block;
+				font-size: 0.88rem;
+				white-space: nowrap;
+				overflow: hidden;
+				text-overflow: ellipsis;
+			}
+
+			.top-actions {
+				display: flex;
+				flex-wrap: wrap;
+				justify-content: flex-start;
+				gap: 0.36rem;
+			}
+
+			.back-btn,
+			.logout {
+				width: auto;
+				min-width: 0;
+				padding: 0.42rem 0.7rem;
+				font-size: 0.73rem;
+			}
+		}
+
+		@media (max-width: 520px) {
+			.top-actions .back-btn,
+			.top-actions .logout {
+				flex: 1 1 calc(50% - 0.36rem);
+				justify-content: center;
+			}
+
+			.top-actions .logout {
+				flex-basis: 100%;
+			}
+		}
+</style>
 </head>
 <body>
 	<nav class="topbar">

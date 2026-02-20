@@ -1,5 +1,38 @@
 <?php defined('BASEPATH') OR exit('No direct script access allowed'); ?>
-<?php $records = isset($records) && is_array($records) ? $records : array(); ?>
+<?php
+$records_source = isset($records) && is_array($records) ? $records : array();
+$records = array();
+$has_real_time = function ($value) {
+	$text = trim((string) $value);
+	if ($text === '' || $text === '-' || $text === '--')
+	{
+		return FALSE;
+	}
+	if (!preg_match('/^\d{2}:\d{2}(?::\d{2})?$/', $text))
+	{
+		return FALSE;
+	}
+	if (strlen($text) === 5)
+	{
+		$text .= ':00';
+	}
+
+	return $text !== '00:00:00';
+};
+for ($record_i = 0; $record_i < count($records_source); $record_i += 1)
+{
+	$row = isset($records_source[$record_i]) && is_array($records_source[$record_i])
+		? $records_source[$record_i]
+		: array();
+	$check_in_raw = isset($row['check_in_time']) ? (string) $row['check_in_time'] : '';
+	$check_out_raw = isset($row['check_out_time']) ? (string) $row['check_out_time'] : '';
+	if (!$has_real_time($check_in_raw) && !$has_real_time($check_out_raw))
+	{
+		continue;
+	}
+	$records[] = $row;
+}
+?>
 <?php
 $notice_success = $this->session->flashdata('attendance_notice_success');
 $notice_error = $this->session->flashdata('attendance_notice_error');
@@ -340,6 +373,31 @@ $notice_error = $this->session->flashdata('attendance_notice_error');
 			background: linear-gradient(145deg, #1d5ea2 0%, #2b82d5 100%);
 		}
 
+		.row-actions {
+			display: flex;
+			align-items: center;
+			flex-wrap: wrap;
+			gap: 0.35rem;
+		}
+
+		.row-delete-form {
+			margin: 0;
+		}
+
+		.delete-btn {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			border: 0;
+			border-radius: 8px;
+			padding: 0.38rem 0.58rem;
+			font-size: 0.72rem;
+			font-weight: 700;
+			cursor: pointer;
+			color: #ffffff;
+			background: linear-gradient(145deg, #a72f2f 0%, #d34a4a 100%);
+		}
+
 		.edit-modal {
 			position: fixed;
 			inset: 0;
@@ -493,7 +551,153 @@ $notice_error = $this->session->flashdata('attendance_notice_error');
 			font-weight: 700;
 			cursor: pointer;
 		}
-	</style>
+	
+		/* mobile-fix-20260219 */
+		@media (max-width: 860px) {
+			.page {
+				padding: 0.9rem 0.72rem 1.2rem;
+			}
+
+			.head {
+				flex-direction: column;
+				align-items: flex-start;
+				gap: 0.62rem;
+			}
+
+			.title {
+				font-size: 1.05rem;
+				line-height: 1.3;
+			}
+
+			.actions {
+				width: 100%;
+				display: grid;
+				grid-template-columns: 1fr;
+				gap: 0.42rem;
+			}
+
+			.btn,
+			.mode-link {
+				width: 100%;
+				justify-content: center;
+			}
+
+			.mode-tabs {
+				padding: 0.72rem 0.72rem 0;
+			}
+
+			.table-tools {
+				padding: 0.62rem 0.72rem 0;
+			}
+
+			.search-input {
+				width: 100%;
+				max-width: 100%;
+			}
+
+			.search-help {
+				margin-top: 0.36rem;
+				font-size: 0.7rem;
+				line-height: 1.45;
+			}
+
+			.table-meta {
+				flex-direction: column;
+				align-items: flex-start;
+				gap: 0.3rem;
+				padding: 0.62rem 0.72rem;
+			}
+
+			.pager {
+				padding: 0 0.72rem 0.72rem;
+				gap: 0.35rem;
+			}
+
+			.pager-btn {
+				flex: 1 1 0;
+				min-width: 2.3rem;
+				height: 2.2rem;
+				padding: 0 0.5rem;
+				font-size: 0.75rem;
+			}
+
+			.pager-btn.wide {
+				min-width: 4.5rem;
+			}
+
+			.edit-modal {
+				padding: 0.7rem;
+			}
+
+			.edit-panel {
+				width: min(100%, 96vw);
+				margin: max(0.5rem, env(safe-area-inset-top)) auto;
+			}
+
+			.edit-body {
+				padding: 0.8rem;
+			}
+
+			.edit-actions {
+				flex-direction: column;
+			}
+
+			.edit-submit,
+			.edit-clear {
+				width: 100%;
+			}
+		}
+
+		@media (max-width: 520px) {
+			.page {
+				padding: 0.75rem 0.55rem 1rem;
+			}
+
+			.table-card {
+				border-radius: 12px;
+			}
+
+			th,
+			td {
+				padding: 0.5rem 0.46rem;
+				font-size: 0.74rem;
+			}
+		}
+
+		/* mobile-fix-20260219-navbar-compact */
+		@media (max-width: 860px) {
+			.head {
+				flex-direction: column;
+				align-items: flex-start;
+				gap: 0.55rem;
+			}
+
+			.actions {
+				width: 100%;
+				display: flex;
+				flex-wrap: wrap;
+				gap: 0.4rem;
+			}
+
+			.btn {
+				width: auto;
+				min-width: 0;
+				padding: 0.46rem 0.72rem;
+				font-size: 0.74rem;
+			}
+		}
+
+		@media (max-width: 520px) {
+			.actions .btn {
+				flex: 1 1 calc(50% - 0.4rem);
+				justify-content: center;
+			}
+
+			.actions .btn.primary {
+				flex-basis: 100%;
+			}
+		}
+</style>
 </head>
 <body>
 	<div class="page">
@@ -548,7 +752,7 @@ $notice_error = $this->session->flashdata('attendance_notice_error');
 								<th>Jarak Masuk (Meter)</th>
 								<th>Jarak Pulang (Meter)</th>
 								<th>Alasan Telat</th>
-								<th>Edit</th>
+								<th>Aksi</th>
 							</tr>
 						</thead>
 						<tbody id="attendanceTableBody">
@@ -575,7 +779,22 @@ $notice_error = $this->session->flashdata('attendance_notice_error');
 								$row_profile_photo_url = $row_profile_photo;
 								if (strpos($row_profile_photo_url, 'data:') !== 0 && preg_match('/^https?:\/\//i', $row_profile_photo_url) !== 1)
 								{
-									$row_profile_photo_url = base_url(ltrim($row_profile_photo_url, '/'));
+									$row_profile_photo_relative = ltrim($row_profile_photo_url, '/\\');
+									$row_profile_photo_info = pathinfo($row_profile_photo_relative);
+									$row_profile_photo_thumb_relative = '';
+									if (isset($row_profile_photo_info['filename']) && trim((string) $row_profile_photo_info['filename']) !== '')
+									{
+										$row_profile_photo_dir = isset($row_profile_photo_info['dirname']) ? (string) $row_profile_photo_info['dirname'] : '';
+										$row_profile_photo_thumb_relative = $row_profile_photo_dir !== '' && $row_profile_photo_dir !== '.'
+											? $row_profile_photo_dir.'/'.$row_profile_photo_info['filename'].'_thumb.jpg'
+											: $row_profile_photo_info['filename'].'_thumb.jpg';
+									}
+									if ($row_profile_photo_thumb_relative !== '' &&
+										is_file(FCPATH.str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $row_profile_photo_thumb_relative)))
+									{
+										$row_profile_photo_relative = $row_profile_photo_thumb_relative;
+									}
+									$row_profile_photo_url = base_url(ltrim($row_profile_photo_relative, '/'));
 								}
 								$row_address = isset($row['address']) && trim((string) $row['address']) !== ''
 									? (string) $row['address']
@@ -621,7 +840,7 @@ $notice_error = $this->session->flashdata('attendance_notice_error');
 									<td class="row-no"><?php echo $no; ?></td>
 									<td><?php echo htmlspecialchars($row_employee_id, ENT_QUOTES, 'UTF-8'); ?></td>
 									<td>
-										<img class="profile-avatar" src="<?php echo htmlspecialchars($row_profile_photo_url, ENT_QUOTES, 'UTF-8'); ?>" alt="PP <?php echo htmlspecialchars($row_username !== '' ? $row_username : 'Karyawan', ENT_QUOTES, 'UTF-8'); ?>">
+										<img class="profile-avatar" src="<?php echo htmlspecialchars($row_profile_photo_url, ENT_QUOTES, 'UTF-8'); ?>" alt="PP <?php echo htmlspecialchars($row_username !== '' ? $row_username : 'Karyawan', ENT_QUOTES, 'UTF-8'); ?>" loading="lazy" decoding="async">
 									</td>
 									<td><?php echo htmlspecialchars($row_username !== '' ? $row_username : '-', ENT_QUOTES, 'UTF-8'); ?></td>
 									<td class="address-cell"><?php echo htmlspecialchars($row_address, ENT_QUOTES, 'UTF-8'); ?></td>
@@ -642,14 +861,14 @@ $notice_error = $this->session->flashdata('attendance_notice_error');
 									<td><?php echo htmlspecialchars(isset($row['work_duration']) && $row['work_duration'] !== '' ? (string) $row['work_duration'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
 									<td>
 										<?php if (isset($row['check_in_photo']) && $row['check_in_photo'] !== ''): ?>
-											<img class="photo" src="<?php echo htmlspecialchars((string) $row['check_in_photo'], ENT_QUOTES, 'UTF-8'); ?>" alt="Foto masuk">
+											<img class="photo" src="<?php echo htmlspecialchars((string) $row['check_in_photo'], ENT_QUOTES, 'UTF-8'); ?>" alt="Foto masuk" loading="lazy" decoding="async">
 										<?php else: ?>
 											<span class="muted">-</span>
 										<?php endif; ?>
 									</td>
 									<td>
 										<?php if (isset($row['check_out_photo']) && $row['check_out_photo'] !== ''): ?>
-											<img class="photo" src="<?php echo htmlspecialchars((string) $row['check_out_photo'], ENT_QUOTES, 'UTF-8'); ?>" alt="Foto pulang">
+											<img class="photo" src="<?php echo htmlspecialchars((string) $row['check_out_photo'], ENT_QUOTES, 'UTF-8'); ?>" alt="Foto pulang" loading="lazy" decoding="async">
 										<?php else: ?>
 											<span class="muted">-</span>
 										<?php endif; ?>
@@ -680,15 +899,22 @@ $notice_error = $this->session->flashdata('attendance_notice_error');
 									</td>
 									<td><?php echo htmlspecialchars($late_reason_display, ENT_QUOTES, 'UTF-8'); ?></td>
 									<td>
-										<button
-											type="button"
-											class="edit-btn"
-											data-edit-row
-											data-username="<?php echo htmlspecialchars($row_username, ENT_QUOTES, 'UTF-8'); ?>"
-											data-date="<?php echo htmlspecialchars($row_date_key, ENT_QUOTES, 'UTF-8'); ?>"
-											data-date-label="<?php echo htmlspecialchars(isset($row['date_label']) ? (string) $row['date_label'] : '-', ENT_QUOTES, 'UTF-8'); ?>"
-											data-current-cut="<?php echo htmlspecialchars((string) max(0, (int) round($salary_cut_amount)), ENT_QUOTES, 'UTF-8'); ?>"
-										>Edit</button>
+										<div class="row-actions">
+											<button
+												type="button"
+												class="edit-btn"
+												data-edit-row
+												data-username="<?php echo htmlspecialchars($row_username, ENT_QUOTES, 'UTF-8'); ?>"
+												data-date="<?php echo htmlspecialchars($row_date_key, ENT_QUOTES, 'UTF-8'); ?>"
+												data-date-label="<?php echo htmlspecialchars(isset($row['date_label']) ? (string) $row['date_label'] : '-', ENT_QUOTES, 'UTF-8'); ?>"
+												data-current-cut="<?php echo htmlspecialchars((string) max(0, (int) round($salary_cut_amount)), ENT_QUOTES, 'UTF-8'); ?>"
+											>Edit</button>
+											<form method="post" action="<?php echo site_url('home/delete_attendance_record'); ?>" class="row-delete-form" onsubmit="return window.confirm('Hapus data absensi ini?');">
+												<input type="hidden" name="username" value="<?php echo htmlspecialchars($row_username, ENT_QUOTES, 'UTF-8'); ?>">
+												<input type="hidden" name="date" value="<?php echo htmlspecialchars($row_date_key, ENT_QUOTES, 'UTF-8'); ?>">
+												<button type="submit" class="delete-btn">Hapus</button>
+											</form>
+										</div>
 									</td>
 								</tr>
 								<?php $no += 1; ?>

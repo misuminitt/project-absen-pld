@@ -4,6 +4,7 @@
 $notice_success = $this->session->flashdata('leave_notice_success');
 $notice_warning = $this->session->flashdata('leave_notice_warning');
 $notice_error = $this->session->flashdata('leave_notice_error');
+$is_developer_actor = isset($is_developer_actor) && $is_developer_actor === TRUE;
 $script_name = isset($_SERVER['SCRIPT_NAME']) ? (string) $_SERVER['SCRIPT_NAME'] : '';
 $base_path = str_replace('\\', '/', dirname($script_name));
 if ($base_path === '/' || $base_path === '.')
@@ -312,6 +313,10 @@ if ($base_path === '/' || $base_path === '.')
 			background: #a94444;
 		}
 
+		.admin-btn.delete {
+			background: #8f2630;
+		}
+
 		.processed-label {
 			font-size: 0.74rem;
 			font-weight: 700;
@@ -368,7 +373,143 @@ if ($base_path === '/' || $base_path === '.')
 			padding: 0 0.95rem;
 			min-width: 6rem;
 		}
-	</style>
+	
+		/* mobile-fix-20260219 */
+		@media (max-width: 860px) {
+			.page {
+				padding: 0.9rem 0.72rem 1.2rem;
+			}
+
+			.head {
+				flex-direction: column;
+				align-items: flex-start;
+				gap: 0.62rem;
+			}
+
+			.title {
+				font-size: 1.05rem;
+				line-height: 1.3;
+			}
+
+			.actions {
+				width: 100%;
+				display: grid;
+				grid-template-columns: 1fr;
+				gap: 0.42rem;
+			}
+
+			.btn {
+				width: 100%;
+				justify-content: center;
+			}
+
+			.table-tools {
+				padding: 0.62rem 0.72rem 0;
+			}
+
+			.search-input {
+				width: 100%;
+				max-width: 100%;
+			}
+
+			.search-help {
+				margin-top: 0.36rem;
+				font-size: 0.7rem;
+				line-height: 1.45;
+			}
+
+			.table-meta {
+				flex-direction: column;
+				align-items: flex-start;
+				gap: 0.3rem;
+				padding: 0.62rem 0.72rem;
+			}
+
+			.pager {
+				padding: 0 0.72rem 0.72rem;
+				gap: 0.35rem;
+			}
+
+			.pager-btn {
+				flex: 1 1 0;
+				min-width: 2.3rem;
+				height: 2.2rem;
+				padding: 0 0.5rem;
+				font-size: 0.75rem;
+			}
+
+			.pager-btn.wide {
+				min-width: 4.5rem;
+			}
+
+			.admin-actions,
+			.admin-action-form,
+			.row-actions {
+				flex-wrap: wrap;
+			}
+
+			.admin-action-form {
+				width: 100%;
+			}
+
+			.admin-btn,
+			.row-delete-btn {
+				width: 100%;
+				text-align: center;
+			}
+		}
+
+		@media (max-width: 520px) {
+			.page {
+				padding: 0.75rem 0.55rem 1rem;
+			}
+
+			.table-card,
+			.form-card {
+				border-radius: 12px;
+			}
+
+			th,
+			td {
+				padding: 0.5rem 0.46rem;
+				font-size: 0.74rem;
+			}
+		}
+
+		/* mobile-fix-20260219-navbar-compact */
+		@media (max-width: 860px) {
+			.head {
+				flex-direction: column;
+				align-items: flex-start;
+				gap: 0.55rem;
+			}
+
+			.actions {
+				width: 100%;
+				display: flex;
+				flex-wrap: wrap;
+				gap: 0.4rem;
+			}
+
+			.btn {
+				width: auto;
+				min-width: 0;
+				padding: 0.46rem 0.72rem;
+				font-size: 0.74rem;
+			}
+		}
+
+		@media (max-width: 520px) {
+			.actions .btn {
+				flex: 1 1 calc(50% - 0.4rem);
+				justify-content: center;
+			}
+
+			.actions .btn.primary {
+				flex-basis: 100%;
+			}
+		}
+</style>
 </head>
 <body>
 	<div class="page">
@@ -448,7 +589,22 @@ if ($base_path === '/' || $base_path === '.')
 								$profile_photo_url = $profile_photo_value;
 								if (strpos($profile_photo_url, 'data:') !== 0 && preg_match('/^https?:\/\//i', $profile_photo_url) !== 1)
 								{
-									$profile_photo_url = base_url(ltrim($profile_photo_url, '/'));
+									$profile_photo_relative = ltrim($profile_photo_url, '/\\');
+									$profile_photo_info = pathinfo($profile_photo_relative);
+									$profile_photo_thumb_relative = '';
+									if (isset($profile_photo_info['filename']) && trim((string) $profile_photo_info['filename']) !== '')
+									{
+										$profile_photo_dir = isset($profile_photo_info['dirname']) ? (string) $profile_photo_info['dirname'] : '';
+										$profile_photo_thumb_relative = $profile_photo_dir !== '' && $profile_photo_dir !== '.'
+											? $profile_photo_dir.'/'.$profile_photo_info['filename'].'_thumb.jpg'
+											: $profile_photo_info['filename'].'_thumb.jpg';
+									}
+									if ($profile_photo_thumb_relative !== '' &&
+										is_file(FCPATH.str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $profile_photo_thumb_relative)))
+									{
+										$profile_photo_relative = $profile_photo_thumb_relative;
+									}
+									$profile_photo_url = base_url(ltrim($profile_photo_relative, '/'));
 								}
 								$job_title_value = isset($row['job_title']) && trim((string) $row['job_title']) !== '' ? (string) $row['job_title'] : 'Teknisi';
 								$is_waiting = strtolower($status_label) === 'menunggu';
@@ -474,7 +630,7 @@ if ($base_path === '/' || $base_path === '.')
 									<td class="row-no"><?php echo $no; ?></td>
 									<td><?php echo htmlspecialchars($employee_id_value, ENT_QUOTES, 'UTF-8'); ?></td>
 									<td>
-										<img class="profile-avatar" src="<?php echo htmlspecialchars($profile_photo_url, ENT_QUOTES, 'UTF-8'); ?>" alt="PP <?php echo htmlspecialchars(isset($row['username']) ? (string) $row['username'] : 'Karyawan', ENT_QUOTES, 'UTF-8'); ?>">
+										<img class="profile-avatar" src="<?php echo htmlspecialchars($profile_photo_url, ENT_QUOTES, 'UTF-8'); ?>" alt="PP <?php echo htmlspecialchars(isset($row['username']) ? (string) $row['username'] : 'Karyawan', ENT_QUOTES, 'UTF-8'); ?>" loading="lazy" decoding="async">
 									</td>
 									<td><?php echo htmlspecialchars(isset($row['username']) ? (string) $row['username'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
 									<td><span class="phone"><?php echo htmlspecialchars($phone_value, ENT_QUOTES, 'UTF-8'); ?></span></td>
@@ -503,6 +659,12 @@ if ($base_path === '/' || $base_path === '.')
 												</form>
 											<?php else: ?>
 												<span class="processed-label">Sudah diproses</span>
+											<?php endif; ?>
+											<?php if ($is_developer_actor && $request_id !== ''): ?>
+												<form method="post" action="<?php echo site_url('home/delete_leave_request'); ?>" class="admin-action-form" onsubmit="return window.confirm('Hapus data pengajuan ini?');">
+													<input type="hidden" name="request_id" value="<?php echo htmlspecialchars($request_id, ENT_QUOTES, 'UTF-8'); ?>">
+													<button type="submit" class="admin-btn delete">Hapus</button>
+												</form>
 											<?php endif; ?>
 										</div>
 									</td>

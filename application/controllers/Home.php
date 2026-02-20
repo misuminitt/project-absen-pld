@@ -9,12 +9,22 @@ class Home extends CI_Controller {
 	const CHECK_IN_MIN_TIME = '06:30:00';
 	const CHECK_IN_MAX_TIME = '17:00:00';
 	const CHECK_OUT_MAX_TIME = '23:59:00';
+	const ATTENDANCE_TIME_BYPASS_USERS = array();
+	const ATTENDANCE_FORCE_LATE_USERS = array();
+	const ATTENDANCE_FORCE_LATE_DURATION = '00:30:00';
+	const ATTENDANCE_REMINDER_SLOTS = array('11:00', '13:00', '17:00');
 	const LATE_TOLERANCE_SECONDS = 600;
 	const WORK_DAYS_DEFAULT = 22;
 	const MIN_EFFECTIVE_WORK_DAYS = 20;
 	const DEDUCTION_ROUND_BASE = 1000;
 	const HALF_DAY_LATE_THRESHOLD_SECONDS = 14400;
 	const WEEKLY_HOLIDAY_DAY = 1;
+	const ADMIN_DASHBOARD_SUMMARY_CACHE_TTL_SECONDS = 45;
+	const PROFILE_PHOTO_MAX_WIDTH = 512;
+	const PROFILE_PHOTO_MAX_HEIGHT = 512;
+	const PROFILE_PHOTO_JPEG_QUALITY = 82;
+	const PROFILE_PHOTO_THUMB_SIZE = 160;
+	const PROFILE_PHOTO_THUMB_JPEG_QUALITY = 76;
 
 	public function __construct()
 	{
@@ -143,6 +153,8 @@ class Home extends CI_Controller {
 			'job_title_options' => $this->employee_job_title_options(),
 			'branch_options' => $this->employee_branch_options(),
 			'default_branch' => $this->default_employee_branch(),
+			'weekly_day_off_options' => $this->weekly_day_off_options(),
+			'default_weekly_day_off' => $this->default_weekly_day_off(),
 			'can_view_log_data' => $can_view_log_data,
 			'can_manage_accounts' => $can_manage_accounts,
 			'can_sync_sheet_accounts' => $can_sync_sheet_accounts,
@@ -505,7 +517,7 @@ class Home extends CI_Controller {
 		$display_name_input = preg_replace('/\s+/', ' ', $display_name_input);
 		$password = trim((string) $this->input->post('new_password', FALSE));
 		$branch = $this->resolve_employee_branch($this->input->post('new_branch', TRUE));
-		$phone = trim((string) $this->input->post('new_phone', TRUE));
+		$phone = $this->normalize_phone_number($this->input->post('new_phone', TRUE));
 		$shift_key = strtolower(trim((string) $this->input->post('new_shift', TRUE)));
 		$salary_raw = trim((string) $this->input->post('new_salary_monthly', TRUE));
 		$salary_digits = preg_replace('/\D+/', '', $salary_raw);
@@ -514,7 +526,7 @@ class Home extends CI_Controller {
 		$address = trim((string) $this->input->post('new_address', TRUE));
 		$coordinate_input = trim((string) $this->input->post('new_coordinate_point', TRUE));
 		$coordinate_point = $this->normalize_coordinate_point($coordinate_input);
-		$work_days = (int) $this->input->post('new_work_days', TRUE);
+		$weekly_day_off = $this->resolve_employee_weekly_day_off($this->input->post('new_weekly_day_off', TRUE));
 
 		if ($username_key === '')
 		{
@@ -605,13 +617,11 @@ class Home extends CI_Controller {
 		}
 		$display_name = $display_name_input;
 
-		$salary_profiles = function_exists('absen_salary_profile_book') ? absen_salary_profile_book() : array();
-		$default_work_days = isset($salary_profiles['A']) && isset($salary_profiles['A']['work_days'])
-			? (int) $salary_profiles['A']['work_days']
-			: 28;
+		$month_policy = $this->calculate_month_work_policy(date('Y-m-d'), $weekly_day_off);
+		$work_days = isset($month_policy['work_days']) ? (int) $month_policy['work_days'] : self::WORK_DAYS_DEFAULT;
 		if ($work_days <= 0)
 		{
-			$work_days = $default_work_days > 0 ? $default_work_days : 28;
+			$work_days = self::WORK_DAYS_DEFAULT;
 		}
 		$salary_tier = $this->resolve_salary_tier_from_amount($salary_monthly);
 
@@ -653,6 +663,7 @@ class Home extends CI_Controller {
 			'salary_tier' => $salary_tier,
 			'salary_monthly' => $salary_monthly,
 			'work_days' => (int) $work_days,
+			'weekly_day_off' => (int) $weekly_day_off,
 			'job_title' => $job_title,
 			'address' => $address,
 			'profile_photo' => $profile_photo_path,
@@ -826,16 +837,21 @@ class Home extends CI_Controller {
 		$branch_scope = $this->is_branch_scoped_admin() ? $this->current_actor_branch() : '';
 		$result = $this->absen_sheet_sync->sync_attendance_from_sheet(array(
 			'force' => TRUE,
+			'overwrite_web_source' => FALSE,
+			'prune_missing_attendance' => FALSE,
 			'actor' => $actor,
 			'actor_context' => $actor_context,
 			'branch_scope' => $branch_scope
 		));
 		if (isset($result['success']) && $result['success'] === TRUE)
 		{
+			$this->clear_admin_dashboard_live_summary_cache();
 			$created_accounts = isset($result['created_accounts']) ? (int) $result['created_accounts'] : 0;
 			$updated_accounts = isset($result['updated_accounts']) ? (int) $result['updated_accounts'] : 0;
 			$created_attendance = isset($result['created_attendance']) ? (int) $result['created_attendance'] : 0;
 			$updated_attendance = isset($result['updated_attendance']) ? (int) $result['updated_attendance'] : 0;
+			$pruned_attendance = isset($result['pruned_attendance']) ? (int) $result['pruned_attendance'] : 0;
+			$skipped_rows = isset($result['skipped_rows']) ? (int) $result['skipped_rows'] : 0;
 			$backfilled_phone_cells = isset($result['backfilled_phone_cells']) ? (int) $result['backfilled_phone_cells'] : 0;
 			$backfilled_branch_cells = isset($result['backfilled_branch_cells']) ? (int) $result['backfilled_branch_cells'] : 0;
 			$phone_backfill_error = isset($result['phone_backfill_error']) ? trim((string) $result['phone_backfill_error']) : '';
@@ -844,6 +860,8 @@ class Home extends CI_Controller {
 				'account_notice_success',
 				'Sync Data Absen selesai. Akun baru: '.$created_accounts.', akun update: '.$updated_accounts.
 				', absen baru: '.$created_attendance.', absen update: '.$updated_attendance.
+				', absen stale terhapus: '.$pruned_attendance.
+				', baris dilewati: '.$skipped_rows.
 				', tlp terisi otomatis: '.$backfilled_phone_cells.
 				', cabang terisi otomatis: '.$backfilled_branch_cells.'.'
 			);
@@ -1001,6 +1019,8 @@ class Home extends CI_Controller {
 
 		$result = $this->absen_sheet_sync->sync_attendance_from_sheet(array(
 			'force' => TRUE,
+			'overwrite_web_source' => FALSE,
+			'prune_missing_attendance' => FALSE,
 			'actor' => 'cli',
 			'actor_context' => $this->build_sync_actor_context('cli', TRUE)
 		));
@@ -1011,6 +1031,7 @@ class Home extends CI_Controller {
 			$updated_accounts = isset($result['updated_accounts']) ? (int) $result['updated_accounts'] : 0;
 			$created_attendance = isset($result['created_attendance']) ? (int) $result['created_attendance'] : 0;
 			$updated_attendance = isset($result['updated_attendance']) ? (int) $result['updated_attendance'] : 0;
+			$pruned_attendance = isset($result['pruned_attendance']) ? (int) $result['pruned_attendance'] : 0;
 			$skipped_rows = isset($result['skipped_rows']) ? (int) $result['skipped_rows'] : 0;
 			$backfilled_phone_cells = isset($result['backfilled_phone_cells']) ? (int) $result['backfilled_phone_cells'] : 0;
 			$phone_backfill_error = isset($result['phone_backfill_error']) ? trim((string) $result['phone_backfill_error']) : '';
@@ -1019,6 +1040,7 @@ class Home extends CI_Controller {
 				", account_updated=".$updated_accounts.
 				", attendance_created=".$created_attendance.
 				", attendance_updated=".$updated_attendance.
+				", attendance_pruned=".$pruned_attendance.
 				", skipped=".$skipped_rows.
 				", tlp_backfilled=".$backfilled_phone_cells."\n";
 			if ($phone_backfill_error !== '')
@@ -1137,6 +1159,461 @@ class Home extends CI_Controller {
 		echo "Auto sync web->Data Absen gagal: ".$message."\n";
 	}
 
+	public function attendance_reminder_auto_cli($slot_override = '')
+	{
+		if (!$this->input->is_cli_request())
+		{
+			show_404();
+			return;
+		}
+
+		$slot = $this->resolve_attendance_reminder_slot($slot_override);
+		if ($slot === '')
+		{
+			$allowed_slots = self::ATTENDANCE_REMINDER_SLOTS;
+			echo "Reminder absensi dilewati. Slot aktif: ".implode(', ', $allowed_slots)." WIB.\n";
+			return;
+		}
+
+		$date_key = date('Y-m-d');
+		$state = $this->load_attendance_reminder_state();
+		$slot_key = $date_key.'|'.$slot;
+		if (in_array($slot_key, $state['sent_slots'], TRUE))
+		{
+			echo "Reminder absensi dilewati. Slot ".$slot." sudah pernah terkirim hari ini.\n";
+			return;
+		}
+
+		$group_target_error = '';
+		$group_target = $this->resolve_attendance_reminder_group_target($group_target_error);
+		if ($group_target === '')
+		{
+			echo "Reminder absensi gagal: ".$group_target_error."\n";
+			return;
+		}
+
+		$payload = $this->build_attendance_reminder_payload($date_key);
+		$group_message = $this->build_attendance_reminder_group_message($payload, $slot);
+		$group_result = $this->send_whatsapp_notification($group_target, $group_message);
+		if (!isset($group_result['success']) || $group_result['success'] !== TRUE)
+		{
+			$message = isset($group_result['message']) ? (string) $group_result['message'] : 'Pengiriman ke grup gagal.';
+			echo "Reminder absensi gagal kirim ke grup: ".$message."\n";
+			return;
+		}
+
+		$state['sent_slots'][] = $slot_key;
+		$state['sent_slots'] = $this->normalize_attendance_reminder_key_list($state['sent_slots']);
+		$direct_dm_enabled = $this->attendance_reminder_direct_dm_enabled();
+		$dm_sent = 0;
+		$dm_failed = 0;
+		$dm_skipped = 0;
+		if ($direct_dm_enabled)
+		{
+			$employee_rows = isset($payload['rows']) && is_array($payload['rows']) ? $payload['rows'] : array();
+			for ($i = 0; $i < count($employee_rows); $i += 1)
+			{
+				$row = $employee_rows[$i];
+				$row_username = isset($row['username']) ? (string) $row['username'] : '';
+				$row_display_name = isset($row['display_name']) ? (string) $row['display_name'] : $row_username;
+				$is_present = isset($row['is_present']) && $row['is_present'] === TRUE;
+				$is_leave_today = isset($row['is_leave_today']) && $row['is_leave_today'] === TRUE;
+				if ($is_present || $is_leave_today)
+				{
+					continue;
+				}
+				$dm_key = $slot_key.'|'.strtolower(trim((string) $row_username));
+				if (in_array($dm_key, $state['direct_sent'], TRUE))
+				{
+					$dm_skipped += 1;
+					continue;
+				}
+
+				$row_phone = isset($row['phone']) ? (string) $row['phone'] : '';
+				$direct_message = $this->build_attendance_reminder_direct_message($row_display_name, $slot);
+				$direct_result = $this->send_whatsapp_notification($row_phone, $direct_message);
+				if (isset($direct_result['success']) && $direct_result['success'] === TRUE)
+				{
+					$state['direct_sent'][] = $dm_key;
+					$dm_sent += 1;
+				}
+				else
+				{
+					$dm_failed += 1;
+				}
+			}
+		}
+
+		$state['direct_sent'] = $this->normalize_attendance_reminder_key_list($state['direct_sent']);
+		$this->save_attendance_reminder_state($state);
+		echo "Reminder absensi terkirim. slot=".$slot.
+			", hadir=".(int) (isset($payload['present_count']) ? $payload['present_count'] : 0).
+			", belum=".(int) (isset($payload['missing_count']) ? $payload['missing_count'] : 0).
+			", alpha=".(int) (isset($payload['alpha_count']) ? $payload['alpha_count'] : 0).
+			", dm_enabled=".($direct_dm_enabled ? '1' : '0').
+			", dm_sent=".$dm_sent.
+			", dm_failed=".$dm_failed.
+			", dm_skipped=".$dm_skipped."\n";
+	}
+
+	public function reset_attendance_cli()
+	{
+		if (!$this->input->is_cli_request())
+		{
+			show_404();
+			return;
+		}
+
+		$before_rows = $this->load_attendance_records();
+		$before_count = is_array($before_rows) ? count($before_rows) : 0;
+
+		$this->save_attendance_records(array());
+
+		$after_rows = $this->load_attendance_records();
+		$after_count = is_array($after_rows) ? count($after_rows) : 0;
+		if ($after_count > 0)
+		{
+			echo "Reset data absen gagal. remaining=".$after_count."\n";
+			return;
+		}
+
+		echo "Reset data absen OK. removed=".$before_count.", remaining=0\n";
+	}
+
+	public function reset_attendance_columns_cli($month = '')
+	{
+		if (!$this->input->is_cli_request())
+		{
+			show_404();
+			return;
+		}
+
+		$month = trim((string) $month);
+		if ($month === '')
+		{
+			$month = date('Y-m');
+		}
+		if (!preg_match('/^\d{4}\-\d{2}$/', $month))
+		{
+			echo "Format bulan tidak valid. Gunakan YYYY-MM.\n";
+			return;
+		}
+
+		$records = $this->load_attendance_records();
+		if (!is_array($records) || empty($records))
+		{
+			echo "Data absen kosong. Tidak ada yang direset.\n";
+			return;
+		}
+
+		$reset_values = array(
+			'check_in_time' => '',
+			'check_in_late' => '00:00:00',
+			'check_out_time' => '',
+			'work_duration' => '',
+			'jenis_masuk' => '',
+			'jenis_pulang' => '',
+			'check_in_photo' => '',
+			'check_out_photo' => '',
+			'sheet_sudah_berapa_absen' => 0,
+			'sheet_hari_efektif' => 0,
+			'sheet_total_hadir' => 0,
+				'sheet_total_telat_1_30' => 0,
+				'sheet_total_telat_31_60' => 0,
+				'sheet_total_telat_1_3' => 0,
+				'sheet_total_telat_gt_4' => 0,
+				'sheet_total_izin' => 0,
+				'sheet_total_cuti' => 0,
+				'sheet_total_izin_cuti' => 0,
+				'sheet_total_alpha' => 0,
+			'late_reason' => '',
+			'alasan_izin_cuti' => '',
+			'alasan_alpha' => '',
+			'salary_cut_amount' => '0',
+			'salary_cut_rule' => 'Tidak telat',
+			'salary_cut_category' => ''
+		);
+
+		$matched_rows = 0;
+		$updated_rows = 0;
+		$now = date('Y-m-d H:i:s');
+		for ($i = 0; $i < count($records); $i += 1)
+		{
+			if (!isset($records[$i]) || !is_array($records[$i]))
+			{
+				continue;
+			}
+
+			$row_date = isset($records[$i]['date']) ? trim((string) $records[$i]['date']) : '';
+			if (!$this->is_valid_date_format($row_date) || substr($row_date, 0, 7) !== $month)
+			{
+				continue;
+			}
+
+			$matched_rows += 1;
+			$changed = FALSE;
+			foreach ($reset_values as $field => $target_value)
+			{
+				$current_value = isset($records[$i][$field]) ? (string) $records[$i][$field] : '';
+				$next_value = (string) $target_value;
+				if ($current_value !== $next_value)
+				{
+					$records[$i][$field] = $target_value;
+					$changed = TRUE;
+				}
+			}
+
+			if ($changed)
+			{
+				$records[$i]['updated_at'] = $now;
+				$updated_rows += 1;
+			}
+		}
+
+		if ($matched_rows <= 0)
+		{
+			echo "Tidak ada data absen untuk bulan ".$month.".\n";
+			return;
+		}
+
+		if ($updated_rows > 0)
+		{
+			$this->save_attendance_records($records);
+		}
+
+		echo "Reset kolom absen OK. month=".$month.", matched=".$matched_rows.", updated=".$updated_rows."\n";
+	}
+
+	public function optimize_profile_photos_cli($mode = '')
+	{
+		if (!$this->input->is_cli_request())
+		{
+			show_404();
+			return;
+		}
+
+		$mode_value = strtolower(trim((string) $mode));
+		$is_dry_run = $mode_value === 'dry-run' || $mode_value === '--dry-run' || $mode_value === 'preview' || $mode_value === '--preview';
+		if (!$this->can_process_profile_photo_image())
+		{
+			echo "Optimasi foto profil dilewati: extension GD belum aktif di server.\n";
+			return;
+		}
+
+		if (!function_exists('absen_load_account_book') || !function_exists('absen_save_account_book'))
+		{
+			echo "Helper akun tidak tersedia. Pastikan helper absen_account_store aktif.\n";
+			return;
+		}
+
+		$account_book = absen_load_account_book();
+		if (!is_array($account_book) || empty($account_book))
+		{
+			echo "Data akun kosong. Tidak ada foto profil yang diproses.\n";
+			return;
+		}
+
+		$file_map = array();
+		foreach ($account_book as $username_key => $row)
+		{
+			if (!is_array($row))
+			{
+				continue;
+			}
+
+			$profile_photo = isset($row['profile_photo']) ? trim((string) $row['profile_photo']) : '';
+			if ($profile_photo === '')
+			{
+				continue;
+			}
+			if (strpos($profile_photo, 'data:') === 0 || preg_match('/^https?:\/\//i', $profile_photo) === 1)
+			{
+				continue;
+			}
+
+			$relative_path = '/'.ltrim(str_replace('\\', '/', $profile_photo), '/');
+			if (strpos($relative_path, '/uploads/profile_photo/') !== 0)
+			{
+				continue;
+			}
+
+			if (!isset($file_map[$relative_path]))
+			{
+				$file_map[$relative_path] = array();
+			}
+			$file_map[$relative_path][] = (string) $username_key;
+		}
+
+		$total_files = count($file_map);
+		if ($total_files <= 0)
+		{
+			echo "Tidak ada foto profil local di uploads/profile_photo untuk diproses.\n";
+			return;
+		}
+
+		$processed_files = 0;
+		$missing_files = 0;
+		$optimized_files = 0;
+		$converted_files = 0;
+		$skipped_files = 0;
+		$thumb_created = 0;
+		$thumb_refreshed = 0;
+		$updated_accounts = 0;
+		$bytes_before = 0;
+		$bytes_after = 0;
+		$has_account_updates = FALSE;
+		$fcp_root = rtrim(str_replace('\\', '/', (string) FCPATH), '/');
+		$format_size = function ($size_bytes) {
+			$bytes = (int) $size_bytes;
+			if ($bytes < 1024)
+			{
+				return $bytes.' B';
+			}
+			if ($bytes < (1024 * 1024))
+			{
+				return number_format($bytes / 1024, 1, '.', '').' KB';
+			}
+			return number_format($bytes / (1024 * 1024), 2, '.', '').' MB';
+		};
+
+		foreach ($file_map as $relative_path => $usernames)
+		{
+			$absolute_path = rtrim((string) FCPATH, '/\\').DIRECTORY_SEPARATOR.
+				str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, ltrim((string) $relative_path, '/\\'));
+			if (!is_file($absolute_path))
+			{
+				$missing_files += 1;
+				continue;
+			}
+
+			$processed_files += 1;
+			$before_size = (int) @filesize($absolute_path);
+			$bytes_before += max(0, $before_size);
+			if ($is_dry_run)
+			{
+				$bytes_after += max(0, $before_size);
+				continue;
+			}
+
+			$file_ext = strtolower(pathinfo($absolute_path, PATHINFO_EXTENSION));
+			$final_path = $absolute_path;
+			$optimized = FALSE;
+			$optimize_result = $this->optimize_profile_photo_image(
+				$absolute_path,
+				$file_ext,
+				self::PROFILE_PHOTO_MAX_WIDTH,
+				self::PROFILE_PHOTO_MAX_HEIGHT,
+				self::PROFILE_PHOTO_JPEG_QUALITY
+			);
+			if (isset($optimize_result['success']) && $optimize_result['success'] === TRUE &&
+				isset($optimize_result['output_path']) && is_file((string) $optimize_result['output_path']))
+			{
+				$optimized = TRUE;
+				$optimized_files += 1;
+				$final_path = (string) $optimize_result['output_path'];
+				if (str_replace('\\', '/', $final_path) !== str_replace('\\', '/', $absolute_path))
+				{
+					$converted_files += 1;
+				}
+			}
+
+			$final_info = pathinfo($final_path);
+			$final_dir = isset($final_info['dirname']) ? (string) $final_info['dirname'] : '';
+			$final_base_name = isset($final_info['filename']) ? (string) $final_info['filename'] : '';
+			$thumb_path = ($final_dir !== '' && $final_base_name !== '')
+				? $final_dir.DIRECTORY_SEPARATOR.$final_base_name.'_thumb.jpg'
+				: '';
+			$thumb_exists_before = $thumb_path !== '' && is_file($thumb_path);
+			$thumb_saved = $this->create_profile_photo_thumbnail(
+				$final_path,
+				self::PROFILE_PHOTO_THUMB_SIZE,
+				self::PROFILE_PHOTO_THUMB_JPEG_QUALITY
+			);
+			if ($thumb_saved)
+			{
+				if ($thumb_exists_before)
+				{
+					$thumb_refreshed += 1;
+				}
+				else
+				{
+					$thumb_created += 1;
+				}
+			}
+			elseif (!$optimized)
+			{
+				$skipped_files += 1;
+			}
+
+			$after_size = is_file($final_path) ? (int) @filesize($final_path) : 0;
+			$bytes_after += max(0, $after_size);
+
+			$final_path_normalized = str_replace('\\', '/', $final_path);
+			$new_relative_path = (string) $relative_path;
+			if ($fcp_root !== '' && strpos($final_path_normalized, $fcp_root.'/') === 0)
+			{
+				$new_relative_path = '/'.ltrim(substr($final_path_normalized, strlen($fcp_root) + 1), '/');
+			}
+			if ($new_relative_path === (string) $relative_path)
+			{
+				continue;
+			}
+
+			$linked_users = is_array($usernames) ? $usernames : array();
+			for ($user_index = 0; $user_index < count($linked_users); $user_index += 1)
+			{
+				$account_key = (string) $linked_users[$user_index];
+				if (!isset($account_book[$account_key]) || !is_array($account_book[$account_key]))
+				{
+					continue;
+				}
+				$current_profile_photo = isset($account_book[$account_key]['profile_photo'])
+					? trim((string) $account_book[$account_key]['profile_photo'])
+					: '';
+				$current_relative_path = '/'.ltrim(str_replace('\\', '/', $current_profile_photo), '/');
+				if ($current_relative_path !== (string) $relative_path)
+				{
+					continue;
+				}
+
+				$account_book[$account_key]['profile_photo'] = $new_relative_path;
+				$updated_accounts += 1;
+				$has_account_updates = TRUE;
+			}
+		}
+
+		$save_status = 'skipped';
+		if (!$is_dry_run && $has_account_updates)
+		{
+			$saved = absen_save_account_book($account_book);
+			$save_status = $saved ? 'ok' : 'failed';
+		}
+
+		$size_saved = max(0, $bytes_before - $bytes_after);
+		echo "Optimasi foto profil ".($is_dry_run ? "preview" : "selesai").".\n";
+		echo "files=".$total_files.
+			", processed=".$processed_files.
+			", missing=".$missing_files.
+			", optimized=".$optimized_files.
+			", converted=".$converted_files.
+			", skipped=".$skipped_files.
+			", thumb_new=".$thumb_created.
+			", thumb_refresh=".$thumb_refreshed.
+			", account_updated=".$updated_accounts.
+			", account_save=".$save_status."\n";
+		echo "size_before=".$format_size($bytes_before).
+			", size_after=".$format_size($bytes_after).
+			", saved=".$format_size($size_saved)."\n";
+		if ($is_dry_run)
+		{
+			echo "Mode preview aktif: tidak ada file atau akun yang diubah.\n";
+		}
+		if (!$is_dry_run && $save_status === 'failed')
+		{
+			echo "Perhatian: update profile_photo di account book gagal disimpan.\n";
+		}
+	}
+
 	public function storage_status()
 	{
 		$is_cli = $this->input->is_cli_request();
@@ -1173,6 +1650,14 @@ class Home extends CI_Controller {
 		$accounts_store_key = function_exists('absen_accounts_store_key')
 			? absen_accounts_store_key()
 			: 'accounts_book';
+		$db_error_message = function_exists('absen_data_store_last_db_error_message')
+			? absen_data_store_last_db_error_message()
+			: '';
+		$db_env_host = trim((string) getenv('DB_HOST'));
+		$db_env_port = trim((string) getenv('DB_PORT'));
+		$db_env_user = trim((string) getenv('DB_USER'));
+		$db_env_name = trim((string) getenv('DB_NAME'));
+		$db_env_pass = trim((string) getenv('DB_PASS'));
 
 		$db = function_exists('absen_data_store_db_instance')
 			? absen_data_store_db_instance()
@@ -1306,6 +1791,7 @@ class Home extends CI_Controller {
 				'mirror_json_backup' => $mirror_json_backup ? TRUE : FALSE,
 				'table' => $table_name,
 				'db_connected' => $db_connected ? TRUE : FALSE,
+				'db_error' => $db_error_message,
 				'table_ready' => $table_ready ? TRUE : FALSE,
 				'table_error' => $table_error,
 				'total_store_rows' => $total_store_rows,
@@ -1322,7 +1808,14 @@ class Home extends CI_Controller {
 			),
 			'config' => array(
 				'accounts_store_key' => $accounts_store_key,
-				'raw_storage_config' => $storage_config
+				'raw_storage_config' => $storage_config,
+				'db_env' => array(
+					'host' => $db_env_host,
+					'port' => $db_env_port,
+					'user' => $db_env_user,
+					'database' => $db_env_name,
+					'pass_set' => $db_env_pass !== '' ? TRUE : FALSE
+				)
 			)
 		);
 
@@ -1375,7 +1868,14 @@ class Home extends CI_Controller {
 			: NULL;
 		if (!is_object($db) || !isset($db->conn_id) || !$db->conn_id)
 		{
+			$connection_error = function_exists('absen_data_store_last_db_error_message')
+				? trim((string) absen_data_store_last_db_error_message())
+				: '';
 			$message = 'Koneksi MariaDB gagal. Cek DB_HOST/DB_PORT/DB_USER/DB_PASS/DB_NAME.';
+			if ($connection_error !== '')
+			{
+				$message .= ' Detail: '.$connection_error;
+			}
 			if ($is_cli)
 			{
 				echo $message."\n";
@@ -1675,14 +2175,14 @@ class Home extends CI_Controller {
 		}
 		$password_input = trim((string) $this->input->post('edit_password', FALSE));
 		$branch = $this->resolve_employee_branch($this->input->post('edit_branch', TRUE));
-		$phone = trim((string) $this->input->post('edit_phone', TRUE));
+		$phone = $this->normalize_phone_number($this->input->post('edit_phone', TRUE));
 		$shift_key = strtolower(trim((string) $this->input->post('edit_shift', TRUE)));
 		$salary_raw = trim((string) $this->input->post('edit_salary_monthly', TRUE));
 		$salary_digits = preg_replace('/\D+/', '', $salary_raw);
 		$salary_monthly = $salary_digits === '' ? 0 : (int) $salary_digits;
 		$job_title = trim((string) $this->input->post('edit_job_title', TRUE));
 		$address = trim((string) $this->input->post('edit_address', TRUE));
-		$work_days = (int) $this->input->post('edit_work_days', TRUE);
+		$weekly_day_off = $this->resolve_employee_weekly_day_off($this->input->post('edit_weekly_day_off', TRUE));
 
 		if ($username_key === '')
 		{
@@ -1801,13 +2301,11 @@ class Home extends CI_Controller {
 		{
 			$address = $this->default_employee_address();
 		}
-		$salary_profiles = function_exists('absen_salary_profile_book') ? absen_salary_profile_book() : array();
-		$default_work_days = isset($salary_profiles['A']) && isset($salary_profiles['A']['work_days'])
-			? (int) $salary_profiles['A']['work_days']
-			: 28;
+		$month_policy = $this->calculate_month_work_policy(date('Y-m-d'), $weekly_day_off);
+		$work_days = isset($month_policy['work_days']) ? (int) $month_policy['work_days'] : self::WORK_DAYS_DEFAULT;
 		if ($work_days <= 0)
 		{
-			$work_days = $default_work_days > 0 ? $default_work_days : 28;
+			$work_days = self::WORK_DAYS_DEFAULT;
 		}
 		$salary_tier = $this->resolve_salary_tier_from_amount($salary_monthly);
 
@@ -1850,6 +2348,7 @@ class Home extends CI_Controller {
 			'salary_tier' => $salary_tier,
 			'salary_monthly' => $salary_monthly,
 			'work_days' => (int) $work_days,
+			'weekly_day_off' => (int) $weekly_day_off,
 			'job_title' => $job_title,
 			'address' => $address,
 			'profile_photo' => $uploaded_profile_photo_path !== ''
@@ -1953,6 +2452,7 @@ class Home extends CI_Controller {
 			'shift_name' => 'shift',
 			'salary_monthly' => 'gaji_pokok',
 			'work_days' => 'hari_masuk',
+			'weekly_day_off' => 'hari_libur_mingguan',
 			'job_title' => 'jabatan',
 			'address' => 'alamat'
 		);
@@ -2743,11 +3243,24 @@ class Home extends CI_Controller {
 			return;
 		}
 
-		$snapshot = $this->build_admin_dashboard_snapshot();
+		$cached = $this->load_admin_dashboard_live_summary_cache(self::ADMIN_DASHBOARD_SUMMARY_CACHE_TTL_SECONDS);
+		if (is_array($cached))
+		{
+			$this->json_response(array(
+				'success' => TRUE,
+				'summary' => isset($cached['summary']) && is_array($cached['summary']) ? $cached['summary'] : array(),
+				'generated_at' => isset($cached['generated_at']) ? (string) $cached['generated_at'] : date('Y-m-d H:i:s')
+			));
+			return;
+		}
+
+		$summary = $this->build_admin_dashboard_summary_only();
+		$generated_at = date('Y-m-d H:i:s');
+		$this->save_admin_dashboard_live_summary_cache($summary, $generated_at);
 		$this->json_response(array(
 			'success' => TRUE,
-			'summary' => isset($snapshot['summary']) && is_array($snapshot['summary']) ? $snapshot['summary'] : array(),
-			'generated_at' => date('Y-m-d H:i:s')
+			'summary' => $summary,
+			'generated_at' => $generated_at
 		));
 	}
 
@@ -2850,29 +3363,33 @@ class Home extends CI_Controller {
 		}
 
 		$username = (string) $this->session->userdata('absen_username');
+		$is_time_window_bypassed = $this->should_bypass_attendance_time_window($username);
 		$shift_name = (string) $this->session->userdata('absen_shift_name');
 		$shift_time = (string) $this->session->userdata('absen_shift_time');
 		$session_salary_tier = strtoupper(trim((string) $this->session->userdata('absen_salary_tier')));
 		$session_salary_monthly = (float) $this->session->userdata('absen_salary_monthly');
-		$session_work_days = (int) $this->session->userdata('absen_work_days');
 		$user_profile = $this->get_employee_profile($username);
 		$profile_salary_tier = isset($user_profile['salary_tier']) ? strtoupper(trim((string) $user_profile['salary_tier'])) : '';
 		$profile_salary_monthly = isset($user_profile['salary_monthly']) ? (float) $user_profile['salary_monthly'] : 0;
-		$profile_work_days = isset($user_profile['work_days']) ? (int) $user_profile['work_days'] : 0;
+		$profile_weekly_day_off = isset($user_profile['weekly_day_off'])
+			? $this->resolve_employee_weekly_day_off($user_profile['weekly_day_off'])
+			: $this->default_weekly_day_off();
 		$salary_tier = $profile_salary_tier !== '' ? $profile_salary_tier : $session_salary_tier;
 		$salary_monthly = $profile_salary_monthly > 0 ? $profile_salary_monthly : $session_salary_monthly;
 		$date_key = date('Y-m-d');
 		$date_label = date('d-m-Y');
 		$current_time = date('H:i:s');
 		$current_seconds = $this->time_to_seconds($current_time);
-		$month_policy = $this->calculate_month_work_policy($date_key);
-		$work_days = $profile_work_days > 0
-			? $profile_work_days
-			: ($session_work_days > 0 ? $session_work_days : $month_policy['work_days']);
+		$month_policy = $this->calculate_month_work_policy($date_key, $profile_weekly_day_off);
+		$work_days = isset($month_policy['work_days']) ? (int) $month_policy['work_days'] : self::WORK_DAYS_DEFAULT;
+		if ($work_days <= 0)
+		{
+			$work_days = self::WORK_DAYS_DEFAULT;
+		}
 
 		if ($action === 'masuk')
 		{
-			if ($current_seconds < $this->time_to_seconds(self::CHECK_IN_MIN_TIME))
+			if (!$is_time_window_bypassed && $current_seconds < $this->time_to_seconds(self::CHECK_IN_MIN_TIME))
 			{
 				$this->json_response(array(
 					'success' => FALSE,
@@ -2881,7 +3398,7 @@ class Home extends CI_Controller {
 				return;
 			}
 
-			if ($current_seconds > $this->time_to_seconds(self::CHECK_IN_MAX_TIME))
+			if (!$is_time_window_bypassed && $current_seconds > $this->time_to_seconds(self::CHECK_IN_MAX_TIME))
 			{
 				$this->json_response(array(
 					'success' => FALSE,
@@ -2892,7 +3409,7 @@ class Home extends CI_Controller {
 		}
 		else
 		{
-			if ($current_seconds > $this->time_to_seconds(self::CHECK_OUT_MAX_TIME))
+			if (!$is_time_window_bypassed && $current_seconds > $this->time_to_seconds(self::CHECK_OUT_MAX_TIME))
 			{
 				$this->json_response(array(
 					'success' => FALSE,
@@ -2928,6 +3445,8 @@ class Home extends CI_Controller {
 				'check_in_lng' => '',
 				'check_in_accuracy_m' => '',
 				'check_in_distance_m' => '',
+				'jenis_masuk' => '',
+				'jenis_pulang' => '',
 				'late_reason' => '',
 				'salary_cut_amount' => 0,
 				'salary_cut_rule' => '',
@@ -2962,13 +3481,23 @@ class Home extends CI_Controller {
 		{
 			$record['check_in_time'] = $current_time;
 			$record['check_in_late'] = $this->calculate_late_duration($current_time, $shift_time);
+			$is_force_late_user = $this->should_force_late_attendance($username);
+			if ($is_force_late_user && $this->duration_to_seconds($record['check_in_late']) <= 0)
+			{
+				$record['check_in_late'] = self::ATTENDANCE_FORCE_LATE_DURATION;
+			}
 			$record['check_in_photo'] = $photo;
 			$record['check_in_lat'] = (string) $latitude;
 			$record['check_in_lng'] = (string) $longitude;
 			$record['check_in_accuracy_m'] = number_format($accuracy_m, 2, '.', '');
 			$record['check_in_distance_m'] = number_format($distance_m, 2, '.', '');
+			$record['jenis_masuk'] = 'Absen Masuk';
 
 			$late_seconds = $this->duration_to_seconds($record['check_in_late']);
+			if ($is_force_late_user && $late_seconds > 0 && $late_reason_input === '')
+			{
+				$late_reason_input = 'Telat (mode testing)';
+			}
 			if ($late_seconds > 0 && $late_reason_input === '')
 			{
 				$this->json_response(array(
@@ -3012,6 +3541,7 @@ class Home extends CI_Controller {
 			$record['check_out_lng'] = (string) $longitude;
 			$record['check_out_accuracy_m'] = number_format($accuracy_m, 2, '.', '');
 			$record['check_out_distance_m'] = number_format($distance_m, 2, '.', '');
+			$record['jenis_pulang'] = 'Absen Pulang';
 			$record['work_duration'] = $this->calculate_work_duration($record['check_in_time'], $current_time);
 			$message = 'Absen pulang berhasil disimpan.';
 		}
@@ -3020,6 +3550,7 @@ class Home extends CI_Controller {
 		$records[$record_index] = $record;
 
 		$this->save_attendance_records($records);
+		$this->clear_admin_dashboard_live_summary_cache();
 
 		$this->json_response(array(
 			'success' => TRUE,
@@ -3183,6 +3714,8 @@ class Home extends CI_Controller {
 		$records = $this->load_attendance_records();
 		$scope_lookup = $this->scoped_employee_lookup();
 		$employee_id_book = $this->employee_id_book();
+		$employee_profiles = $this->employee_profile_book();
+		$month_policy_cache = array();
 		for ($i = 0; $i < count($records); $i += 1)
 		{
 			$row_username = isset($records[$i]['username']) ? (string) $records[$i]['username'] : '';
@@ -3192,8 +3725,19 @@ class Home extends CI_Controller {
 				unset($records[$i]);
 				continue;
 			}
+			$check_in_raw = isset($records[$i]['check_in_time']) ? trim((string) $records[$i]['check_in_time']) : '';
+			$check_out_raw = isset($records[$i]['check_out_time']) ? trim((string) $records[$i]['check_out_time']) : '';
+			$has_check_in = $this->has_real_attendance_time($check_in_raw);
+			$has_check_out = $this->has_real_attendance_time($check_out_raw);
+			if (!$has_check_in && !$has_check_out)
+			{
+				unset($records[$i]);
+				continue;
+			}
 			$records[$i]['employee_id'] = $this->resolve_employee_id_from_book($row_username, $employee_id_book);
-			$row_profile = $this->get_employee_profile($row_username);
+			$row_profile = isset($employee_profiles[$row_username_key]) && is_array($employee_profiles[$row_username_key])
+				? $employee_profiles[$row_username_key]
+				: $this->get_employee_profile($row_username);
 			$records[$i]['profile_photo'] = isset($row_profile['profile_photo']) && trim((string) $row_profile['profile_photo']) !== ''
 				? (string) $row_profile['profile_photo']
 				: $this->default_employee_profile_photo();
@@ -3206,6 +3750,16 @@ class Home extends CI_Controller {
 			$records[$i]['phone'] = isset($row_profile['phone']) && trim((string) $row_profile['phone']) !== ''
 				? (string) $row_profile['phone']
 				: $this->get_employee_phone($row_username);
+			$row_weekly_day_off = isset($row_profile['weekly_day_off'])
+				? $this->resolve_employee_weekly_day_off($row_profile['weekly_day_off'])
+				: $this->default_weekly_day_off();
+			$record_date = isset($records[$i]['date']) ? (string) $records[$i]['date'] : '';
+			$month_policy_cache_key = $record_date !== '' ? (substr($record_date, 0, 7).'|'.$row_weekly_day_off) : ('current|'.$row_weekly_day_off);
+			if (!isset($month_policy_cache[$month_policy_cache_key]))
+			{
+				$month_policy_cache[$month_policy_cache_key] = $this->calculate_month_work_policy($record_date, $row_weekly_day_off);
+			}
+			$month_policy = $month_policy_cache[$month_policy_cache_key];
 
 			if (!isset($records[$i]['late_reason']))
 			{
@@ -3218,40 +3772,49 @@ class Home extends CI_Controller {
 			{
 				$check_in_time = isset($records[$i]['check_in_time']) ? trim((string) $records[$i]['check_in_time']) : '';
 				$shift_time = isset($records[$i]['shift_time']) ? trim((string) $records[$i]['shift_time']) : '';
-				if ($check_in_time !== '' && $shift_time !== '')
+				if ($check_in_time === '')
 				{
-					$records[$i]['check_in_late'] = $this->calculate_late_duration($check_in_time, $shift_time);
+					$records[$i]['check_in_late'] = '00:00:00';
+					$records[$i]['salary_cut_amount'] = '0';
+					$records[$i]['salary_cut_rule'] = 'Tidak telat';
+					$records[$i]['salary_cut_category'] = '';
 				}
+				else
+				{
+					$late_duration = isset($records[$i]['check_in_late']) ? trim((string) $records[$i]['check_in_late']) : '';
+					if ($late_duration === '' && $shift_time !== '')
+					{
+						$late_duration = $this->calculate_late_duration($check_in_time, $shift_time);
+					}
+					if ($late_duration === '')
+					{
+						$late_duration = '00:00:00';
+					}
+					$records[$i]['check_in_late'] = $late_duration;
 
-				$late_seconds = 0;
-				if (isset($records[$i]['check_in_late']) && $records[$i]['check_in_late'] !== '')
-				{
-					$late_seconds = $this->duration_to_seconds((string) $records[$i]['check_in_late']);
+					$late_seconds = $this->duration_to_seconds($late_duration);
+					$salary_tier = isset($records[$i]['salary_tier']) ? (string) $records[$i]['salary_tier'] : '';
+					$salary_monthly = isset($records[$i]['salary_monthly']) ? (float) $records[$i]['salary_monthly'] : 0;
+					$work_days = isset($records[$i]['work_days_per_month']) && (int) $records[$i]['work_days_per_month'] > 0
+						? (int) $records[$i]['work_days_per_month']
+						: $month_policy['work_days'];
+					$deduction_result = $this->calculate_late_deduction(
+						$salary_tier,
+						$salary_monthly,
+						$work_days,
+						$late_seconds,
+						$record_date,
+						$row_username,
+						$row_weekly_day_off
+					);
+					$records[$i]['salary_cut_amount'] = number_format($deduction_result['amount'], 0, '.', '');
+					$records[$i]['salary_cut_rule'] = $deduction_result['rule'];
+					$records[$i]['salary_cut_category'] = isset($deduction_result['category_key']) ? (string) $deduction_result['category_key'] : '';
 				}
-				$salary_tier = isset($records[$i]['salary_tier']) ? (string) $records[$i]['salary_tier'] : '';
-				$salary_monthly = isset($records[$i]['salary_monthly']) ? (float) $records[$i]['salary_monthly'] : 0;
-				$record_date = isset($records[$i]['date']) ? (string) $records[$i]['date'] : '';
-				$month_policy = $this->calculate_month_work_policy($record_date);
-				$work_days = isset($records[$i]['work_days_per_month']) && (int) $records[$i]['work_days_per_month'] > 0
-					? (int) $records[$i]['work_days_per_month']
-					: $month_policy['work_days'];
-				$deduction_result = $this->calculate_late_deduction(
-					$salary_tier,
-					$salary_monthly,
-					$work_days,
-					$late_seconds,
-					$record_date,
-					$row_username
-				);
-				$records[$i]['salary_cut_amount'] = number_format($deduction_result['amount'], 0, '.', '');
-				$records[$i]['salary_cut_rule'] = $deduction_result['rule'];
-				$records[$i]['salary_cut_category'] = isset($deduction_result['category_key']) ? (string) $deduction_result['category_key'] : '';
 			}
 
 			if (!isset($records[$i]['work_days_per_month']) || (int) $records[$i]['work_days_per_month'] <= 0)
 			{
-				$record_date = isset($records[$i]['date']) ? (string) $records[$i]['date'] : '';
-				$month_policy = $this->calculate_month_work_policy($record_date);
 				$records[$i]['work_days_per_month'] = $month_policy['work_days'];
 				$records[$i]['days_in_month'] = $month_policy['days_in_month'];
 				$records[$i]['weekly_off_days'] = $month_policy['weekly_off_days'];
@@ -3319,11 +3882,114 @@ class Home extends CI_Controller {
 			return;
 		}
 
-		$month_input = trim((string) $this->input->get('month', TRUE));
-		if (!preg_match('/^\d{4}-\d{2}$/', $month_input))
+		$records = $this->load_attendance_records();
+		$leave_requests = $this->load_leave_requests();
+		$scope_lookup = $this->scoped_employee_lookup();
+		$month_index = array();
+		$current_month_key = date('Y-m');
+		$month_index[$current_month_key] = TRUE;
+
+		for ($record_i = 0; $record_i < count($records); $record_i += 1)
 		{
-			$month_input = date('Y-m');
+			$row = $records[$record_i];
+			$row_username = isset($row['username']) ? strtolower(trim((string) $row['username'])) : '';
+			if ($row_username === '' || !isset($scope_lookup[$row_username]))
+			{
+				continue;
+			}
+			$row_date = isset($row['date']) ? trim((string) $row['date']) : '';
+			if (!$this->is_valid_date_format($row_date))
+			{
+				continue;
+			}
+			$month_index[substr($row_date, 0, 7)] = TRUE;
 		}
+
+		for ($request_i = 0; $request_i < count($leave_requests); $request_i += 1)
+		{
+			$request = $leave_requests[$request_i];
+			$request_status = isset($request['status']) ? strtolower(trim((string) $request['status'])) : '';
+			if ($request_status !== 'diterima')
+			{
+				continue;
+			}
+			$request_username = isset($request['username']) ? strtolower(trim((string) $request['username'])) : '';
+			if ($request_username === '' || !isset($scope_lookup[$request_username]))
+			{
+				continue;
+			}
+			$start_date = isset($request['start_date']) ? trim((string) $request['start_date']) : '';
+			$end_date = isset($request['end_date']) ? trim((string) $request['end_date']) : '';
+			if (!$this->is_valid_date_format($start_date) || !$this->is_valid_date_format($end_date))
+			{
+				continue;
+			}
+
+			$start_month_ts = strtotime(substr($start_date, 0, 7).'-01 00:00:00');
+			$end_month_ts = strtotime(substr($end_date, 0, 7).'-01 00:00:00');
+			if ($start_month_ts === FALSE || $end_month_ts === FALSE)
+			{
+				continue;
+			}
+			if ($end_month_ts < $start_month_ts)
+			{
+				$temp_ts = $start_month_ts;
+				$start_month_ts = $end_month_ts;
+				$end_month_ts = $temp_ts;
+			}
+
+			for ($cursor_ts = $start_month_ts; $cursor_ts <= $end_month_ts; $cursor_ts = strtotime('+1 month', $cursor_ts))
+			{
+				if ($cursor_ts === FALSE)
+				{
+					break;
+				}
+				$month_index[date('Y-m', $cursor_ts)] = TRUE;
+			}
+		}
+
+		$available_months = array_keys($month_index);
+		if (empty($available_months))
+		{
+			$available_months = array($current_month_key);
+		}
+		rsort($available_months, SORT_STRING);
+
+		$page_raw = (int) $this->input->get('page', TRUE);
+		$current_page = $page_raw > 0 ? $page_raw : 1;
+		$month_input = trim((string) $this->input->get('month', TRUE));
+		if (preg_match('/^\d{4}-\d{2}$/', $month_input))
+		{
+			if (!isset($month_index[$month_input]))
+			{
+				$month_index[$month_input] = TRUE;
+				$available_months = array_keys($month_index);
+				rsort($available_months, SORT_STRING);
+			}
+		}
+		else
+		{
+			$total_pages = count($available_months);
+			if ($current_page > $total_pages)
+			{
+				$current_page = $total_pages;
+			}
+			if ($current_page < 1)
+			{
+				$current_page = 1;
+			}
+			$month_input = isset($available_months[$current_page - 1]) ? (string) $available_months[$current_page - 1] : $current_month_key;
+		}
+
+		$current_page_index = array_search($month_input, $available_months, TRUE);
+		if ($current_page_index === FALSE)
+		{
+			$available_months[] = $month_input;
+			rsort($available_months, SORT_STRING);
+			$current_page_index = array_search($month_input, $available_months, TRUE);
+		}
+		$current_page = $current_page_index === FALSE ? 1 : ((int) $current_page_index + 1);
+		$total_pages = count($available_months);
 
 		$month_start = $month_input.'-01';
 		$month_start_ts = strtotime($month_start.' 00:00:00');
@@ -3339,9 +4005,8 @@ class Home extends CI_Controller {
 		$days_in_month = cal_days_in_month(CAL_GREGORIAN, $month, $year);
 		$month_end = sprintf('%04d-%02d-%02d', $year, $month, $days_in_month);
 		$month_end_ts = strtotime($month_end.' 23:59:59');
-		$month_policy = $this->calculate_month_work_policy($month_start);
-		$work_days_default = isset($month_policy['work_days']) ? (int) $month_policy['work_days'] : self::WORK_DAYS_DEFAULT;
-		$weekly_day_off_n = $this->normalize_weekly_day_off(self::WEEKLY_HOLIDAY_DAY);
+		$month_policy_default = $this->calculate_month_work_policy($month_start, $this->default_weekly_day_off());
+		$work_days_default = isset($month_policy_default['work_days']) ? (int) $month_policy_default['work_days'] : self::WORK_DAYS_DEFAULT;
 		$year_start_ts = strtotime(sprintf('%04d-01-01 00:00:00', $year));
 		$before_period_end_ts = strtotime($month_start.' 00:00:00') - 1;
 
@@ -3361,9 +4026,7 @@ class Home extends CI_Controller {
 		);
 		$month_label = (isset($month_names[$month]) ? $month_names[$month] : date('F', $month_start_ts)).' '.$year;
 
-		$records = $this->load_attendance_records();
 		$users = array();
-		$scope_lookup = $this->scoped_employee_lookup();
 		$employee_id_book = $this->employee_id_book();
 
 		for ($i = 0; $i < count($records); $i += 1)
@@ -3381,10 +4044,15 @@ class Home extends CI_Controller {
 			}
 			$employee_id = $this->resolve_employee_id_from_book($username, $employee_id_book);
 			$user_profile = $this->get_employee_profile($username);
-			$profile_work_days = isset($user_profile['work_days']) && (int) $user_profile['work_days'] > 0
-				? (int) $user_profile['work_days']
-				: 0;
-			$resolved_work_days = $profile_work_days > 0 ? $profile_work_days : $work_days_default;
+			$profile_weekly_day_off = isset($user_profile['weekly_day_off'])
+				? $this->resolve_employee_weekly_day_off($user_profile['weekly_day_off'])
+				: $this->default_weekly_day_off();
+			$profile_month_policy = $this->calculate_month_work_policy($month_start, $profile_weekly_day_off);
+			$resolved_work_days = isset($profile_month_policy['work_days']) ? (int) $profile_month_policy['work_days'] : $work_days_default;
+			if ($resolved_work_days <= 0)
+			{
+				$resolved_work_days = $work_days_default;
+			}
 			$profile_salary_tier = isset($user_profile['salary_tier']) ? trim((string) $user_profile['salary_tier']) : '';
 			$profile_salary_monthly = isset($user_profile['salary_monthly']) ? (float) $user_profile['salary_monthly'] : 0;
 			$profile_photo = isset($user_profile['profile_photo']) ? trim((string) $user_profile['profile_photo']) : '';
@@ -3407,6 +4075,7 @@ class Home extends CI_Controller {
 					'salary_monthly' => $profile_salary_monthly > 0
 						? $profile_salary_monthly
 						: (isset($row['salary_monthly']) ? (float) $row['salary_monthly'] : 0),
+					'weekly_day_off' => $profile_weekly_day_off,
 					'work_days_plan' => isset($row['work_days_per_month']) && (int) $row['work_days_per_month'] > 0
 						? (int) $row['work_days_per_month']
 						: $resolved_work_days,
@@ -3471,10 +4140,7 @@ class Home extends CI_Controller {
 			{
 				$users[$username]['salary_monthly'] = $profile_salary_monthly;
 			}
-			if ($profile_work_days > 0)
-			{
-				$users[$username]['work_days_plan'] = $profile_work_days;
-			}
+			$users[$username]['weekly_day_off'] = $profile_weekly_day_off;
 			if ($profile_photo !== '')
 			{
 				$users[$username]['profile_photo'] = $profile_photo;
@@ -3532,14 +4198,14 @@ class Home extends CI_Controller {
 				$late_seconds = 0;
 				$late_category = '';
 				$shift_time = isset($row['shift_time']) ? trim((string) $row['shift_time']) : '';
-				$computed_late = $shift_time !== '' ? $this->calculate_late_duration($check_in_time, $shift_time) : '';
-				if ($computed_late !== '')
+				$stored_late = isset($row['check_in_late']) ? trim((string) $row['check_in_late']) : '';
+				if ($stored_late !== '')
 				{
-					$late_seconds = $this->duration_to_seconds($computed_late);
+					$late_seconds = $this->duration_to_seconds($stored_late);
 				}
-				elseif (isset($row['check_in_late']) && trim((string) $row['check_in_late']) !== '')
+				elseif ($shift_time !== '')
 				{
-					$late_seconds = $this->duration_to_seconds((string) $row['check_in_late']);
+					$late_seconds = $this->duration_to_seconds($this->calculate_late_duration($check_in_time, $shift_time));
 				}
 
 				if ($late_seconds > 0 && $late_seconds <= 1800)
@@ -3601,7 +4267,6 @@ class Home extends CI_Controller {
 			}
 		}
 
-		$leave_requests = $this->load_leave_requests();
 		for ($i = 0; $i < count($leave_requests); $i += 1)
 		{
 			$request = $leave_requests[$i];
@@ -3623,10 +4288,15 @@ class Home extends CI_Controller {
 			}
 			$employee_id = $this->resolve_employee_id_from_book($username, $employee_id_book);
 			$user_profile = $this->get_employee_profile($username);
-			$profile_work_days = isset($user_profile['work_days']) && (int) $user_profile['work_days'] > 0
-				? (int) $user_profile['work_days']
-				: 0;
-			$resolved_work_days = $profile_work_days > 0 ? $profile_work_days : $work_days_default;
+			$profile_weekly_day_off = isset($user_profile['weekly_day_off'])
+				? $this->resolve_employee_weekly_day_off($user_profile['weekly_day_off'])
+				: $this->default_weekly_day_off();
+			$profile_month_policy = $this->calculate_month_work_policy($month_start, $profile_weekly_day_off);
+			$resolved_work_days = isset($profile_month_policy['work_days']) ? (int) $profile_month_policy['work_days'] : $work_days_default;
+			if ($resolved_work_days <= 0)
+			{
+				$resolved_work_days = $work_days_default;
+			}
 			$profile_salary_tier = isset($user_profile['salary_tier']) ? trim((string) $user_profile['salary_tier']) : '';
 			$profile_salary_monthly = isset($user_profile['salary_monthly']) ? (float) $user_profile['salary_monthly'] : 0;
 			$profile_photo = isset($user_profile['profile_photo']) ? trim((string) $user_profile['profile_photo']) : '';
@@ -3645,6 +4315,7 @@ class Home extends CI_Controller {
 					'phone' => $profile_phone !== '' ? $profile_phone : $this->get_employee_phone($username),
 					'salary_tier' => $profile_salary_tier,
 					'salary_monthly' => $profile_salary_monthly,
+					'weekly_day_off' => $profile_weekly_day_off,
 					'work_days_plan' => $resolved_work_days,
 					'hadir_dates' => array(),
 					'leave_dates' => array(),
@@ -3672,10 +4343,7 @@ class Home extends CI_Controller {
 				{
 					$users[$username]['salary_monthly'] = $profile_salary_monthly;
 				}
-				if ($profile_work_days > 0)
-				{
-					$users[$username]['work_days_plan'] = $profile_work_days;
-				}
+				$users[$username]['weekly_day_off'] = $profile_weekly_day_off;
 				if (!isset($users[$username]['employee_id']) || trim((string) $users[$username]['employee_id']) === '')
 				{
 					$users[$username]['employee_id'] = $employee_id;
@@ -3698,10 +4366,9 @@ class Home extends CI_Controller {
 				}
 			}
 
-			$request_type = isset($request['request_type']) ? strtolower(trim((string) $request['request_type'])) : '';
-			$request_type_label = isset($request['request_type_label']) ? strtolower(trim((string) $request['request_type_label'])) : '';
-			$is_izin_request = $request_type === 'izin' || $request_type_label === 'izin';
-			$is_cuti_request = $request_type === 'cuti' || $request_type_label === 'cuti';
+			$request_type = $this->resolve_leave_request_type($request);
+			$is_izin_request = $request_type === 'izin';
+			$is_cuti_request = $request_type === 'cuti';
 			if ($is_izin_request !== TRUE && $is_cuti_request !== TRUE)
 			{
 				continue;
@@ -3751,22 +4418,14 @@ class Home extends CI_Controller {
 			{
 				$date_key = date('Y-m-d', $ts);
 				// Total izin/cuti bulanan diambil dari data pengajuan yang sudah diterima.
-				if (isset($users[$username]['hadir_dates'][$date_key]))
-				{
-					continue;
-				}
-
+				// Tetap dihitung walau ada jejak hadir pada tanggal yang sama.
 				$users[$username]['leave_dates'][$date_key] = TRUE;
 				if ($is_izin_request)
 				{
 					$users[$username]['izin_dates'][$date_key] = TRUE;
 					$users[$username]['leave_type_by_date'][$date_key] = 'izin';
-					if (isset($users[$username]['cuti_dates'][$date_key]))
-					{
-						unset($users[$username]['cuti_dates'][$date_key]);
-					}
 				}
-				elseif (!isset($users[$username]['izin_dates'][$date_key]))
+				elseif ($is_cuti_request)
 				{
 					$users[$username]['cuti_dates'][$date_key] = TRUE;
 					if (!isset($users[$username]['leave_type_by_date'][$date_key]))
@@ -3785,7 +4444,11 @@ class Home extends CI_Controller {
 				continue;
 			}
 
-			$work_days_plan = isset($user_data['work_days_plan']) ? (int) $user_data['work_days_plan'] : $work_days_default;
+			$weekly_day_off_n = isset($user_data['weekly_day_off'])
+				? $this->resolve_employee_weekly_day_off($user_data['weekly_day_off'])
+				: $this->default_weekly_day_off();
+			$month_policy = $this->calculate_month_work_policy($month_start, $weekly_day_off_n);
+			$work_days_plan = isset($month_policy['work_days']) ? (int) $month_policy['work_days'] : $work_days_default;
 			if ($work_days_plan <= 0)
 			{
 				$work_days_plan = $work_days_default;
@@ -3807,10 +4470,14 @@ class Home extends CI_Controller {
 				? count($user_data['cuti_before_dates'])
 				: 0;
 			$hari_efektif_bulan = max($days_in_month - (int) $month_policy['weekly_off_days'], 1);
-			$total_alpha = $hari_efektif_bulan - $hadir_days - $leave_days;
-			if ($total_alpha < 0)
+			$total_alpha = 0;
+			if ($this->monthly_infer_alpha_from_gap_enabled())
 			{
-				$total_alpha = 0;
+				$total_alpha = $hari_efektif_bulan - $hadir_days - $leave_days;
+				if ($total_alpha < 0)
+				{
+					$total_alpha = 0;
+				}
 			}
 			$total_alpha_izin = $total_alpha + $izin_days;
 			$total_telat_1_30 = isset($user_data['late_1_30']) ? (int) $user_data['late_1_30'] : 0;
@@ -3840,9 +4507,22 @@ class Home extends CI_Controller {
 
 				$sheet_izin_cuti = isset($sheet_summary['total_izin_cuti']) ? (int) $sheet_summary['total_izin_cuti'] : 0;
 				$sheet_izin_cuti = max(0, $sheet_izin_cuti);
-				$izin_days = $sheet_izin_cuti;
-				$cuti_days = 0;
-				$leave_days = $izin_days + $cuti_days;
+				$request_leave_days = $izin_days + $cuti_days;
+				$request_leave_days_unique = isset($user_data['leave_dates']) && is_array($user_data['leave_dates'])
+					? count($user_data['leave_dates'])
+					: 0;
+				// Prioritaskan data pengajuan yang sudah diterima.
+				// Nilai sheet dipakai sebagai fallback jika lebih besar.
+				if ($sheet_izin_cuti > $request_leave_days)
+				{
+					$izin_days = $sheet_izin_cuti;
+					$cuti_days = 0;
+				}
+				$leave_days = $request_leave_days_unique;
+				if ($sheet_izin_cuti > $leave_days)
+				{
+					$leave_days = $sheet_izin_cuti;
+				}
 
 				$sheet_alpha = isset($sheet_summary['total_alpha']) ? (int) $sheet_summary['total_alpha'] : 0;
 				$total_alpha = max(0, $sheet_alpha);
@@ -3855,7 +4535,11 @@ class Home extends CI_Controller {
 				$leave_used_before_period = 0;
 			}
 
-			if (!$has_sheet_summary && $this->should_randomize_monthly_demo_data($hadir_days, $leave_days, $total_alpha, $hari_efektif_bulan))
+			if (
+				$this->monthly_demo_randomization_enabled() &&
+				!$has_sheet_summary &&
+				$this->should_randomize_monthly_demo_data($hadir_days, $leave_days, $total_alpha, $hari_efektif_bulan)
+			)
 			{
 				$randomized = $this->build_randomized_monthly_demo_data(
 					$username,
@@ -3927,6 +4611,7 @@ class Home extends CI_Controller {
 					: $this->get_employee_phone($username),
 				'salary_monthly' => (int) round($salary_monthly),
 				'work_days_plan' => $work_days_plan,
+				'weekly_day_off' => $weekly_day_off_n,
 				'hadir_days' => $hadir_days,
 				'izin_days' => $izin_days,
 				'cuti_days' => $cuti_days,
@@ -3964,6 +4649,11 @@ class Home extends CI_Controller {
 			'title' => 'Data Absensi Bulanan',
 			'selected_month' => $month_input,
 			'selected_month_label' => $month_label,
+			'month_pagination' => array(
+				'current_page' => $current_page,
+				'total_pages' => $total_pages,
+				'available_months' => $available_months
+			),
 			'rows' => $rows
 		);
 		$this->load->view('home/employee_attendance_monthly', $data);
@@ -4066,6 +4756,95 @@ class Home extends CI_Controller {
 			);
 		}
 
+		redirect('home/employee_data');
+	}
+
+	public function delete_attendance_record()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			redirect('login');
+			return;
+		}
+
+		if ((string) $this->session->userdata('absen_role') === 'user')
+		{
+			redirect('home');
+			return;
+		}
+
+		if ($this->input->method(TRUE) !== 'POST')
+		{
+			redirect('home/employee_data');
+			return;
+		}
+
+		$username = trim((string) $this->input->post('username', TRUE));
+		$date_key = trim((string) $this->input->post('date', TRUE));
+
+		if ($username === '' || $date_key === '' || !$this->is_valid_date_format($date_key))
+		{
+			$this->session->set_flashdata('attendance_notice_error', 'Data absensi yang ingin dihapus tidak valid.');
+			redirect('home/employee_data');
+			return;
+		}
+		if (!$this->is_username_in_actor_scope($username))
+		{
+			$this->session->set_flashdata('attendance_notice_error', 'Akses data absensi ditolak karena beda cabang.');
+			redirect('home/employee_data');
+			return;
+		}
+
+		$records = $this->load_attendance_records();
+		$record_index = -1;
+		for ($i = 0; $i < count($records); $i += 1)
+		{
+			$row_username = isset($records[$i]['username']) ? (string) $records[$i]['username'] : '';
+			$row_date = isset($records[$i]['date']) ? (string) $records[$i]['date'] : '';
+			if ($row_username === $username && $row_date === $date_key)
+			{
+				$record_index = $i;
+				break;
+			}
+		}
+
+		if ($record_index < 0)
+		{
+			$this->session->set_flashdata('attendance_notice_error', 'Data absensi tidak ditemukan atau sudah dihapus.');
+			redirect('home/employee_data');
+			return;
+		}
+
+		$record_row = $records[$record_index];
+		$check_in_time = isset($record_row['check_in_time']) && trim((string) $record_row['check_in_time']) !== ''
+			? (string) $record_row['check_in_time']
+			: '-';
+		$check_out_time = isset($record_row['check_out_time']) && trim((string) $record_row['check_out_time']) !== ''
+			? (string) $record_row['check_out_time']
+			: '-';
+		unset($records[$record_index]);
+		$this->save_attendance_records(array_values($records));
+		$this->clear_admin_dashboard_live_summary_cache();
+
+		$delete_note = 'Hapus data absensi tidak valid dari data web.';
+		$delete_note .= ' Tanggal '.$date_key.'.';
+		$delete_note .= ' Jam masuk '.$check_in_time.', jam pulang '.$check_out_time.'.';
+		$this->log_activity_event(
+			'delete_attendance_record',
+			'web_data',
+			$username,
+			$username,
+			$delete_note,
+			array(
+				'target_id' => strtolower($username).'|'.$date_key,
+				'old_value' => 'masuk='.$check_in_time.',pulang='.$check_out_time
+			)
+		);
+
+		$this->session->set_flashdata(
+			'attendance_notice_success',
+			'Data absensi '.$username.' tanggal '.$date_key.' berhasil dihapus.'
+		);
 		redirect('home/employee_data');
 	}
 
@@ -4526,6 +5305,266 @@ class Home extends CI_Controller {
 		redirect('home/loan_requests');
 	}
 
+	public function delete_leave_request()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			redirect('login');
+			return;
+		}
+
+		if ((string) $this->session->userdata('absen_role') === 'user')
+		{
+			redirect('home');
+			return;
+		}
+
+		if ($this->input->method(TRUE) !== 'POST')
+		{
+			redirect('home/leave_requests');
+			return;
+		}
+
+		if (!$this->is_developer_actor())
+		{
+			$this->session->set_flashdata('leave_notice_error', 'Hanya akun developer yang bisa menghapus data pengajuan cuti/izin.');
+			redirect('home/leave_requests');
+			return;
+		}
+
+		$request_id = trim((string) $this->input->post('request_id', TRUE));
+		if ($request_id === '')
+		{
+			$this->session->set_flashdata('leave_notice_error', 'Data pengajuan yang ingin dihapus tidak valid.');
+			redirect('home/leave_requests');
+			return;
+		}
+
+		$requests = $this->load_leave_requests();
+		$target_index = -1;
+		for ($i = 0; $i < count($requests); $i += 1)
+		{
+			if (isset($requests[$i]['id']) && (string) $requests[$i]['id'] === $request_id)
+			{
+				$target_index = $i;
+				break;
+			}
+		}
+
+		if ($target_index < 0)
+		{
+			$this->session->set_flashdata('leave_notice_error', 'Data pengajuan tidak ditemukan atau sudah dihapus.');
+			redirect('home/leave_requests');
+			return;
+		}
+
+		$request_row = $requests[$target_index];
+		$request_username = isset($request_row['username']) ? (string) $request_row['username'] : '';
+		if (!$this->is_username_in_actor_scope($request_username))
+		{
+			$this->session->set_flashdata('leave_notice_error', 'Akses pengajuan ditolak karena beda cabang.');
+			redirect('home/leave_requests');
+			return;
+		}
+
+		$support_file_path = isset($request_row['support_file_path']) ? trim((string) $request_row['support_file_path']) : '';
+		if ($support_file_path !== '')
+		{
+			$this->delete_local_uploaded_file($support_file_path);
+		}
+
+		unset($requests[$target_index]);
+		$this->save_leave_requests(array_values($requests));
+
+		$leave_type = $this->resolve_leave_request_type($request_row);
+		$leave_type_label = $leave_type === 'cuti' ? 'cuti' : 'izin';
+		$leave_note = 'Hapus data pengajuan '.$leave_type_label.'.';
+		$leave_note .= ' Periode '.(isset($request_row['start_date']) ? (string) $request_row['start_date'] : '-');
+		$leave_note .= ' s/d '.(isset($request_row['end_date']) ? (string) $request_row['end_date'] : '-').'.';
+		$this->log_activity_event(
+			'delete_leave_request',
+			'web_data',
+			$request_username,
+			$request_username,
+			$leave_note,
+			array(
+				'target_id' => $request_id,
+				'old_value' => isset($request_row['status']) ? (string) $request_row['status'] : ''
+			)
+		);
+
+		$this->session->set_flashdata('leave_notice_success', 'Data pengajuan cuti/izin berhasil dihapus.');
+		redirect('home/leave_requests');
+	}
+
+	public function delete_loan_request()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			redirect('login');
+			return;
+		}
+
+		if ((string) $this->session->userdata('absen_role') === 'user')
+		{
+			redirect('home');
+			return;
+		}
+
+		if ($this->input->method(TRUE) !== 'POST')
+		{
+			redirect('home/loan_requests');
+			return;
+		}
+
+		if (!$this->is_developer_actor())
+		{
+			$this->session->set_flashdata('loan_notice_error', 'Hanya akun developer yang bisa menghapus data pengajuan pinjaman.');
+			redirect('home/loan_requests');
+			return;
+		}
+
+		$request_id = trim((string) $this->input->post('request_id', TRUE));
+		if ($request_id === '')
+		{
+			$this->session->set_flashdata('loan_notice_error', 'Data pinjaman yang ingin dihapus tidak valid.');
+			redirect('home/loan_requests');
+			return;
+		}
+
+		$requests = $this->load_loan_requests();
+		$target_index = -1;
+		for ($i = 0; $i < count($requests); $i += 1)
+		{
+			if (isset($requests[$i]['id']) && (string) $requests[$i]['id'] === $request_id)
+			{
+				$target_index = $i;
+				break;
+			}
+		}
+
+		if ($target_index < 0)
+		{
+			$this->session->set_flashdata('loan_notice_error', 'Data pengajuan pinjaman tidak ditemukan atau sudah dihapus.');
+			redirect('home/loan_requests');
+			return;
+		}
+
+		$request_row = $requests[$target_index];
+		$request_username = isset($request_row['username']) ? (string) $request_row['username'] : '';
+		if (!$this->is_username_in_actor_scope($request_username))
+		{
+			$this->session->set_flashdata('loan_notice_error', 'Akses pengajuan ditolak karena beda cabang.');
+			redirect('home/loan_requests');
+			return;
+		}
+
+		unset($requests[$target_index]);
+		$this->save_loan_requests(array_values($requests));
+
+		$loan_note = 'Hapus data pengajuan pinjaman.';
+		$loan_note .= ' Nominal Rp '.number_format((int) (isset($request_row['amount']) ? $request_row['amount'] : 0), 0, ',', '.').'.';
+		$this->log_activity_event(
+			'delete_loan_request',
+			'web_data',
+			$request_username,
+			$request_username,
+			$loan_note,
+			array(
+				'target_id' => $request_id,
+				'old_value' => isset($request_row['status']) ? (string) $request_row['status'] : ''
+			)
+		);
+
+		$this->session->set_flashdata('loan_notice_success', 'Data pengajuan pinjaman berhasil dihapus.');
+		redirect('home/loan_requests');
+	}
+
+	public function delete_overtime_record()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			redirect('login');
+			return;
+		}
+
+		if ((string) $this->session->userdata('absen_role') === 'user')
+		{
+			redirect('home');
+			return;
+		}
+
+		if ($this->input->method(TRUE) !== 'POST')
+		{
+			redirect('home/overtime_data');
+			return;
+		}
+
+		if (!$this->is_developer_actor())
+		{
+			$this->session->set_flashdata('overtime_notice_error', 'Hanya akun developer yang bisa menghapus data lembur.');
+			redirect('home/overtime_data');
+			return;
+		}
+
+		$record_id = trim((string) $this->input->post('record_id', TRUE));
+		if ($record_id === '')
+		{
+			$this->session->set_flashdata('overtime_notice_error', 'Data lembur yang ingin dihapus tidak valid.');
+			redirect('home/overtime_data');
+			return;
+		}
+
+		$records = $this->load_overtime_records();
+		$target_index = -1;
+		for ($i = 0; $i < count($records); $i += 1)
+		{
+			if (isset($records[$i]['id']) && (string) $records[$i]['id'] === $record_id)
+			{
+				$target_index = $i;
+				break;
+			}
+		}
+
+		if ($target_index < 0)
+		{
+			$this->session->set_flashdata('overtime_notice_error', 'Data lembur tidak ditemukan atau sudah dihapus.');
+			redirect('home/overtime_data');
+			return;
+		}
+
+		$record_row = $records[$target_index];
+		$record_username = isset($record_row['username']) ? (string) $record_row['username'] : '';
+		if (!$this->is_username_in_actor_scope($record_username))
+		{
+			$this->session->set_flashdata('overtime_notice_error', 'Akses data lembur ditolak karena beda cabang.');
+			redirect('home/overtime_data');
+			return;
+		}
+
+		unset($records[$target_index]);
+		$this->save_overtime_records(array_values($records));
+
+		$overtime_note = 'Hapus data lembur.';
+		$overtime_note .= ' Tanggal '.(isset($record_row['overtime_date']) ? (string) $record_row['overtime_date'] : '-');
+		$overtime_note .= ', jam '.(isset($record_row['start_time']) ? (string) $record_row['start_time'] : '-');
+		$overtime_note .= '-'.(isset($record_row['end_time']) ? (string) $record_row['end_time'] : '-').'.';
+		$this->log_activity_event(
+			'delete_overtime_record',
+			'web_data',
+			$record_username,
+			$record_username,
+			$overtime_note,
+			array(
+				'target_id' => $record_id,
+				'old_value' => isset($record_row['nominal']) ? (string) $record_row['nominal'] : ''
+			)
+		);
+
+		$this->session->set_flashdata('overtime_notice_success', 'Data lembur berhasil dihapus.');
+		redirect('home/overtime_data');
+	}
+
 	public function leave_requests()
 	{
 		if ($this->session->userdata('absen_logged_in') !== TRUE)
@@ -4742,7 +5781,8 @@ class Home extends CI_Controller {
 
 		$data = array(
 			'title' => 'Pengajuan Cuti / Izin',
-			'requests' => $visible_requests
+			'requests' => $visible_requests,
+			'is_developer_actor' => $this->is_developer_actor()
 		);
 		$this->load->view('home/leave_requests', $data);
 	}
@@ -4960,7 +6000,8 @@ class Home extends CI_Controller {
 
 		$data = array(
 			'title' => 'Pengajuan Pinjaman',
-			'requests' => $visible_requests
+			'requests' => $visible_requests,
+			'is_developer_actor' => $this->is_developer_actor()
 		);
 		$this->load->view('home/loan_requests', $data);
 	}
@@ -5132,7 +6173,8 @@ class Home extends CI_Controller {
 			'title' => 'Data Lembur',
 			'employee_names' => $employee_names,
 			'employee_options' => $employee_options,
-			'records' => $visible_records
+			'records' => $visible_records,
+			'is_developer_actor' => $this->is_developer_actor()
 		);
 		$this->load->view('home/overtime_data', $data);
 	}
@@ -5334,7 +6376,15 @@ class Home extends CI_Controller {
 				$row_shift_time = $shift_time;
 			}
 
-			$late_duration = $row_check_in !== '' ? $this->calculate_late_duration($row_check_in, $row_shift_time) : '00:00:00';
+			$late_duration = isset($records[$i]['check_in_late']) ? trim((string) $records[$i]['check_in_late']) : '';
+			if ($late_duration === '' && $row_check_in !== '')
+			{
+				$late_duration = $this->calculate_late_duration($row_check_in, $row_shift_time);
+			}
+			if ($late_duration === '')
+			{
+				$late_duration = '00:00:00';
+			}
 			$late_seconds = $this->duration_to_seconds($late_duration);
 			$is_late = $row_check_in !== '' && $late_seconds > 0;
 
@@ -5682,6 +6732,347 @@ class Home extends CI_Controller {
 		return '17:00';
 	}
 
+	private function build_admin_dashboard_summary_only()
+	{
+		$metric_maps = $this->build_admin_metric_maps();
+		$today_key = date('Y-m-d');
+		$month_start_key = date('Y-m-01');
+		$summary = array(
+			'status_hari_ini' => 'Monitoring Hari Ini',
+			'jam_masuk' => '-',
+			'jam_pulang' => '-',
+			'total_hadir_bulan_ini' => 0,
+			'total_terlambat_bulan_ini' => 0,
+			'total_izin_bulan_ini' => 0,
+			'total_alpha_bulan_ini' => 0
+		);
+
+		$activity_start_key = $this->resolve_admin_activity_start_key($month_start_key, $today_key, $metric_maps);
+		$start_ts = $activity_start_key !== '' ? strtotime($activity_start_key.' 00:00:00') : FALSE;
+		$end_ts = strtotime($today_key.' 00:00:00');
+		if ($start_ts !== FALSE && $end_ts !== FALSE && $start_ts <= $end_ts)
+		{
+			for ($cursor = $start_ts; $cursor <= $end_ts; $cursor = strtotime('+1 day', $cursor))
+			{
+				$date_key = date('Y-m-d', $cursor);
+				$day_counts = $this->build_admin_day_counts($date_key, $metric_maps);
+				$summary['total_hadir_bulan_ini'] += isset($day_counts['hadir']) ? (int) $day_counts['hadir'] : 0;
+				$summary['total_terlambat_bulan_ini'] += isset($day_counts['terlambat']) ? (int) $day_counts['terlambat'] : 0;
+				$summary['total_izin_bulan_ini'] += isset($day_counts['izin_cuti']) ? (int) $day_counts['izin_cuti'] : 0;
+				$summary['total_alpha_bulan_ini'] += isset($day_counts['alpha']) ? (int) $day_counts['alpha'] : 0;
+			}
+		}
+		$sheet_summary_totals = $this->build_admin_sheet_month_summary_totals(date('Y-m'));
+		if (isset($sheet_summary_totals['has_data']) && $sheet_summary_totals['has_data'] === TRUE)
+		{
+			$summary['total_hadir_bulan_ini'] = isset($sheet_summary_totals['total_hadir']) ? (int) $sheet_summary_totals['total_hadir'] : $summary['total_hadir_bulan_ini'];
+			$summary['total_terlambat_bulan_ini'] = isset($sheet_summary_totals['total_terlambat']) ? (int) $sheet_summary_totals['total_terlambat'] : $summary['total_terlambat_bulan_ini'];
+			$summary['total_izin_bulan_ini'] = isset($sheet_summary_totals['total_izin']) ? (int) $sheet_summary_totals['total_izin'] : $summary['total_izin_bulan_ini'];
+			$summary['total_alpha_bulan_ini'] = isset($sheet_summary_totals['total_alpha']) ? (int) $sheet_summary_totals['total_alpha'] : $summary['total_alpha_bulan_ini'];
+		}
+
+		$today_checkins = isset($metric_maps['checkin_seconds_by_date'][$today_key]) && is_array($metric_maps['checkin_seconds_by_date'][$today_key])
+			? $metric_maps['checkin_seconds_by_date'][$today_key]
+			: array();
+		if (!empty($today_checkins))
+		{
+			$min_seconds = min(array_values($today_checkins));
+			$summary['jam_masuk'] = $this->format_user_dashboard_time_hhmm(gmdate('H:i:s', max(0, (int) $min_seconds)));
+		}
+
+		$today_checkouts = isset($metric_maps['checkout_seconds_by_date'][$today_key]) && is_array($metric_maps['checkout_seconds_by_date'][$today_key])
+			? $metric_maps['checkout_seconds_by_date'][$today_key]
+			: array();
+		if (!empty($today_checkouts))
+		{
+			$max_seconds = max(array_values($today_checkouts));
+			$summary['jam_pulang'] = $this->format_user_dashboard_time_hhmm(gmdate('H:i:s', max(0, (int) $max_seconds)));
+		}
+
+		if (empty($today_checkins))
+		{
+			$summary['status_hari_ini'] = 'Belum Ada Absen Masuk';
+		}
+		elseif ($summary['jam_pulang'] !== '-')
+		{
+			$summary['status_hari_ini'] = 'Monitoring Check Out';
+		}
+
+		return $summary;
+	}
+
+	private function build_admin_sheet_month_summary_totals($month_key = '')
+	{
+		$month_key = trim((string) $month_key);
+		if (!preg_match('/^\d{4}\-\d{2}$/', $month_key))
+		{
+			$month_key = date('Y-m');
+		}
+
+		$employees = $this->scoped_employee_usernames();
+		$employee_lookup = array();
+		for ($i = 0; $i < count($employees); $i += 1)
+		{
+			$username_key = strtolower(trim((string) $employees[$i]));
+			if ($username_key === '')
+			{
+				continue;
+			}
+			$employee_lookup[$username_key] = TRUE;
+		}
+		if (empty($employee_lookup))
+		{
+			return array(
+				'has_data' => FALSE,
+				'total_hadir' => 0,
+				'total_terlambat' => 0,
+				'total_izin' => 0,
+				'total_alpha' => 0,
+				'users' => 0
+			);
+		}
+
+		$records = $this->load_attendance_records();
+		$latest_by_username = array();
+		for ($i = 0; $i < count($records); $i += 1)
+		{
+			$row = isset($records[$i]) && is_array($records[$i]) ? $records[$i] : array();
+			$username_key = isset($row['username']) ? strtolower(trim((string) $row['username'])) : '';
+			if ($username_key === '' || !isset($employee_lookup[$username_key]))
+			{
+				continue;
+			}
+
+			$row_date = isset($row['date']) ? trim((string) $row['date']) : '';
+			$row_month = isset($row['sheet_month']) ? trim((string) $row['sheet_month']) : '';
+			if ($row_month === '' && strlen($row_date) >= 7)
+			{
+				$row_month = substr($row_date, 0, 7);
+			}
+			if ($row_month !== $month_key)
+			{
+				continue;
+			}
+
+			$has_sheet_summary = isset($row['sheet_total_hadir']) ||
+				isset($row['sheet_sudah_berapa_absen']) ||
+				isset($row['sheet_total_alpha']) ||
+				isset($row['sheet_total_izin_cuti']) ||
+				isset($row['sheet_total_izin']) ||
+				isset($row['sheet_total_cuti']) ||
+				isset($row['sheet_total_telat_1_30']) ||
+				isset($row['sheet_total_telat_31_60']) ||
+				isset($row['sheet_total_telat_1_3']) ||
+				isset($row['sheet_total_telat_gt_4']);
+			if (!$has_sheet_summary)
+			{
+				continue;
+			}
+
+			$sort_key = isset($row['updated_at']) ? trim((string) $row['updated_at']) : '';
+			if ($sort_key === '')
+			{
+				$check_in_text = isset($row['check_in_time']) ? trim((string) $row['check_in_time']) : '00:00:00';
+				$sort_key = ($row_date !== '' ? $row_date : ($month_key.'-01')).' '.$check_in_text;
+			}
+			$current_sort = isset($latest_by_username[$username_key]['sort_key'])
+				? (string) $latest_by_username[$username_key]['sort_key']
+				: '';
+			if ($current_sort === '' || strcmp($sort_key, $current_sort) >= 0)
+			{
+				$latest_by_username[$username_key] = array(
+					'sort_key' => $sort_key,
+					'row' => $row
+				);
+			}
+		}
+
+		if (empty($latest_by_username))
+		{
+			return array(
+				'has_data' => FALSE,
+				'total_hadir' => 0,
+				'total_terlambat' => 0,
+				'total_izin' => 0,
+				'total_alpha' => 0,
+				'users' => 0
+			);
+		}
+
+		$total_hadir = 0;
+		$total_terlambat = 0;
+		$total_izin = 0;
+		$total_alpha = 0;
+		foreach ($latest_by_username as $username_key => $snapshot)
+		{
+			$row = isset($snapshot['row']) && is_array($snapshot['row']) ? $snapshot['row'] : array();
+			$hadir = isset($row['sheet_total_hadir']) ? (int) $row['sheet_total_hadir'] : 0;
+			if ($hadir <= 0)
+			{
+				$hadir = isset($row['sheet_sudah_berapa_absen']) ? (int) $row['sheet_sudah_berapa_absen'] : 0;
+			}
+			$hadir = max(0, $hadir);
+			$total_hadir += $hadir;
+
+			$telat_1_30 = max(0, (int) (isset($row['sheet_total_telat_1_30']) ? $row['sheet_total_telat_1_30'] : 0));
+			$telat_31_60 = max(0, (int) (isset($row['sheet_total_telat_31_60']) ? $row['sheet_total_telat_31_60'] : 0));
+			$telat_1_3 = max(0, (int) (isset($row['sheet_total_telat_1_3']) ? $row['sheet_total_telat_1_3'] : 0));
+			$telat_gt_4 = max(0, (int) (isset($row['sheet_total_telat_gt_4']) ? $row['sheet_total_telat_gt_4'] : 0));
+			$total_terlambat += $telat_1_30 + $telat_31_60 + $telat_1_3 + $telat_gt_4;
+
+			$izin_cuti = isset($row['sheet_total_izin_cuti']) ? (int) $row['sheet_total_izin_cuti'] : 0;
+			if ($izin_cuti <= 0)
+			{
+				$total_izin_value = max(0, (int) (isset($row['sheet_total_izin']) ? $row['sheet_total_izin'] : 0));
+				$total_cuti_value = max(0, (int) (isset($row['sheet_total_cuti']) ? $row['sheet_total_cuti'] : 0));
+				$izin_cuti = $total_izin_value + $total_cuti_value;
+			}
+			$total_izin += max(0, $izin_cuti);
+
+			$total_alpha += max(0, (int) (isset($row['sheet_total_alpha']) ? $row['sheet_total_alpha'] : 0));
+		}
+
+		return array(
+			'has_data' => TRUE,
+			'total_hadir' => (int) $total_hadir,
+			'total_terlambat' => (int) $total_terlambat,
+			'total_izin' => (int) $total_izin,
+			'total_alpha' => (int) $total_alpha,
+			'users' => count($latest_by_username)
+		);
+	}
+
+	private function admin_dashboard_live_summary_cache_file_path()
+	{
+		return APPPATH.'cache/admin_dashboard_live_summary_cache.json';
+	}
+
+	private function load_admin_dashboard_live_summary_cache($max_age_seconds = 0)
+	{
+		$file_path = $this->admin_dashboard_live_summary_cache_file_path();
+		$cached_payload = NULL;
+		if (function_exists('absen_data_store_load_value'))
+		{
+			$loaded = absen_data_store_load_value('admin_dashboard_live_summary_cache', NULL, $file_path);
+			if (is_array($loaded))
+			{
+				$cached_payload = $loaded;
+			}
+		}
+		elseif (is_file($file_path))
+		{
+			$raw = @file_get_contents($file_path);
+			if (is_string($raw) && trim($raw) !== '')
+			{
+				if (substr($raw, 0, 3) === "\xEF\xBB\xBF")
+				{
+					$raw = substr($raw, 3);
+				}
+				$decoded = json_decode($raw, TRUE);
+				if (is_array($decoded))
+				{
+					$cached_payload = $decoded;
+				}
+			}
+		}
+
+		if (!is_array($cached_payload))
+		{
+			return NULL;
+		}
+
+		$summary = isset($cached_payload['summary']) && is_array($cached_payload['summary'])
+			? $cached_payload['summary']
+			: array();
+		$generated_at = isset($cached_payload['generated_at']) ? trim((string) $cached_payload['generated_at']) : '';
+		$cached_at = isset($cached_payload['cached_at']) ? (int) $cached_payload['cached_at'] : 0;
+		if ($cached_at <= 0 && $generated_at !== '')
+		{
+			$generated_timestamp = strtotime($generated_at);
+			if ($generated_timestamp !== FALSE)
+			{
+				$cached_at = (int) $generated_timestamp;
+			}
+		}
+
+		if ($cached_at <= 0 || empty($summary))
+		{
+			return NULL;
+		}
+
+		$max_age_seconds = (int) $max_age_seconds;
+		if ($max_age_seconds > 0 && (time() - $cached_at) > $max_age_seconds)
+		{
+			return NULL;
+		}
+
+		if ($generated_at === '')
+		{
+			$generated_at = date('Y-m-d H:i:s', $cached_at);
+		}
+
+		return array(
+			'summary' => $summary,
+			'generated_at' => $generated_at,
+			'cached_at' => $cached_at
+		);
+	}
+
+	private function save_admin_dashboard_live_summary_cache($summary, $generated_at = '')
+	{
+		$file_path = $this->admin_dashboard_live_summary_cache_file_path();
+		$summary = is_array($summary) ? $summary : array();
+		$generated_at = trim((string) $generated_at);
+		if ($generated_at === '')
+		{
+			$generated_at = date('Y-m-d H:i:s');
+		}
+
+		$payload = array(
+			'summary' => $summary,
+			'generated_at' => $generated_at,
+			'cached_at' => time(),
+			'updated_at' => date('Y-m-d H:i:s')
+		);
+
+		if (function_exists('absen_data_store_save_value'))
+		{
+			$saved = absen_data_store_save_value('admin_dashboard_live_summary_cache', $payload, $file_path);
+			if ($saved)
+			{
+				return TRUE;
+			}
+		}
+
+		$directory = dirname($file_path);
+		if (!is_dir($directory))
+		{
+			@mkdir($directory, 0777, TRUE);
+		}
+
+		return (bool) @file_put_contents($file_path, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+	}
+
+	private function clear_admin_dashboard_live_summary_cache()
+	{
+		$file_path = $this->admin_dashboard_live_summary_cache_file_path();
+		if (function_exists('absen_data_store_save_value'))
+		{
+			$cleared = absen_data_store_save_value('admin_dashboard_live_summary_cache', array(), $file_path);
+			if ($cleared)
+			{
+				return TRUE;
+			}
+		}
+
+		if (is_file($file_path))
+		{
+			return (bool) @unlink($file_path);
+		}
+
+		return TRUE;
+	}
+
 	private function build_admin_dashboard_snapshot()
 	{
 		$metric_maps = $this->build_admin_metric_maps();
@@ -5697,7 +7088,8 @@ class Home extends CI_Controller {
 			'total_alpha_bulan_ini' => 0
 		);
 
-		$start_ts = strtotime($month_start_key.' 00:00:00');
+		$activity_start_key = $this->resolve_admin_activity_start_key($month_start_key, $today_key, $metric_maps);
+		$start_ts = $activity_start_key !== '' ? strtotime($activity_start_key.' 00:00:00') : FALSE;
 		$end_ts = strtotime($today_key.' 00:00:00');
 		if ($start_ts !== FALSE && $end_ts !== FALSE && $start_ts <= $end_ts)
 		{
@@ -5710,6 +7102,14 @@ class Home extends CI_Controller {
 				$summary['total_izin_bulan_ini'] += isset($day_counts['izin_cuti']) ? (int) $day_counts['izin_cuti'] : 0;
 				$summary['total_alpha_bulan_ini'] += isset($day_counts['alpha']) ? (int) $day_counts['alpha'] : 0;
 			}
+		}
+		$sheet_summary_totals = $this->build_admin_sheet_month_summary_totals(date('Y-m'));
+		if (isset($sheet_summary_totals['has_data']) && $sheet_summary_totals['has_data'] === TRUE)
+		{
+			$summary['total_hadir_bulan_ini'] = isset($sheet_summary_totals['total_hadir']) ? (int) $sheet_summary_totals['total_hadir'] : $summary['total_hadir_bulan_ini'];
+			$summary['total_terlambat_bulan_ini'] = isset($sheet_summary_totals['total_terlambat']) ? (int) $sheet_summary_totals['total_terlambat'] : $summary['total_terlambat_bulan_ini'];
+			$summary['total_izin_bulan_ini'] = isset($sheet_summary_totals['total_izin']) ? (int) $sheet_summary_totals['total_izin'] : $summary['total_izin_bulan_ini'];
+			$summary['total_alpha_bulan_ini'] = isset($sheet_summary_totals['total_alpha']) ? (int) $sheet_summary_totals['total_alpha'] : $summary['total_alpha_bulan_ini'];
 		}
 
 		$today_checkins = isset($metric_maps['checkin_seconds_by_date'][$today_key]) && is_array($metric_maps['checkin_seconds_by_date'][$today_key])
@@ -5830,9 +7230,22 @@ class Home extends CI_Controller {
 	{
 		$employees = $this->scoped_employee_usernames();
 		$employee_lookup = array();
+		$weekly_day_off_by_username = array();
+		$employee_profiles = $this->employee_profile_book();
 		for ($i = 0; $i < count($employees); $i += 1)
 		{
-			$employee_lookup[(string) $employees[$i]] = TRUE;
+			$username_key = strtolower(trim((string) $employees[$i]));
+			if ($username_key === '')
+			{
+				continue;
+			}
+			$employee_lookup[$username_key] = TRUE;
+			$profile = isset($employee_profiles[$username_key]) && is_array($employee_profiles[$username_key])
+				? $employee_profiles[$username_key]
+				: array();
+			$weekly_day_off_by_username[$username_key] = isset($profile['weekly_day_off'])
+				? $this->resolve_employee_weekly_day_off($profile['weekly_day_off'])
+				: $this->default_weekly_day_off();
 		}
 
 		$checkin_seconds_by_date = array();
@@ -5841,6 +7254,7 @@ class Home extends CI_Controller {
 		$today_key = date('Y-m-d');
 		$min_date = $today_key;
 		$max_date = $today_key;
+		$has_any_activity = FALSE;
 
 		$records = $this->load_attendance_records();
 		for ($i = 0; $i < count($records); $i += 1)
@@ -5857,16 +7271,8 @@ class Home extends CI_Controller {
 				continue;
 			}
 
-			if ($date_key < $min_date)
-			{
-				$min_date = $date_key;
-			}
-			if ($date_key > $max_date)
-			{
-				$max_date = $date_key;
-			}
-
 			$check_in = isset($records[$i]['check_in_time']) ? trim((string) $records[$i]['check_in_time']) : '';
+			$row_has_activity = FALSE;
 			if ($check_in !== '')
 			{
 				$check_in_seconds = max(0, (int) $this->time_to_seconds($check_in));
@@ -5893,6 +7299,7 @@ class Home extends CI_Controller {
 					}
 					$late_by_date[$date_key][$username_key] = TRUE;
 				}
+				$row_has_activity = TRUE;
 			}
 
 			$check_out = isset($records[$i]['check_out_time']) ? trim((string) $records[$i]['check_out_time']) : '';
@@ -5907,6 +7314,20 @@ class Home extends CI_Controller {
 				{
 					$checkout_seconds_by_date[$date_key][$username_key] = $check_out_seconds;
 				}
+				$row_has_activity = TRUE;
+			}
+
+			if ($row_has_activity)
+			{
+				$has_any_activity = TRUE;
+				if ($date_key < $min_date)
+				{
+					$min_date = $date_key;
+				}
+				if ($date_key > $max_date)
+				{
+					$max_date = $date_key;
+				}
 			}
 		}
 
@@ -5914,33 +7335,107 @@ class Home extends CI_Controller {
 		$leave_by_date = isset($leave_result['by_date']) && is_array($leave_result['by_date'])
 			? $leave_result['by_date']
 			: array();
+		$leave_count_by_date = isset($leave_result['count_by_date']) && is_array($leave_result['count_by_date'])
+			? $leave_result['count_by_date']
+			: array();
 		$leave_min_date = isset($leave_result['min_date']) ? trim((string) $leave_result['min_date']) : '';
 		$leave_max_date = isset($leave_result['max_date']) ? trim((string) $leave_result['max_date']) : '';
-		if ($leave_min_date !== '' && $leave_min_date < $min_date)
+		if ($leave_min_date !== '')
 		{
-			$min_date = $leave_min_date;
+			if (!$has_any_activity || $leave_min_date < $min_date)
+			{
+				$min_date = $leave_min_date;
+			}
 		}
-		if ($leave_max_date !== '' && $leave_max_date > $max_date)
+		if ($leave_max_date !== '')
 		{
-			$max_date = $leave_max_date;
+			if (!$has_any_activity || $leave_max_date > $max_date)
+			{
+				$max_date = $leave_max_date;
+			}
+		}
+		if ($leave_min_date !== '' || $leave_max_date !== '')
+		{
+			$has_any_activity = TRUE;
+		}
+		if (!$has_any_activity)
+		{
+			$min_date = $today_key;
+			$max_date = $today_key;
 		}
 
 		return array(
 			'employees' => $employees,
 			'employee_lookup' => $employee_lookup,
-			'employee_count' => count($employees),
+			'employee_count' => count($employee_lookup),
+			'has_any_activity' => $has_any_activity ? TRUE : FALSE,
+			'weekly_day_off_by_username' => $weekly_day_off_by_username,
 			'checkin_seconds_by_date' => $checkin_seconds_by_date,
 			'checkout_seconds_by_date' => $checkout_seconds_by_date,
 			'late_by_date' => $late_by_date,
 			'leave_by_date' => $leave_by_date,
+			'leave_count_by_date' => $leave_count_by_date,
 			'min_date' => $min_date,
 			'max_date' => $max_date
 		);
 	}
 
+	private function resolve_admin_activity_start_key($period_start_key, $period_end_key, $metric_maps)
+	{
+		$start_key = trim((string) $period_start_key);
+		$end_key = trim((string) $period_end_key);
+		if (!$this->is_valid_date_format($start_key) || !$this->is_valid_date_format($end_key))
+		{
+			return '';
+		}
+		if ($start_key > $end_key)
+		{
+			$temp = $start_key;
+			$start_key = $end_key;
+			$end_key = $temp;
+		}
+
+		$candidates = array();
+		$date_maps = array('checkin_seconds_by_date', 'checkout_seconds_by_date', 'leave_by_date');
+		for ($i = 0; $i < count($date_maps); $i += 1)
+		{
+			$map_key = (string) $date_maps[$i];
+			$map_rows = isset($metric_maps[$map_key]) && is_array($metric_maps[$map_key])
+				? $metric_maps[$map_key]
+				: array();
+			foreach ($map_rows as $date_key => $row)
+			{
+				$date_text = trim((string) $date_key);
+				if (!$this->is_valid_date_format($date_text))
+				{
+					continue;
+				}
+				if ($date_text < $start_key || $date_text > $end_key)
+				{
+					continue;
+				}
+				if (!is_array($row) || empty($row))
+				{
+					continue;
+				}
+				$candidates[$date_text] = TRUE;
+			}
+		}
+
+		if (empty($candidates))
+		{
+			return '';
+		}
+
+		$keys = array_keys($candidates);
+		sort($keys);
+		return isset($keys[0]) ? (string) $keys[0] : '';
+	}
+
 	private function build_admin_leave_map($employee_lookup)
 	{
 		$by_date = array();
+		$count_by_date = array();
 		$min_date = '';
 		$max_date = '';
 		$requests = $this->load_leave_requests();
@@ -5985,9 +7480,9 @@ class Home extends CI_Controller {
 				$end_ts = $temp;
 			}
 
-			for ($cursor = $start_ts; $cursor <= $end_ts; $cursor = strtotime('+1 day', $cursor))
-			{
-				$date_key = date('Y-m-d', $cursor);
+				for ($cursor = $start_ts; $cursor <= $end_ts; $cursor = strtotime('+1 day', $cursor))
+				{
+					$date_key = date('Y-m-d', $cursor);
 				if ($min_date === '' || $date_key < $min_date)
 				{
 					$min_date = $date_key;
@@ -5997,23 +7492,29 @@ class Home extends CI_Controller {
 					$max_date = $date_key;
 				}
 
-				if (!isset($by_date[$date_key]))
-				{
-					$by_date[$date_key] = array();
-				}
+					if (!isset($by_date[$date_key]))
+					{
+						$by_date[$date_key] = array();
+					}
+					if (!isset($count_by_date[$date_key]))
+					{
+						$count_by_date[$date_key] = 0;
+					}
 
-				if (!isset($by_date[$date_key][$username_key]) || $request_type === 'cuti')
-				{
-					$by_date[$date_key][$username_key] = $request_type;
+					if (!isset($by_date[$date_key][$username_key]) || $request_type === 'cuti')
+					{
+						$by_date[$date_key][$username_key] = $request_type;
+					}
+					$count_by_date[$date_key] += 1;
 				}
 			}
-		}
 
-		return array(
-			'by_date' => $by_date,
-			'min_date' => $min_date,
-			'max_date' => $max_date
-		);
+			return array(
+				'by_date' => $by_date,
+				'count_by_date' => $count_by_date,
+				'min_date' => $min_date,
+				'max_date' => $max_date
+			);
 	}
 
 	private function build_admin_day_counts($date_key, $metric_maps, $hour_cutoff_seconds = NULL)
@@ -6038,12 +7539,18 @@ class Home extends CI_Controller {
 		$day_checkins = isset($metric_maps['checkin_seconds_by_date'][$date_key]) && is_array($metric_maps['checkin_seconds_by_date'][$date_key])
 			? $metric_maps['checkin_seconds_by_date'][$date_key]
 			: array();
+		$day_checkouts = isset($metric_maps['checkout_seconds_by_date'][$date_key]) && is_array($metric_maps['checkout_seconds_by_date'][$date_key])
+			? $metric_maps['checkout_seconds_by_date'][$date_key]
+			: array();
 		$day_late_users = isset($metric_maps['late_by_date'][$date_key]) && is_array($metric_maps['late_by_date'][$date_key])
 			? $metric_maps['late_by_date'][$date_key]
 			: array();
-		$day_leave_users = isset($metric_maps['leave_by_date'][$date_key]) && is_array($metric_maps['leave_by_date'][$date_key])
-			? $metric_maps['leave_by_date'][$date_key]
-			: array();
+			$day_leave_users = isset($metric_maps['leave_by_date'][$date_key]) && is_array($metric_maps['leave_by_date'][$date_key])
+				? $metric_maps['leave_by_date'][$date_key]
+				: array();
+			$day_leave_count = isset($metric_maps['leave_count_by_date'][$date_key])
+				? max(0, (int) $metric_maps['leave_count_by_date'][$date_key])
+				: count($day_leave_users);
 
 		$hadir = 0;
 		foreach ($day_checkins as $username => $seconds)
@@ -6069,13 +7576,65 @@ class Home extends CI_Controller {
 			}
 		}
 
-		$izin_cuti = count($day_leave_users);
-		$weekly_day_off = $this->normalize_weekly_day_off(self::WEEKLY_HOLIDAY_DAY);
-		$weekday_n = (int) date('N', strtotime($date_key.' 00:00:00'));
-		$is_workday = $weekday_n !== $weekly_day_off;
-		$employee_count = isset($metric_maps['employee_count']) ? max(0, (int) $metric_maps['employee_count']) : 0;
-		$target_headcount = $is_workday ? $employee_count : 0;
-		$alpha = max(0, $target_headcount - $hadir - $izin_cuti);
+			$izin_cuti = $day_leave_count;
+		$alpha = 0;
+		$today_key = date('Y-m-d');
+		$check_in_max_seconds = $this->time_to_seconds(self::CHECK_IN_MAX_TIME);
+		$is_alpha_open = TRUE;
+			$has_day_activity = !empty($day_checkins) || !empty($day_checkouts) || $day_leave_count > 0;
+		if ($date_key === $today_key)
+		{
+			if ($hour_cutoff !== NULL)
+			{
+				$is_alpha_open = (int) $hour_cutoff >= $check_in_max_seconds;
+			}
+			else
+			{
+				$is_alpha_open = $this->time_to_seconds(date('H:i:s')) >= $check_in_max_seconds;
+			}
+		}
+		if ($is_alpha_open && $has_day_activity)
+		{
+			$weekday_n = (int) date('N', strtotime($date_key.' 00:00:00'));
+			$employee_lookup = isset($metric_maps['employee_lookup']) && is_array($metric_maps['employee_lookup'])
+				? $metric_maps['employee_lookup']
+				: array();
+			$weekly_day_off_by_username = isset($metric_maps['weekly_day_off_by_username']) && is_array($metric_maps['weekly_day_off_by_username'])
+				? $metric_maps['weekly_day_off_by_username']
+				: array();
+			$target_headcount = 0;
+			foreach ($employee_lookup as $username_key => $is_active)
+			{
+				if (!$is_active)
+				{
+					continue;
+				}
+				$user_weekly_off = isset($weekly_day_off_by_username[$username_key])
+					? $this->resolve_employee_weekly_day_off($weekly_day_off_by_username[$username_key])
+					: $this->default_weekly_day_off();
+				if ($weekday_n !== $user_weekly_off)
+				{
+					$target_headcount += 1;
+				}
+			}
+			$izin_cuti_target = 0;
+			foreach ($day_leave_users as $leave_username => $leave_type)
+			{
+				$leave_username_key = strtolower(trim((string) $leave_username));
+				if ($leave_username_key === '' || !isset($employee_lookup[$leave_username_key]))
+				{
+					continue;
+				}
+				$user_weekly_off = isset($weekly_day_off_by_username[$leave_username_key])
+					? $this->resolve_employee_weekly_day_off($weekly_day_off_by_username[$leave_username_key])
+					: $this->default_weekly_day_off();
+				if ($weekday_n !== $user_weekly_off)
+				{
+					$izin_cuti_target += 1;
+				}
+			}
+			$alpha = max(0, $target_headcount - $hadir - $izin_cuti_target);
+		}
 
 		return array(
 			'hadir' => (int) $hadir,
@@ -6129,6 +7688,22 @@ class Home extends CI_Controller {
 		);
 
 		$metric_maps = $this->build_admin_metric_maps();
+		$has_any_activity = isset($metric_maps['has_any_activity']) && $metric_maps['has_any_activity'] === TRUE;
+		if (!$has_any_activity)
+		{
+			return array(
+				'metric' => $metric_key,
+				'metric_label' => isset($metric_labels[$metric_key]) ? (string) $metric_labels[$metric_key] : 'Metrik',
+				'range' => $range_key,
+				'range_label' => isset($range_labels[$range_key]) ? (string) $range_labels[$range_key] : $range_key,
+				'points' => array(),
+				'last_value' => 0,
+				'prev_value' => 0,
+				'change_value' => 0,
+				'trend' => 'flat',
+				'generated_at' => date('Y-m-d H:i:s')
+			);
+		}
 		$points = array();
 		$now_ts = time();
 		$today_midnight_ts = strtotime(date('Y-m-d 00:00:00', $now_ts));
@@ -6167,8 +7742,13 @@ class Home extends CI_Controller {
 		}
 		elseif ($range_key === '1B')
 		{
-			$start_month_ts = strtotime(date('Y-m-01 00:00:00', $now_ts));
-			if ($start_month_ts !== FALSE)
+			$month_start_key = date('Y-m-01', $now_ts);
+			$today_key = date('Y-m-d', $now_ts);
+			$activity_start_key = $this->resolve_admin_activity_start_key($month_start_key, $today_key, $metric_maps);
+			$start_month_ts = $activity_start_key !== ''
+				? strtotime($activity_start_key.' 00:00:00')
+				: FALSE;
+			if ($start_month_ts !== FALSE && $start_month_ts <= $today_midnight_ts)
 			{
 				for ($slot_ts = $start_month_ts; $slot_ts <= $today_midnight_ts; $slot_ts = strtotime('+1 day', $slot_ts))
 				{
@@ -6219,17 +7799,10 @@ class Home extends CI_Controller {
 			}
 		}
 
-		if (empty($points))
-		{
-			$points[] = array(
-				'ts' => date('c', $now_ts),
-				'label' => date('d M H:i', $now_ts),
-				'value' => 0
-			);
-		}
-
 		$last_index = count($points) - 1;
-		$last_value = isset($points[$last_index]['value']) ? (int) $points[$last_index]['value'] : 0;
+		$last_value = $last_index >= 0 && isset($points[$last_index]['value'])
+			? (int) $points[$last_index]['value']
+			: 0;
 		$prev_value = $last_index > 0 && isset($points[$last_index - 1]['value'])
 			? (int) $points[$last_index - 1]['value']
 			: $last_value;
@@ -6685,6 +8258,15 @@ class Home extends CI_Controller {
 			{
 				$job_title = $this->default_employee_job_title();
 			}
+			$weekly_day_off_current = isset($profile['weekly_day_off'])
+				? $this->resolve_employee_weekly_day_off($profile['weekly_day_off'])
+				: $this->default_weekly_day_off();
+			$month_policy_current = $this->calculate_month_work_policy(date('Y-m-d'), $weekly_day_off_current);
+			$work_days_current = isset($month_policy_current['work_days']) ? (int) $month_policy_current['work_days'] : self::WORK_DAYS_DEFAULT;
+			if ($work_days_current <= 0)
+			{
+				$work_days_current = self::WORK_DAYS_DEFAULT;
+			}
 
 			$options[] = array(
 				'username' => $username,
@@ -6701,7 +8283,8 @@ class Home extends CI_Controller {
 				'job_title' => $job_title,
 				'address' => isset($profile['address']) ? (string) $profile['address'] : $this->default_employee_address(),
 				'coordinate_point' => isset($profile['coordinate_point']) ? (string) $profile['coordinate_point'] : '',
-				'work_days' => isset($profile['work_days']) ? (int) $profile['work_days'] : 28
+				'work_days' => $work_days_current,
+				'weekly_day_off' => $weekly_day_off_current
 			);
 		}
 
@@ -7275,13 +8858,239 @@ class Home extends CI_Controller {
 			);
 		}
 
+		$final_path = $target_path;
+		$optimize_result = $this->optimize_profile_photo_image(
+			$target_path,
+			$file_ext,
+			self::PROFILE_PHOTO_MAX_WIDTH,
+			self::PROFILE_PHOTO_MAX_HEIGHT,
+			self::PROFILE_PHOTO_JPEG_QUALITY
+		);
+		if (isset($optimize_result['success']) && $optimize_result['success'] === TRUE &&
+			isset($optimize_result['output_path']) && is_file((string) $optimize_result['output_path']))
+		{
+			$final_path = (string) $optimize_result['output_path'];
+		}
+		$this->create_profile_photo_thumbnail(
+			$final_path,
+			self::PROFILE_PHOTO_THUMB_SIZE,
+			self::PROFILE_PHOTO_THUMB_JPEG_QUALITY
+		);
+
+		$final_file_name = basename($final_path);
+		$final_file_ext = strtolower(pathinfo($final_file_name, PATHINFO_EXTENSION));
+
 		return array(
 			'success' => TRUE,
-			'file_name' => $file_name,
+			'file_name' => $final_file_name,
 			'original_name' => $original_name,
-			'relative_path' => '/'.str_replace('\\', '/', $upload_directory_relative.'/'.$file_name),
-			'file_ext' => $file_ext
+			'relative_path' => '/'.str_replace('\\', '/', $upload_directory_relative.'/'.$final_file_name),
+			'file_ext' => $final_file_ext !== '' ? $final_file_ext : $file_ext
 		);
+	}
+
+	private function can_process_profile_photo_image()
+	{
+		return function_exists('imagecreatetruecolor') &&
+			function_exists('imagecopyresampled') &&
+			function_exists('imagejpeg');
+	}
+
+	private function create_profile_photo_image_resource($file_path, $file_ext = '')
+	{
+		$path = trim((string) $file_path);
+		if ($path === '' || !is_file($path))
+		{
+			return NULL;
+		}
+
+		$ext = strtolower(trim((string) $file_ext));
+		if ($ext === '')
+		{
+			$ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+		}
+
+		if (($ext === 'jpg' || $ext === 'jpeg') && function_exists('imagecreatefromjpeg'))
+		{
+			return @imagecreatefromjpeg($path);
+		}
+		if ($ext === 'png' && function_exists('imagecreatefrompng'))
+		{
+			return @imagecreatefrompng($path);
+		}
+		if ($ext === 'webp' && function_exists('imagecreatefromwebp'))
+		{
+			return @imagecreatefromwebp($path);
+		}
+
+		if (!function_exists('getimagesize'))
+		{
+			return NULL;
+		}
+
+		$image_info = @getimagesize($path);
+		$mime = isset($image_info['mime']) ? strtolower(trim((string) $image_info['mime'])) : '';
+		if (($mime === 'image/jpeg' || $mime === 'image/jpg') && function_exists('imagecreatefromjpeg'))
+		{
+			return @imagecreatefromjpeg($path);
+		}
+		if ($mime === 'image/png' && function_exists('imagecreatefrompng'))
+		{
+			return @imagecreatefrompng($path);
+		}
+		if ($mime === 'image/webp' && function_exists('imagecreatefromwebp'))
+		{
+			return @imagecreatefromwebp($path);
+		}
+
+		return NULL;
+	}
+
+	private function optimize_profile_photo_image($source_path, $source_ext = '', $max_width = 512, $max_height = 512, $jpeg_quality = 82)
+	{
+		$path = trim((string) $source_path);
+		if ($path === '' || !is_file($path))
+		{
+			return array('success' => FALSE, 'output_path' => $path);
+		}
+
+		if (!$this->can_process_profile_photo_image())
+		{
+			return array('success' => FALSE, 'output_path' => $path);
+		}
+
+		$source_image = $this->create_profile_photo_image_resource($path, $source_ext);
+		if (!$source_image)
+		{
+			return array('success' => FALSE, 'output_path' => $path);
+		}
+
+		$source_width = (int) @imagesx($source_image);
+		$source_height = (int) @imagesy($source_image);
+		if ($source_width <= 0 || $source_height <= 0)
+		{
+			@imagedestroy($source_image);
+			return array('success' => FALSE, 'output_path' => $path);
+		}
+
+		$max_w = max(128, (int) $max_width);
+		$max_h = max(128, (int) $max_height);
+		$scale = min(1, $max_w / $source_width, $max_h / $source_height);
+		$target_width = max(1, (int) round($source_width * $scale));
+		$target_height = max(1, (int) round($source_height * $scale));
+
+		$target_image = @imagecreatetruecolor($target_width, $target_height);
+		if (!$target_image)
+		{
+			@imagedestroy($source_image);
+			return array('success' => FALSE, 'output_path' => $path);
+		}
+
+		$white = imagecolorallocate($target_image, 255, 255, 255);
+		imagefilledrectangle($target_image, 0, 0, $target_width, $target_height, $white);
+		imagecopyresampled(
+			$target_image,
+			$source_image,
+			0,
+			0,
+			0,
+			0,
+			$target_width,
+			$target_height,
+			$source_width,
+			$source_height
+		);
+
+		$quality = max(55, min(90, (int) $jpeg_quality));
+		$output_path = preg_replace('/\.[^.]+$/', '.jpg', $path);
+		if (!is_string($output_path) || trim($output_path) === '')
+		{
+			$output_path = $path.'.jpg';
+		}
+
+		$saved = @imagejpeg($target_image, $output_path, $quality);
+		@imagedestroy($target_image);
+		@imagedestroy($source_image);
+		if (!$saved || !is_file($output_path))
+		{
+			return array('success' => FALSE, 'output_path' => $path);
+		}
+
+		if ($output_path !== $path && is_file($path))
+		{
+			@unlink($path);
+		}
+
+		return array(
+			'success' => TRUE,
+			'output_path' => $output_path
+		);
+	}
+
+	private function create_profile_photo_thumbnail($source_path, $thumb_size = 160, $jpeg_quality = 76)
+	{
+		$path = trim((string) $source_path);
+		if ($path === '' || !is_file($path) || !$this->can_process_profile_photo_image())
+		{
+			return FALSE;
+		}
+
+		$source_image = $this->create_profile_photo_image_resource($path);
+		if (!$source_image)
+		{
+			return FALSE;
+		}
+
+		$source_width = (int) @imagesx($source_image);
+		$source_height = (int) @imagesy($source_image);
+		if ($source_width <= 0 || $source_height <= 0)
+		{
+			@imagedestroy($source_image);
+			return FALSE;
+		}
+
+		$crop_side = min($source_width, $source_height);
+		$src_x = (int) floor(($source_width - $crop_side) / 2);
+		$src_y = (int) floor(($source_height - $crop_side) / 2);
+		$target_side = max(64, (int) $thumb_size);
+		$thumb_image = @imagecreatetruecolor($target_side, $target_side);
+		if (!$thumb_image)
+		{
+			@imagedestroy($source_image);
+			return FALSE;
+		}
+
+		$white = imagecolorallocate($thumb_image, 255, 255, 255);
+		imagefilledrectangle($thumb_image, 0, 0, $target_side, $target_side, $white);
+		imagecopyresampled(
+			$thumb_image,
+			$source_image,
+			0,
+			0,
+			$src_x,
+			$src_y,
+			$target_side,
+			$target_side,
+			$crop_side,
+			$crop_side
+		);
+
+		$path_info = pathinfo($path);
+		$base_name = isset($path_info['filename']) ? (string) $path_info['filename'] : '';
+		$directory = isset($path_info['dirname']) ? (string) $path_info['dirname'] : '';
+		if ($base_name === '' || $directory === '')
+		{
+			@imagedestroy($thumb_image);
+			@imagedestroy($source_image);
+			return FALSE;
+		}
+		$thumb_path = $directory.DIRECTORY_SEPARATOR.$base_name.'_thumb.jpg';
+		$quality = max(50, min(90, (int) $jpeg_quality));
+		$saved = @imagejpeg($thumb_image, $thumb_path, $quality);
+		@imagedestroy($thumb_image);
+		@imagedestroy($source_image);
+
+		return $saved && is_file($thumb_path);
 	}
 
 	private function normalize_coordinate_point($coordinate_value)
@@ -7360,6 +9169,18 @@ class Home extends CI_Controller {
 		{
 			@unlink($absolute_path);
 		}
+
+		$path_info = pathinfo($absolute_path);
+		$base_name = isset($path_info['filename']) ? (string) $path_info['filename'] : '';
+		$directory = isset($path_info['dirname']) ? (string) $path_info['dirname'] : '';
+		if ($base_name !== '' && $directory !== '')
+		{
+			$thumb_path = $directory.DIRECTORY_SEPARATOR.$base_name.'_thumb.jpg';
+			if (is_file($thumb_path))
+			{
+				@unlink($thumb_path);
+			}
+		}
 	}
 
 	private function is_valid_date_format($date_value)
@@ -7396,6 +9217,50 @@ class Home extends CI_Controller {
 	private function default_employee_address()
 	{
 		return 'Kp. Kesekian Kalinya, Pandenglang, Banten';
+	}
+
+	private function weekly_day_off_options()
+	{
+		return array(
+			1 => 'Senin',
+			2 => 'Selasa',
+			3 => 'Rabu',
+			4 => 'Kamis',
+			5 => 'Jumat',
+			6 => 'Sabtu',
+			7 => 'Minggu'
+		);
+	}
+
+	private function default_weekly_day_off()
+	{
+		$weekly_day_off = (int) self::WEEKLY_HOLIDAY_DAY;
+		if ($weekly_day_off === 0)
+		{
+			return 7;
+		}
+		if ($weekly_day_off < 1 || $weekly_day_off > 7)
+		{
+			return 1;
+		}
+
+		return $weekly_day_off;
+	}
+
+	private function resolve_employee_weekly_day_off($weekly_day_off)
+	{
+		if ($weekly_day_off === NULL)
+		{
+			return $this->default_weekly_day_off();
+		}
+
+		$weekly_day_off_text = trim((string) $weekly_day_off);
+		if ($weekly_day_off_text === '')
+		{
+			return $this->default_weekly_day_off();
+		}
+
+		return $this->normalize_weekly_day_off((int) $weekly_day_off_text);
 	}
 
 	private function employee_branch_options()
@@ -7819,6 +9684,22 @@ class Home extends CI_Controller {
 		return strtolower(trim((string) $this->session->userdata('absen_username')));
 	}
 
+	private function is_developer_actor()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			return FALSE;
+		}
+
+		$role = strtolower(trim((string) $this->session->userdata('absen_role')));
+		if ($role !== 'admin')
+		{
+			return FALSE;
+		}
+
+		return $this->current_actor_username() === 'developer';
+	}
+
 	private function is_current_session_expired()
 	{
 		$last_activity_at = (int) $this->session->userdata('absen_last_activity_at');
@@ -7896,6 +9777,7 @@ class Home extends CI_Controller {
 			'absen_salary_tier' => isset($account['salary_tier']) ? (string) $account['salary_tier'] : '',
 			'absen_salary_monthly' => isset($account['salary_monthly']) ? (int) $account['salary_monthly'] : 0,
 			'absen_work_days' => isset($account['work_days']) ? (int) $account['work_days'] : 0,
+			'absen_weekly_day_off' => isset($account['weekly_day_off']) ? (int) $account['weekly_day_off'] : $this->default_weekly_day_off(),
 			'absen_feature_permissions' => implode(',', $feature_permissions),
 			'absen_password_change_required' => $requires_password_change ? 1 : 0
 		));
@@ -8049,8 +9931,14 @@ class Home extends CI_Controller {
 		return in_array($username_key, $this->privileged_admin_usernames(), TRUE);
 	}
 
-	private function employee_profile_book()
+	private function employee_profile_book($force_refresh = FALSE)
 	{
+		static $profile_cache = NULL;
+		if (!$force_refresh && is_array($profile_cache))
+		{
+			return $profile_cache;
+		}
+
 		$accounts = function_exists('absen_load_account_book')
 			? absen_load_account_book()
 			: array();
@@ -8092,6 +9980,7 @@ class Home extends CI_Controller {
 				'salary_tier' => isset($account['salary_tier']) ? (string) $account['salary_tier'] : 'A',
 				'salary_monthly' => isset($account['salary_monthly']) ? (int) $account['salary_monthly'] : 0,
 				'work_days' => isset($account['work_days']) ? (int) $account['work_days'] : 28,
+				'weekly_day_off' => $this->resolve_employee_weekly_day_off(isset($account['weekly_day_off']) ? $account['weekly_day_off'] : NULL),
 				'profile_photo' => isset($account['profile_photo']) ? (string) $account['profile_photo'] : $this->default_employee_profile_photo(),
 				'coordinate_point' => isset($account['coordinate_point']) ? trim((string) $account['coordinate_point']) : '',
 				'address' => isset($account['address']) && trim((string) $account['address']) !== ''
@@ -8105,6 +9994,7 @@ class Home extends CI_Controller {
 		}
 
 		ksort($profiles);
+		$profile_cache = $profiles;
 		return $profiles;
 	}
 
@@ -8136,6 +10026,14 @@ class Home extends CI_Controller {
 			{
 				$profile['coordinate_point'] = '';
 			}
+			if (!isset($profile['weekly_day_off']))
+			{
+				$profile['weekly_day_off'] = $this->default_weekly_day_off();
+			}
+			else
+			{
+				$profile['weekly_day_off'] = $this->resolve_employee_weekly_day_off($profile['weekly_day_off']);
+			}
 
 			return $profile;
 		}
@@ -8144,19 +10042,27 @@ class Home extends CI_Controller {
 			'profile_photo' => $this->default_employee_profile_photo(),
 			'address' => $this->default_employee_address(),
 			'job_title' => $this->default_employee_job_title(),
-			'coordinate_point' => ''
+			'coordinate_point' => '',
+			'weekly_day_off' => $this->default_weekly_day_off()
 		);
 	}
 
-	private function employee_phone_book()
+	private function employee_phone_book($force_refresh = FALSE)
 	{
-		$profiles = $this->employee_profile_book();
+		static $phone_cache = NULL;
+		if (!$force_refresh && is_array($phone_cache))
+		{
+			return $phone_cache;
+		}
+
+		$profiles = $this->employee_profile_book($force_refresh);
 		$phone_book = array();
 		foreach ($profiles as $username => $profile)
 		{
 			$phone_book[(string) $username] = isset($profile['phone']) ? (string) $profile['phone'] : '';
 		}
 
+		$phone_cache = $phone_book;
 		return $phone_book;
 	}
 
@@ -8174,15 +10080,15 @@ class Home extends CI_Controller {
 
 	private function normalize_phone_number($phone)
 	{
+		if (function_exists('absen_normalize_phone_number'))
+		{
+			return absen_normalize_phone_number($phone);
+		}
+
 		$digits = preg_replace('/\D+/', '', (string) $phone);
 		if ($digits === '')
 		{
 			return '';
-		}
-
-		if (strpos($digits, '62') === 0)
-		{
-			return $digits;
 		}
 
 		if (strpos($digits, '0') === 0)
@@ -8255,7 +10161,34 @@ class Home extends CI_Controller {
 	private function send_whatsapp_notification($phone, $message)
 	{
 		$phone_raw = trim((string) $phone);
-		$phone_normalized = $this->normalize_phone_number($phone_raw);
+		$group_name_alias = '';
+		if (stripos($phone_raw, 'group:') === 0)
+		{
+			$group_name_alias = trim(substr($phone_raw, 6));
+			$phone_raw = $group_name_alias;
+		}
+		elseif (stripos($phone_raw, 'group_name:') === 0)
+		{
+			$group_name_alias = trim(substr($phone_raw, 11));
+			$phone_raw = $group_name_alias;
+		}
+
+		$is_group_target = (strpos($phone_raw, '@g.us') !== FALSE) || (strpos($phone_raw, '@broadcast') !== FALSE);
+		if (!$is_group_target && $group_name_alias !== '')
+		{
+			$is_group_target = TRUE;
+		}
+		if (
+			!$is_group_target &&
+			preg_match('/[a-z]/i', $phone_raw) === 1 &&
+			preg_match('/\d/', $phone_raw) !== 1
+		)
+		{
+			$is_group_target = TRUE;
+			$group_name_alias = $phone_raw;
+		}
+
+		$phone_normalized = $is_group_target ? $phone_raw : $this->normalize_phone_number($phone_raw);
 		$message = trim((string) $message);
 
 		if ($phone_normalized === '')
@@ -8278,10 +10211,20 @@ class Home extends CI_Controller {
 		$gateway_token = trim((string) getenv('WA_GATEWAY_TOKEN'));
 		if ($gateway_url !== '')
 		{
-			$payload = json_encode(array(
+			$payload_data = array(
 				'phone' => $phone_normalized,
 				'message' => $message
-			));
+			);
+			if ($is_group_target)
+			{
+				$payload_data['target'] = $phone_normalized;
+			}
+			if ($group_name_alias !== '')
+			{
+				$payload_data['group'] = $group_name_alias;
+				$payload_data['group_name'] = $group_name_alias;
+			}
+			$payload = json_encode($payload_data);
 			$headers = array('Content-Type: application/json');
 			if ($gateway_token !== '')
 			{
@@ -8306,11 +10249,36 @@ class Home extends CI_Controller {
 		$fonnte_token = trim((string) getenv('FONNTE_TOKEN'));
 		if ($fonnte_token !== '')
 		{
-			$payload = http_build_query(array(
+			if (
+				$is_group_target &&
+				strpos($phone_normalized, '@g.us') === FALSE &&
+				strpos($phone_normalized, '@broadcast') === FALSE
+			)
+			{
+				$resolve_group_error = '';
+				$resolved_group_target = $this->resolve_fonnte_group_target($phone_normalized, $fonnte_token, $resolve_group_error);
+				if ($resolved_group_target === '')
+				{
+					$error_text = $resolve_group_error !== ''
+						? $resolve_group_error
+						: 'Target grup untuk Fonnte harus Group ID WhatsApp (akhiran @g.us).';
+					return array(
+						'success' => FALSE,
+						'message' => $error_text
+					);
+				}
+				$phone_normalized = $resolved_group_target;
+			}
+
+			$payload_data = array(
 				'target' => $phone_normalized,
-				'message' => $message,
-				'countryCode' => '62'
-			));
+				'message' => $message
+			);
+			if (!$is_group_target)
+			{
+				$payload_data['countryCode'] = '62';
+			}
+			$payload = http_build_query($payload_data);
 
 			$fonnte_response = $this->http_post_request(
 				'https://api.fonnte.com/send',
@@ -8350,6 +10318,697 @@ class Home extends CI_Controller {
 			'success' => FALSE,
 			'message' => 'Konfigurasi gateway WhatsApp belum diatur. Set WA_GATEWAY_URL atau FONNTE_TOKEN.'
 		);
+	}
+
+	private function resolve_fonnte_group_target($group_target, $fonnte_token, &$error_message = '')
+	{
+		$error_message = '';
+		$target_value = trim((string) $group_target);
+		$fonnte_token = trim((string) $fonnte_token);
+		if ($target_value === '')
+		{
+			$error_message = 'Target grup WhatsApp kosong.';
+			return '';
+		}
+		if ($fonnte_token === '')
+		{
+			$error_message = 'Token Fonnte kosong.';
+			return '';
+		}
+
+		$normalized_group_id = $this->normalize_fonnte_group_id($target_value);
+		if ($normalized_group_id !== '')
+		{
+			return $normalized_group_id;
+		}
+
+		$lookup = $this->fetch_fonnte_group_list($fonnte_token, FALSE);
+		$lookup_success = isset($lookup['success']) && $lookup['success'] === TRUE;
+		$groups = isset($lookup['groups']) && is_array($lookup['groups']) ? $lookup['groups'] : array();
+		if (empty($groups))
+		{
+			$this->refresh_fonnte_group_list($fonnte_token);
+			$lookup = $this->fetch_fonnte_group_list($fonnte_token, TRUE);
+			$lookup_success = isset($lookup['success']) && $lookup['success'] === TRUE;
+			$groups = isset($lookup['groups']) && is_array($lookup['groups']) ? $lookup['groups'] : array();
+		}
+
+		$matched_group_id = $this->find_fonnte_group_id_by_name($target_value, $groups);
+		if ($matched_group_id !== '')
+		{
+			return $matched_group_id;
+		}
+
+		$base_error = isset($lookup['message']) ? trim((string) $lookup['message']) : '';
+		if (!$lookup_success && $base_error !== '')
+		{
+			$error_message = $base_error;
+			return '';
+		}
+
+		$error_message = 'Group "'.$target_value.'" tidak ditemukan di Fonnte. Isi WA_ATTENDANCE_GROUP_TARGET dengan Group ID (akhiran @g.us) atau update list group Fonnte dulu.';
+		return '';
+	}
+
+	private function fetch_fonnte_group_list($fonnte_token, $force_refresh = FALSE)
+	{
+		static $cache = array();
+		$fonnte_token = trim((string) $fonnte_token);
+		$cache_key = sha1($fonnte_token);
+		if (!$force_refresh && isset($cache[$cache_key]) && is_array($cache[$cache_key]))
+		{
+			return $cache[$cache_key];
+		}
+
+		$response = $this->http_post_request(
+			'https://api.fonnte.com/get-whatsapp-group',
+			'',
+			array(
+				'Authorization: '.$fonnte_token,
+				'Content-Type: application/x-www-form-urlencoded'
+			)
+		);
+		if (!$response['success'])
+		{
+			$result = array(
+				'success' => FALSE,
+				'groups' => array(),
+				'message' => isset($response['message']) ? (string) $response['message'] : 'Gagal mengambil list group Fonnte.'
+			);
+			$cache[$cache_key] = $result;
+			return $result;
+		}
+
+		$decoded = json_decode(isset($response['body']) ? (string) $response['body'] : '', TRUE);
+		if (!is_array($decoded))
+		{
+			$result = array(
+				'success' => FALSE,
+				'groups' => array(),
+				'message' => 'Respons list group Fonnte tidak valid.'
+			);
+			$cache[$cache_key] = $result;
+			return $result;
+		}
+
+		if (isset($decoded['status']) && $decoded['status'] === FALSE)
+		{
+			$reason = isset($decoded['reason']) ? trim((string) $decoded['reason']) : '';
+			$result = array(
+				'success' => FALSE,
+				'groups' => array(),
+				'message' => $reason !== '' ? 'Fonnte gagal: '.$reason : 'Fonnte gagal mengambil list group.'
+			);
+			$cache[$cache_key] = $result;
+			return $result;
+		}
+
+		$groups = $this->extract_fonnte_group_entries($decoded);
+		$result = array(
+			'success' => TRUE,
+			'groups' => $groups,
+			'message' => 'OK'
+		);
+		$cache[$cache_key] = $result;
+		return $result;
+	}
+
+	private function refresh_fonnte_group_list($fonnte_token)
+	{
+		$fonnte_token = trim((string) $fonnte_token);
+		if ($fonnte_token === '')
+		{
+			return array(
+				'success' => FALSE,
+				'message' => 'Token Fonnte kosong.'
+			);
+		}
+
+		$response = $this->http_post_request(
+			'https://api.fonnte.com/fetch-group',
+			'',
+			array(
+				'Authorization: '.$fonnte_token,
+				'Content-Type: application/x-www-form-urlencoded'
+			)
+		);
+		if (!$response['success'])
+		{
+			return array(
+				'success' => FALSE,
+				'message' => isset($response['message']) ? (string) $response['message'] : 'Gagal refresh list group Fonnte.'
+			);
+		}
+
+		$decoded = json_decode(isset($response['body']) ? (string) $response['body'] : '', TRUE);
+		if (is_array($decoded) && isset($decoded['status']) && $decoded['status'] === FALSE)
+		{
+			$reason = isset($decoded['reason']) ? trim((string) $decoded['reason']) : '';
+			return array(
+				'success' => FALSE,
+				'message' => $reason !== '' ? 'Fonnte gagal: '.$reason : 'Fonnte gagal refresh list group.'
+			);
+		}
+
+		return array(
+			'success' => TRUE,
+			'message' => 'OK'
+		);
+	}
+
+	private function extract_fonnte_group_entries($value)
+	{
+		$candidates = array();
+		$this->collect_fonnte_group_entries($value, $candidates);
+
+		$unique_groups = array();
+		for ($i = 0; $i < count($candidates); $i += 1)
+		{
+			$item = isset($candidates[$i]) && is_array($candidates[$i]) ? $candidates[$i] : array();
+			$group_id = isset($item['id']) ? trim((string) $item['id']) : '';
+			$group_name = isset($item['name']) ? trim((string) $item['name']) : '';
+			if ($group_id === '')
+			{
+				continue;
+			}
+
+			$cache_key = strtolower($group_id);
+			if (!isset($unique_groups[$cache_key]))
+			{
+				$unique_groups[$cache_key] = array(
+					'id' => $group_id,
+					'name' => $group_name
+				);
+				continue;
+			}
+
+			if ($group_name !== '' && trim((string) $unique_groups[$cache_key]['name']) === '')
+			{
+				$unique_groups[$cache_key]['name'] = $group_name;
+			}
+		}
+
+		return array_values($unique_groups);
+	}
+
+	private function collect_fonnte_group_entries($value, &$groups)
+	{
+		if (!is_array($value))
+		{
+			return;
+		}
+
+		$name = '';
+		$name_keys = array('name', 'group_name', 'groupname', 'nama', 'subject');
+		for ($i = 0; $i < count($name_keys); $i += 1)
+		{
+			$key = $name_keys[$i];
+			if (isset($value[$key]) && trim((string) $value[$key]) !== '')
+			{
+				$name = trim((string) $value[$key]);
+				break;
+			}
+		}
+
+		$id = '';
+		$id_keys = array('id', 'group_id', 'groupid', 'jid', 'target', 'group');
+		for ($i = 0; $i < count($id_keys); $i += 1)
+		{
+			$key = $id_keys[$i];
+			if (isset($value[$key]) && trim((string) $value[$key]) !== '')
+			{
+				$id = trim((string) $value[$key]);
+				break;
+			}
+		}
+
+		$id = $this->normalize_fonnte_group_id($id);
+		if ($id !== '')
+		{
+			$groups[] = array(
+				'id' => $id,
+				'name' => $name
+			);
+		}
+
+		foreach ($value as $item)
+		{
+			if (is_array($item))
+			{
+				$this->collect_fonnte_group_entries($item, $groups);
+			}
+		}
+	}
+
+	private function normalize_fonnte_group_id($value)
+	{
+		$group_id = trim((string) $value);
+		if ($group_id === '')
+		{
+			return '';
+		}
+		if (strpos($group_id, '@broadcast') !== FALSE)
+		{
+			return $group_id;
+		}
+		if (strpos($group_id, '@g.us') !== FALSE)
+		{
+			return $group_id;
+		}
+		if (preg_match('/^\d+\-\d+$/', $group_id) === 1)
+		{
+			return $group_id.'@g.us';
+		}
+
+		return '';
+	}
+
+	private function find_fonnte_group_id_by_name($target_group_name, $groups)
+	{
+		$target_name = $this->normalize_fonnte_group_name($target_group_name);
+		if ($target_name === '' || !is_array($groups) || empty($groups))
+		{
+			return '';
+		}
+
+		$fallback_group_id = '';
+		for ($i = 0; $i < count($groups); $i += 1)
+		{
+			$group = isset($groups[$i]) && is_array($groups[$i]) ? $groups[$i] : array();
+			$group_id = isset($group['id']) ? trim((string) $group['id']) : '';
+			$group_name = isset($group['name']) ? $this->normalize_fonnte_group_name($group['name']) : '';
+			if ($group_id === '' || $group_name === '')
+			{
+				continue;
+			}
+
+			if ($group_name === $target_name)
+			{
+				return $group_id;
+			}
+
+			if (
+				$fallback_group_id === '' &&
+				(strpos($group_name, $target_name) !== FALSE || strpos($target_name, $group_name) !== FALSE)
+			)
+			{
+				$fallback_group_id = $group_id;
+			}
+		}
+
+		return $fallback_group_id;
+	}
+
+	private function normalize_fonnte_group_name($value)
+	{
+		$name = strtolower(trim((string) $value));
+		if ($name === '')
+		{
+			return '';
+		}
+
+		return preg_replace('/\s+/', ' ', $name);
+	}
+
+	private function resolve_attendance_reminder_slot($slot_override = '')
+	{
+		$allowed_slots = self::ATTENDANCE_REMINDER_SLOTS;
+		$slot_text = strtolower(trim((string) $slot_override));
+		if ($slot_text !== '')
+		{
+			$slot_text = str_replace(array('.', '-', '_'), ':', $slot_text);
+			if (preg_match('/^\d{4}$/', $slot_text))
+			{
+				$slot_text = substr($slot_text, 0, 2).':'.substr($slot_text, 2, 2);
+			}
+			if (preg_match('/^\d{1,2}\:\d{2}$/', $slot_text))
+			{
+				$parts = explode(':', $slot_text);
+				$slot_text = str_pad((string) ((int) $parts[0]), 2, '0', STR_PAD_LEFT).':'.str_pad((string) ((int) $parts[1]), 2, '0', STR_PAD_LEFT);
+			}
+			return in_array($slot_text, $allowed_slots, TRUE) ? $slot_text : '';
+		}
+
+		$current_slot = date('H:i');
+		return in_array($current_slot, $allowed_slots, TRUE) ? $current_slot : '';
+	}
+
+	private function resolve_attendance_reminder_group_target(&$error_message = '')
+	{
+		$error_message = '';
+		$group_target = trim((string) getenv('WA_ATTENDANCE_GROUP_TARGET'));
+		if ($group_target !== '')
+		{
+			return $group_target;
+		}
+
+		$group_name = trim((string) getenv('WA_ATTENDANCE_GROUP_NAME'));
+		if ($group_name !== '')
+		{
+			return 'group:'.$group_name;
+		}
+
+		$error_message = 'Isi WA_ATTENDANCE_GROUP_TARGET (nomor/group id) atau WA_ATTENDANCE_GROUP_NAME (nama grup).';
+		return '';
+	}
+
+	private function attendance_reminder_direct_dm_enabled()
+	{
+		$raw = strtolower(trim((string) getenv('WA_ATTENDANCE_DIRECT_DM_ENABLED')));
+		if ($raw === '')
+		{
+			return FALSE;
+		}
+
+		return in_array($raw, array('1', 'true', 'yes', 'on'), TRUE);
+	}
+
+	private function attendance_reminder_state_file_path()
+	{
+		return APPPATH.'cache/attendance_reminder_state.json';
+	}
+
+	private function load_attendance_reminder_state()
+	{
+		$file_path = $this->attendance_reminder_state_file_path();
+		$state = array(
+			'sent_slots' => array(),
+			'direct_sent' => array(),
+			'updated_at' => ''
+		);
+
+		if (function_exists('absen_data_store_load_value'))
+		{
+			$loaded_state = absen_data_store_load_value('attendance_reminder_state', NULL, $file_path);
+			if (is_array($loaded_state))
+			{
+				$state = array_merge($state, $loaded_state);
+			}
+		}
+		elseif (is_file($file_path))
+		{
+			$raw = file_get_contents($file_path);
+			if (is_string($raw) && trim($raw) !== '')
+			{
+				$decoded = json_decode($raw, TRUE);
+				if (is_array($decoded))
+				{
+					$state = array_merge($state, $decoded);
+				}
+			}
+		}
+
+		$state['sent_slots'] = $this->normalize_attendance_reminder_key_list(isset($state['sent_slots']) ? $state['sent_slots'] : array());
+		$state['direct_sent'] = $this->normalize_attendance_reminder_key_list(isset($state['direct_sent']) ? $state['direct_sent'] : array());
+		return $this->prune_attendance_reminder_state($state);
+	}
+
+	private function save_attendance_reminder_state($state)
+	{
+		$file_path = $this->attendance_reminder_state_file_path();
+		$state = is_array($state) ? $state : array();
+		$state['sent_slots'] = $this->normalize_attendance_reminder_key_list(isset($state['sent_slots']) ? $state['sent_slots'] : array());
+		$state['direct_sent'] = $this->normalize_attendance_reminder_key_list(isset($state['direct_sent']) ? $state['direct_sent'] : array());
+		$state['updated_at'] = date('Y-m-d H:i:s');
+		$state = $this->prune_attendance_reminder_state($state);
+
+		if (function_exists('absen_data_store_save_value'))
+		{
+			$saved = absen_data_store_save_value('attendance_reminder_state', $state, $file_path);
+			if ($saved)
+			{
+				return TRUE;
+			}
+		}
+
+		$directory = dirname($file_path);
+		if (!is_dir($directory))
+		{
+			@mkdir($directory, 0777, TRUE);
+		}
+
+		return (bool) file_put_contents($file_path, json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+	}
+
+	private function normalize_attendance_reminder_key_list($keys)
+	{
+		if (!is_array($keys))
+		{
+			return array();
+		}
+
+		$normalized = array();
+		for ($i = 0; $i < count($keys); $i += 1)
+		{
+			$key_value = trim((string) $keys[$i]);
+			if ($key_value === '')
+			{
+				continue;
+			}
+			$normalized[] = $key_value;
+		}
+
+		return array_values(array_unique($normalized));
+	}
+
+	private function prune_attendance_reminder_state($state)
+	{
+		$state = is_array($state) ? $state : array();
+		$today_timestamp = strtotime(date('Y-m-d').' 00:00:00');
+		$keep_days = 14;
+
+		$prune_keys = function ($keys) use ($today_timestamp, $keep_days) {
+			$result = array();
+			$list = is_array($keys) ? $keys : array();
+			for ($i = 0; $i < count($list); $i += 1)
+			{
+				$key_value = trim((string) $list[$i]);
+				if ($key_value === '')
+				{
+					continue;
+				}
+
+				$key_date = substr($key_value, 0, 10);
+				if (!$this->is_valid_date_format($key_date))
+				{
+					continue;
+				}
+				$key_timestamp = strtotime($key_date.' 00:00:00');
+				if ($key_timestamp === FALSE)
+				{
+					continue;
+				}
+				$age_days = (int) floor(($today_timestamp - $key_timestamp) / 86400);
+				if ($age_days < 0 || $age_days > $keep_days)
+				{
+					continue;
+				}
+
+				$result[] = $key_value;
+			}
+
+			return array_values(array_unique($result));
+		};
+
+		$state['sent_slots'] = $prune_keys(isset($state['sent_slots']) ? $state['sent_slots'] : array());
+		$state['direct_sent'] = $prune_keys(isset($state['direct_sent']) ? $state['direct_sent'] : array());
+		return $state;
+	}
+
+	private function build_attendance_reminder_payload($date_key = '')
+	{
+		$date_value = trim((string) $date_key);
+		if (!$this->is_valid_date_format($date_value))
+		{
+			$date_value = date('Y-m-d');
+		}
+
+		$profiles = $this->employee_profile_book();
+		$employee_lookup = array();
+		foreach ($profiles as $username_key => $profile)
+		{
+			$normalized_username = strtolower(trim((string) $username_key));
+			if ($normalized_username === '')
+			{
+				continue;
+			}
+			$employee_lookup[$normalized_username] = TRUE;
+		}
+
+		$present_by_username = array();
+		$records = $this->load_attendance_records();
+		for ($i = 0; $i < count($records); $i += 1)
+		{
+			$row = isset($records[$i]) && is_array($records[$i]) ? $records[$i] : array();
+			$row_username = isset($row['username']) ? strtolower(trim((string) $row['username'])) : '';
+			if ($row_username === '' || !isset($employee_lookup[$row_username]))
+			{
+				continue;
+			}
+
+			$row_date = isset($row['date']) ? trim((string) $row['date']) : '';
+			if ($row_date !== $date_value)
+			{
+				continue;
+			}
+
+			$row_check_in = isset($row['check_in_time']) ? trim((string) $row['check_in_time']) : '';
+			if ($this->has_real_attendance_time($row_check_in))
+			{
+				$present_by_username[$row_username] = TRUE;
+			}
+		}
+
+		$leave_result = $this->build_admin_leave_map($employee_lookup);
+		$leave_by_date = isset($leave_result['by_date']) && is_array($leave_result['by_date'])
+			? $leave_result['by_date']
+			: array();
+		$day_leave_map = isset($leave_by_date[$date_value]) && is_array($leave_by_date[$date_value])
+			? $leave_by_date[$date_value]
+			: array();
+		$employee_id_book = $this->employee_id_book();
+		$rows = array();
+		foreach ($profiles as $username_key => $profile)
+		{
+			$username_value = strtolower(trim((string) $username_key));
+			if ($username_value === '')
+			{
+				continue;
+			}
+
+			$display_name = isset($profile['display_name']) && trim((string) $profile['display_name']) !== ''
+				? trim((string) $profile['display_name'])
+				: $username_value;
+			$phone_value = isset($profile['phone']) ? trim((string) $profile['phone']) : '';
+			if ($phone_value === '')
+			{
+				$phone_value = $this->get_employee_phone($username_value);
+			}
+			$employee_id = $this->resolve_employee_id_from_book($username_value, $employee_id_book);
+			$sort_sequence = 9999;
+			if ($employee_id !== '-' && preg_match('/^\d+$/', $employee_id) === 1)
+			{
+				$sort_sequence = (int) $employee_id;
+			}
+
+			$leave_type = isset($day_leave_map[$username_value]) ? strtolower(trim((string) $day_leave_map[$username_value])) : '';
+			$is_leave_today = $leave_type === 'izin' || $leave_type === 'cuti';
+			$is_present = isset($present_by_username[$username_value]);
+			$rows[] = array(
+				'username' => $username_value,
+				'display_name' => $display_name,
+				'phone' => $phone_value,
+				'employee_id' => $employee_id,
+				'sort_sequence' => $sort_sequence,
+				'is_present' => $is_present ? TRUE : FALSE,
+				'is_leave_today' => $is_leave_today ? TRUE : FALSE,
+				'leave_type' => $leave_type
+			);
+		}
+
+		usort($rows, function ($left, $right) {
+			$left_sequence = isset($left['sort_sequence']) ? (int) $left['sort_sequence'] : 9999;
+			$right_sequence = isset($right['sort_sequence']) ? (int) $right['sort_sequence'] : 9999;
+			if ($left_sequence !== $right_sequence)
+			{
+				return $left_sequence - $right_sequence;
+			}
+
+			$left_name = isset($left['display_name']) ? strtolower(trim((string) $left['display_name'])) : '';
+			$right_name = isset($right['display_name']) ? strtolower(trim((string) $right['display_name'])) : '';
+			return strcmp($left_name, $right_name);
+		});
+
+		$present_count = 0;
+		$missing_count = 0;
+		$alpha_names = array();
+		for ($i = 0; $i < count($rows); $i += 1)
+		{
+			$is_present = isset($rows[$i]['is_present']) && $rows[$i]['is_present'] === TRUE;
+			$is_leave_today = isset($rows[$i]['is_leave_today']) && $rows[$i]['is_leave_today'] === TRUE;
+			if ($is_present)
+			{
+				$present_count += 1;
+			}
+			else
+			{
+				$missing_count += 1;
+				if (!$is_leave_today)
+				{
+					$alpha_names[] = isset($rows[$i]['display_name']) ? (string) $rows[$i]['display_name'] : '-';
+				}
+			}
+		}
+
+		return array(
+			'date_key' => $date_value,
+			'date_label' => date('d-m-Y', strtotime($date_value)),
+			'rows' => $rows,
+			'total_employees' => count($rows),
+			'present_count' => $present_count,
+			'missing_count' => $missing_count,
+			'alpha_names' => $alpha_names,
+			'alpha_count' => count($alpha_names)
+		);
+	}
+
+	private function build_attendance_reminder_group_message($payload, $slot)
+	{
+		$slot_label = trim((string) $slot);
+		$rows = isset($payload['rows']) && is_array($payload['rows']) ? $payload['rows'] : array();
+		$lines = array();
+		$lines[] = 'List Absensi Hari ini :';
+		$lines[] = '✅ : Kalau sudah absen';
+		$lines[] = '❌ : Kalau belum absen';
+		$lines[] = '';
+
+		for ($i = 0; $i < count($rows); $i += 1)
+		{
+			$row_name = isset($rows[$i]['display_name']) ? (string) $rows[$i]['display_name'] : '-';
+			$row_status = isset($rows[$i]['is_present']) && $rows[$i]['is_present'] === TRUE ? '✅' : '❌';
+			$lines[] = '- '.$row_name.' '.$row_status;
+		}
+
+		$lines[] = '';
+		$lines[] = 'Jam cek: '.$slot_label.' WIB';
+
+		if ($slot_label === '17:00')
+		{
+			$alpha_names = isset($payload['alpha_names']) && is_array($payload['alpha_names']) ? $payload['alpha_names'] : array();
+			$alpha_count = isset($payload['alpha_count']) ? (int) $payload['alpha_count'] : count($alpha_names);
+			$lines[] = '';
+			$lines[] = 'Total Alpha Hari ini: '.$alpha_count.' orang';
+			if ($alpha_count > 0)
+			{
+				for ($i = 0; $i < count($alpha_names); $i += 1)
+				{
+					$lines[] = '- '.(string) $alpha_names[$i];
+				}
+			}
+			else
+			{
+				$lines[] = '- Tidak ada';
+			}
+		}
+
+		return implode("\n", $lines);
+	}
+
+	private function build_attendance_reminder_direct_message($display_name, $slot)
+	{
+		$name = trim((string) $display_name);
+		if ($name === '')
+		{
+			$name = 'Karyawan';
+		}
+
+		$slot_label = trim((string) $slot);
+		if ($slot_label === '17:00')
+		{
+			return "Halo ".$name.",\nSampai last call jam 17:00 WIB kamu belum absen masuk hari ini.\nMohon segera konfirmasi ke admin jika ada kendala.\nTerima kasih.";
+		}
+
+		return "Halo ".$name.",\nSampai jam ".$slot_label." WIB kamu belum melakukan absen masuk hari ini.\nMohon segera absen dari dashboard.\nTerima kasih.";
 	}
 
 	private function http_post_request($url, $payload, $headers = array())
@@ -8484,34 +11143,145 @@ class Home extends CI_Controller {
 		return ($hours * 3600) + ($minutes * 60) + $seconds;
 	}
 
+	private function has_real_attendance_time($time_value)
+	{
+		$value = trim((string) $time_value);
+		if ($value === '' || $value === '-' || $value === '--')
+		{
+			return FALSE;
+		}
+		if (strcasecmp($value, 'null') === 0 || strcasecmp($value, 'n/a') === 0)
+		{
+			return FALSE;
+		}
+		if (preg_match('/^\d{2}\:\d{2}(?:\:\d{2})?$/', $value) !== 1)
+		{
+			return FALSE;
+		}
+
+		$normalized = strlen($value) === 5 ? $value.':00' : $value;
+		return $normalized !== '00:00:00';
+	}
+
 	private function duration_to_seconds($duration_value)
 	{
 		return $this->time_to_seconds($duration_value);
 	}
 
-	private function calculate_late_deduction($salary_tier, $salary_monthly, $work_days, $late_seconds, $date_key = '', $username = '')
+	private function should_bypass_attendance_time_window($username)
 	{
+		$username_key = strtolower(trim((string) $username));
+		if ($username_key === '')
+		{
+			return FALSE;
+		}
+
+		$bypass_usernames = self::ATTENDANCE_TIME_BYPASS_USERS;
+		if (!is_array($bypass_usernames) || empty($bypass_usernames))
+		{
+			return FALSE;
+		}
+
+		for ($i = 0; $i < count($bypass_usernames); $i += 1)
+		{
+			$candidate = strtolower(trim((string) $bypass_usernames[$i]));
+			if ($candidate === '')
+			{
+				continue;
+			}
+			if ($username_key === $candidate)
+			{
+				return TRUE;
+			}
+		}
+
+		return FALSE;
+	}
+
+	private function should_force_late_attendance($username)
+	{
+		$username_key = strtolower(trim((string) $username));
+		if ($username_key === '')
+		{
+			return FALSE;
+		}
+
+		$force_late_usernames = self::ATTENDANCE_FORCE_LATE_USERS;
+		if (!is_array($force_late_usernames) || empty($force_late_usernames))
+		{
+			return FALSE;
+		}
+
+		for ($i = 0; $i < count($force_late_usernames); $i += 1)
+		{
+			$candidate = strtolower(trim((string) $force_late_usernames[$i]));
+			if ($candidate === '')
+			{
+				continue;
+			}
+			if ($username_key === $candidate)
+			{
+				return TRUE;
+			}
+		}
+
+		return FALSE;
+	}
+
+	private function calculate_late_deduction($salary_tier, $salary_monthly, $work_days, $late_seconds, $date_key = '', $username = '', $weekly_day_off_override = NULL)
+	{
+		static $monthly_cut_cache = array();
 		$late_seconds = (int) $late_seconds;
 		$salary_monthly = $this->resolve_monthly_salary($salary_tier, (float) $salary_monthly);
-		$weekly_day_off_n = $this->normalize_weekly_day_off(self::WEEKLY_HOLIDAY_DAY);
+		$weekly_day_off_n = $this->default_weekly_day_off();
+		if ($weekly_day_off_override !== NULL)
+		{
+			$weekly_day_off_n = $this->resolve_employee_weekly_day_off($weekly_day_off_override);
+		}
+		else
+		{
+			$username_key = strtolower(trim((string) $username));
+			if ($username_key !== '')
+			{
+				$user_profile = $this->get_employee_profile($username_key);
+				$weekly_day_off_n = isset($user_profile['weekly_day_off'])
+					? $this->resolve_employee_weekly_day_off($user_profile['weekly_day_off'])
+					: $weekly_day_off_n;
+			}
+		}
 		$month_policy = $this->calculate_month_work_policy($date_key, $weekly_day_off_n);
 		$year = isset($month_policy['year']) ? (int) $month_policy['year'] : (int) date('Y');
 		$month = isset($month_policy['month']) ? (int) $month_policy['month'] : (int) date('n');
 		$weekly_leave_taken = isset($month_policy['weekly_off_days']) ? (int) $month_policy['weekly_off_days'] : 0;
-		$monthly_summary = $this->calculate_monthly_deduction_summary(
-			$salary_monthly,
-			$year,
-			$month,
-			$weekly_day_off_n,
-			0,
-			0,
-			$weekly_leave_taken,
-			0,
-			0,
-			0,
-			0,
-			0
-		);
+		$cache_key = implode('|', array(
+			number_format((float) $salary_monthly, 2, '.', ''),
+			(string) $year,
+			(string) $month,
+			(string) $weekly_day_off_n,
+			(string) $weekly_leave_taken
+		));
+		if (isset($monthly_cut_cache[$cache_key]) && is_array($monthly_cut_cache[$cache_key]))
+		{
+			$monthly_summary = $monthly_cut_cache[$cache_key];
+		}
+		else
+		{
+			$monthly_summary = $this->calculate_monthly_deduction_summary(
+				$salary_monthly,
+				$year,
+				$month,
+				$weekly_day_off_n,
+				0,
+				0,
+				$weekly_leave_taken,
+				0,
+				0,
+				0,
+				0,
+				0
+			);
+			$monthly_cut_cache[$cache_key] = $monthly_summary;
+		}
 		$potongan_per_hari = isset($monthly_summary['potongan_per_hari']) && is_array($monthly_summary['potongan_per_hari'])
 			? $monthly_summary['potongan_per_hari']
 			: array(
@@ -8626,6 +11396,28 @@ class Home extends CI_Controller {
 		return $very_low_attendance && $dominant_alpha && $almost_no_leave;
 	}
 
+	private function monthly_demo_randomization_enabled()
+	{
+		$raw = strtolower(trim((string) getenv('ABSEN_MONTHLY_DEMO_RANDOMIZE')));
+		if ($raw === '')
+		{
+			return FALSE;
+		}
+
+		return in_array($raw, array('1', 'true', 'yes', 'on'), TRUE);
+	}
+
+	private function monthly_infer_alpha_from_gap_enabled()
+	{
+		$raw = strtolower(trim((string) getenv('ABSEN_MONTHLY_INFER_ALPHA_FROM_GAP')));
+		if ($raw === '')
+		{
+			return FALSE;
+		}
+
+		return in_array($raw, array('1', 'true', 'yes', 'on'), TRUE);
+	}
+
 	private function seeded_rand_range(&$seed, $min_value, $max_value)
 	{
 		$min_value = (int) $min_value;
@@ -8737,9 +11529,16 @@ class Home extends CI_Controller {
 
 	private function count_weekday_occurrences($year, $month, $weekday_n)
 	{
+		static $weekday_occurrence_cache = array();
 		$year = (int) $year;
 		$month = (int) $month;
 		$weekday_n = $this->normalize_weekly_day_off($weekday_n);
+		$cache_key = sprintf('%04d-%02d-%d', $year, $month, $weekday_n);
+		if (isset($weekday_occurrence_cache[$cache_key]))
+		{
+			return (int) $weekday_occurrence_cache[$cache_key];
+		}
+
 		$days_in_month = cal_days_in_month(CAL_GREGORIAN, $month, $year);
 		$total = 0;
 		for ($day = 1; $day <= $days_in_month; $day += 1)
@@ -8751,6 +11550,7 @@ class Home extends CI_Controller {
 			}
 		}
 
+		$weekday_occurrence_cache[$cache_key] = $total;
 		return $total;
 	}
 
@@ -8798,7 +11598,11 @@ class Home extends CI_Controller {
 		$total_telat_gt_4_jam = max(0, (int) $total_telat_gt_4_jam);
 
 		$days_in_month = cal_days_in_month(CAL_GREGORIAN, $month, $year);
-		$weekly_quota = $this->weekly_quota_by_days($days_in_month);
+		$weekly_quota = $this->count_weekday_occurrences($year, $month, $weekly_day_off_n);
+		if ($weekly_quota <= 0)
+		{
+			$weekly_quota = $this->weekly_quota_by_days($days_in_month);
+		}
 		$weekly_excess = max(0, $weekly_leave_taken - $weekly_quota);
 
 		$annual_quota = 12;
@@ -8893,6 +11697,7 @@ class Home extends CI_Controller {
 
 	private function calculate_month_work_policy($date_key = '', $weekly_day_off = NULL)
 	{
+		static $month_policy_cache = array();
 		$base_timestamp = time();
 		if ($date_key !== '')
 		{
@@ -8905,12 +11710,22 @@ class Home extends CI_Controller {
 
 		$year = (int) date('Y', $base_timestamp);
 		$month = (int) date('n', $base_timestamp);
+		$weekly_day_off_n = $this->normalize_weekly_day_off($weekly_day_off === NULL ? $this->default_weekly_day_off() : $weekly_day_off);
+		$cache_key = sprintf('%04d-%02d-%d', $year, $month, $weekly_day_off_n);
+		if (isset($month_policy_cache[$cache_key]) && is_array($month_policy_cache[$cache_key]))
+		{
+			return $month_policy_cache[$cache_key];
+		}
+
 		$days_in_month = cal_days_in_month(CAL_GREGORIAN, $month, $year);
-		$weekly_day_off_n = $this->normalize_weekly_day_off($weekly_day_off === NULL ? self::WEEKLY_HOLIDAY_DAY : $weekly_day_off);
-		$weekly_off_days = $this->weekly_quota_by_days($days_in_month);
+		$weekly_off_days = $this->count_weekday_occurrences($year, $month, $weekly_day_off_n);
+		if ($weekly_off_days <= 0)
+		{
+			$weekly_off_days = $this->weekly_quota_by_days($days_in_month);
+		}
 		$work_days = max($days_in_month - $weekly_off_days, 1);
 
-		return array(
+		$policy = array(
 			'year' => $year,
 			'month' => $month,
 			'days_in_month' => $days_in_month,
@@ -8918,6 +11733,8 @@ class Home extends CI_Controller {
 			'weekly_off_days' => $weekly_off_days,
 			'work_days' => $work_days
 		);
+		$month_policy_cache[$cache_key] = $policy;
+		return $policy;
 	}
 
 	private function conflict_logs_file_path()
@@ -9394,6 +12211,7 @@ class Home extends CI_Controller {
 			'shift_name' => 'Shift',
 			'salary_monthly' => 'Gaji Pokok',
 			'work_days' => 'Hari Masuk',
+			'weekly_day_off' => 'Hari Libur Mingguan',
 			'job_title' => 'Jabatan',
 			'address' => 'Alamat'
 		);
@@ -9574,6 +12392,16 @@ class Home extends CI_Controller {
 			}
 			$updated_row['work_days'] = $work_days_old;
 		}
+		elseif ($field === 'weekly_day_off')
+		{
+			$weekly_day_off_old = trim((string) $old_value);
+			if ($weekly_day_off_old === '')
+			{
+				$message = 'Rollback hari libur mingguan dibatalkan karena nilai lama kosong.';
+				return FALSE;
+			}
+			$updated_row['weekly_day_off'] = $this->resolve_employee_weekly_day_off($weekly_day_off_old);
+		}
 		elseif ($field === 'job_title')
 		{
 			$job_title_old = $this->resolve_employee_job_title($old_value);
@@ -9703,6 +12531,10 @@ class Home extends CI_Controller {
 		if ($field_key === 'work_days')
 		{
 			return (int) $left === (int) $right;
+		}
+		if ($field_key === 'weekly_day_off')
+		{
+			return $this->resolve_employee_weekly_day_off($left) === $this->resolve_employee_weekly_day_off($right);
 		}
 
 		if ($field_key === 'branch')

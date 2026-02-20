@@ -78,10 +78,11 @@ if ($db_hostname === '')
 {
 	$db_hostname = 'localhost';
 }
-$db_port = trim((string) getenv('DB_PORT'));
-if ($db_port !== '' && strpos($db_hostname, ':') === FALSE)
+$db_port_raw = trim((string) getenv('DB_PORT'));
+$db_port = $db_port_raw !== '' ? (int) $db_port_raw : 3306;
+if ($db_port <= 0)
 {
-	$db_hostname .= ':'.$db_port;
+	$db_port = 3306;
 }
 $db_username = trim((string) getenv('DB_USER'));
 $db_password = trim((string) getenv('DB_PASS'));
@@ -109,6 +110,7 @@ $db['default'] = array(
 	'username' => $db_username,
 	'password' => $db_password,
 	'database' => $db_name,
+	'port' => $db_port,
 	'dbdriver' => 'mysqli',
 	'dbprefix' => '',
 	'pconnect' => FALSE,

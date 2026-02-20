@@ -1,0 +1,176 @@
+{
+  "admin_bos": {
+    "login_ok": true,
+    "login_final": "https://absenpanha.com/home",
+    "login_time_sec": 4.708,
+    "checks": [
+      {
+        "url": "https://absenpanha.com/home",
+        "status": 200,
+        "time_sec": 1.842,
+        "content_type": "text/html; charset=UTF-8",
+        "final_url": "https://absenpanha.com/home",
+        "bytes": 66400
+      },
+      {
+        "url": "https://absenpanha.com/home/cara_pakai",
+        "status": 200,
+        "time_sec": 0.409,
+        "content_type": "text/html; charset=UTF-8",
+        "final_url": "https://absenpanha.com/home/cara_pakai",
+        "bytes": 16566
+      },
+      {
+        "url": "https://absenpanha.com/home/leave_requests",
+        "status": 200,
+        "time_sec": 0.717,
+        "content_type": "text/html; charset=UTF-8",
+        "final_url": "https://absenpanha.com/home/leave_requests",
+        "bytes": 14810
+      },
+      {
+        "url": "https://absenpanha.com/home/loan_requests",
+        "status": 200,
+        "time_sec": 0.716,
+        "content_type": "text/html; charset=UTF-8",
+        "final_url": "https://absenpanha.com/home/loan_requests",
+        "bytes": 14368
+      },
+      {
+        "url": "https://absenpanha.com/home/overtime_data",
+        "status": 200,
+        "time_sec": 0.638,
+        "content_type": "text/html; charset=UTF-8",
+        "final_url": "https://absenpanha.com/home/overtime_data",
+        "bytes": 19725
+      },
+      {
+        "url": "https://absenpanha.com/home/log_data",
+        "status": 200,
+        "time_sec": 0.385,
+        "content_type": "text/html; charset=UTF-8",
+        "final_url": "https://absenpanha.com/home/log_data",
+        "bytes": 32950
+      },
+      {
+        "url": "https://absenpanha.com/home/employee_data",
+        "status": 200,
+        "time_sec": 0.675,
+        "content_type": "text/html; charset=UTF-8",
+        "final_url": "https://absenpanha.com/home/employee_data",
+        "bytes": 112903
+      },
+      {
+        "url": "https://absenpanha.com/home/employee_data_monthly",
+        "status": 200,
+        "time_sec": 0.64,
+        "content_type": "text/html; charset=UTF-8",
+        "final_url": "https://absenpanha.com/home/employee_data_monthly",
+        "bytes": 16703
+      },
+      {
+        "url": "https://absenpanha.com/home/admin_dashboard_live_summary",
+        "status": 200,
+        "time_sec": 0.34,
+        "content_type": "application/json; charset=utf-8",
+        "final_url": "https://absenpanha.com/home/admin_dashboard_live_summary",
+        "bytes": 249
+      },
+      {
+        "url": "https://absenpanha.com/home/admin_metric_chart_data?metric=attendance&range=month",
+        "status": 422,
+        "time_sec": 0.346,
+        "content_type": "application/json; charset=utf-8",
+        "final_url": "https://absenpanha.com/home/admin_metric_chart_data?metric=attendance&range=month",
+        "bytes": 62
+      }
+    ]
+  },
+  "user_acep": {
+    "login_ok": true,
+    "login_final": "https://absenpanha.com/home",
+    "login_time_sec": 1.574,
+    "checks": [
+      {
+        "url": "https://absenpanha.com/home",
+        "status": 200,
+        "time_sec": 0.651,
+        "content_type": "text/html; charset=UTF-8",
+        "final_url": "https://absenpanha.com/home",
+        "bytes": 16092
+      },
+      {
+        "url": "https://absenpanha.com/home/cara_pakai",
+        "status": 200,
+        "time_sec": 1.088,
+        "content_type": "text/html; charset=UTF-8",
+        "final_url": "https://absenpanha.com/home",
+        "bytes": 16092
+      },
+      {
+        "url": "https://absenpanha.com/home/leave_requests",
+        "status": 200,
+        "time_sec": 1.128,
+        "content_type": "text/html; charset=UTF-8",
+        "final_url": "https://absenpanha.com/home",
+        "bytes": 16092
+      },
+      {
+        "url": "https://absenpanha.com/home/loan_requests",
+        "status": 200,
+        "time_sec": 1.023,
+        "content_type": "text/html; charset=UTF-8",
+        "final_url": "https://absenpanha.com/home",
+        "bytes": 16092
+      },
+      {
+        "url": "https://absenpanha.com/home/overtime_data",
+        "status": 200,
+        "time_sec": 0.984,
+        "content_type": "text/html; charset=UTF-8",
+        "final_url": "https://absenpanha.com/home",
+        "bytes": 16092
+      },
+      {
+        "url": "https://absenpanha.com/home/log_data",
+        "status": 200,
+        "time_sec": 1.284,
+        "content_type": "text/html; charset=UTF-8",
+        "final_url": "https://absenpanha.com/home",
+        "bytes": 16092
+      },
+      {
+        "url": "https://absenpanha.com/home/employee_data",
+        "status": 200,
+        "time_sec": 1.11,
+        "content_type": "text/html; charset=UTF-8",
+        "final_url": "https://absenpanha.com/home",
+        "bytes": 16092
+      },
+      {
+        "url": "https://absenpanha.com/home/employee_data_monthly",
+        "status": 200,
+        "time_sec": 1.047,
+        "content_type": "text/html; charset=UTF-8",
+        "final_url": "https://absenpanha.com/home",
+        "bytes": 16092
+      },
+      {
+        "url": "https://absenpanha.com/home/admin_dashboard_live_summary",
+        "status": 403,
+        "time_sec": 0.343,
+        "content_type": "application/json; charset=utf-8",
+        "final_url": "https://absenpanha.com/home/admin_dashboard_live_summary",
+        "bytes": 44
+      },
+      {
+        "url": "https://absenpanha.com/home/admin_metric_chart_data?metric=attendance&range=month",
+        "status": 403,
+        "time_sec": 0.338,
+        "content_type": "application/json; charset=utf-8",
+        "final_url": "https://absenpanha.com/home/admin_metric_chart_data?metric=attendance&range=month",
+        "bytes": 44
+      }
+    ]
+  }
+}

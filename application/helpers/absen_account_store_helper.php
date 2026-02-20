@@ -304,6 +304,25 @@ if (!function_exists('absen_normalize_username_key_value'))
 	}
 }
 
+if (!function_exists('absen_normalize_phone_number'))
+{
+	function absen_normalize_phone_number($phone)
+	{
+		$digits = preg_replace('/\D+/', '', (string) $phone);
+		if ($digits === '')
+		{
+			return '';
+		}
+
+		if (strpos($digits, '0') === 0)
+		{
+			return '62'.substr($digits, 1);
+		}
+
+		return $digits;
+	}
+}
+
 if (!function_exists('absen_resolve_login_username_key'))
 {
 	function absen_resolve_login_username_key($input_username, $accounts)
@@ -373,12 +392,13 @@ if (!function_exists('absen_default_account_book'))
 				'login_alias' => '',
 				'display_name' => (string) $username,
 				'branch' => absen_default_employee_branch(),
-				'phone' => (string) $phone,
+				'phone' => absen_normalize_phone_number((string) $phone),
 				'shift_name' => (string) $shifts[$shift_key]['shift_name'],
 				'shift_time' => (string) $shifts[$shift_key]['shift_time'],
 				'salary_tier' => (string) $salaries[$salary_tier]['salary_tier'],
 				'salary_monthly' => (int) $salaries[$salary_tier]['salary_monthly'],
 				'work_days' => (int) $salaries[$salary_tier]['work_days'],
+				'weekly_day_off' => 1,
 				'job_title' => (string) $job_title,
 				'address' => 'Kp. Kesekian Kalinya, Pandenglang, Banten',
 				'profile_photo' => '',
@@ -406,6 +426,7 @@ if (!function_exists('absen_default_account_book'))
 				'salary_tier' => '',
 				'salary_monthly' => 0,
 				'work_days' => 22,
+				'weekly_day_off' => 1,
 				'job_title' => 'Admin',
 				'coordinate_point' => '',
 				'employee_status' => 'Aktif',
@@ -428,6 +449,7 @@ if (!function_exists('absen_default_account_book'))
 				'salary_tier' => '',
 				'salary_monthly' => 0,
 				'work_days' => 22,
+				'weekly_day_off' => 1,
 				'job_title' => 'Admin',
 				'coordinate_point' => '',
 				'employee_status' => 'Aktif',
@@ -450,6 +472,7 @@ if (!function_exists('absen_default_account_book'))
 				'salary_tier' => '',
 				'salary_monthly' => 0,
 				'work_days' => 22,
+				'weekly_day_off' => 1,
 				'job_title' => 'Admin',
 				'coordinate_point' => '',
 				'employee_status' => 'Aktif',
@@ -571,7 +594,7 @@ if (!function_exists('absen_sanitize_account_book'))
 				$branch = $branch_resolved !== '' ? $branch_resolved : absen_default_employee_branch();
 			}
 
-			$phone = trim((string) (isset($row['phone']) ? $row['phone'] : ''));
+			$phone = absen_normalize_phone_number(isset($row['phone']) ? $row['phone'] : '');
 			$job_title = trim((string) (isset($row['job_title']) ? $row['job_title'] : ''));
 			if ($role === 'admin')
 			{
@@ -642,6 +665,15 @@ if (!function_exists('absen_sanitize_account_book'))
 			{
 				$work_days = (int) $salary_profiles[$salary_tier]['work_days'];
 			}
+			$weekly_day_off = isset($row['weekly_day_off']) ? (int) $row['weekly_day_off'] : 1;
+			if ($weekly_day_off === 0)
+			{
+				$weekly_day_off = 7;
+			}
+			if ($weekly_day_off < 1 || $weekly_day_off > 7)
+			{
+				$weekly_day_off = 1;
+			}
 
 			if ($role === 'admin')
 			{
@@ -650,6 +682,7 @@ if (!function_exists('absen_sanitize_account_book'))
 				$salary_tier = '';
 				$salary_monthly = 0;
 				$work_days = 22;
+				$weekly_day_off = 1;
 				$sheet_row = 0;
 				$sheet_sync_source = '';
 				$sheet_last_sync_at = '';
@@ -684,6 +717,7 @@ if (!function_exists('absen_sanitize_account_book'))
 				'salary_tier' => $salary_tier,
 				'salary_monthly' => $salary_monthly,
 				'work_days' => $work_days,
+				'weekly_day_off' => $weekly_day_off,
 				'job_title' => $job_title,
 				'address' => $address,
 				'profile_photo' => $profile_photo,
@@ -787,6 +821,7 @@ if (!function_exists('absen_sanitize_account_book'))
 			$sanitized[$required_username]['salary_tier'] = '';
 			$sanitized[$required_username]['salary_monthly'] = 0;
 			$sanitized[$required_username]['work_days'] = 22;
+			$sanitized[$required_username]['weekly_day_off'] = 1;
 			$sanitized[$required_username]['job_title'] = 'Admin';
 			$sanitized[$required_username]['sheet_row'] = 0;
 			$sanitized[$required_username]['sheet_sync_source'] = '';

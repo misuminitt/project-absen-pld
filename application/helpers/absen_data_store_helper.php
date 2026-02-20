@@ -128,6 +128,24 @@ if (!function_exists('absen_data_store_key_normalize'))
 	}
 }
 
+if (!function_exists('absen_data_store_set_last_db_error'))
+{
+	function absen_data_store_set_last_db_error($message)
+	{
+		$GLOBALS['__absen_data_store_last_db_error'] = trim((string) $message);
+	}
+}
+
+if (!function_exists('absen_data_store_last_db_error_message'))
+{
+	function absen_data_store_last_db_error_message()
+	{
+		return isset($GLOBALS['__absen_data_store_last_db_error'])
+			? trim((string) $GLOBALS['__absen_data_store_last_db_error'])
+			: '';
+	}
+}
+
 if (!function_exists('absen_data_store_db_instance'))
 {
 	function absen_data_store_db_instance()
@@ -143,25 +161,39 @@ if (!function_exists('absen_data_store_db_instance'))
 
 		if (!absen_db_storage_enabled())
 		{
+			absen_data_store_set_last_db_error('DB storage dinonaktifkan.');
+			return NULL;
+		}
+		if (!extension_loaded('mysqli') || !class_exists('mysqli'))
+		{
+			absen_data_store_set_last_db_error('Extension mysqli pada PHP belum aktif.');
 			return NULL;
 		}
 		if (!function_exists('get_instance'))
 		{
+			absen_data_store_set_last_db_error('Runtime CodeIgniter tidak ditemukan.');
 			return NULL;
 		}
 
 		$CI =& get_instance();
 		if (!is_object($CI) || !isset($CI->load) || !is_object($CI->load))
 		{
+			absen_data_store_set_last_db_error('Loader CodeIgniter tidak tersedia.');
 			return NULL;
 		}
 
+		absen_data_store_set_last_db_error('');
 		if (!isset($CI->db) || !is_object($CI->db))
 		{
-			@$CI->load->database();
+			$loaded = @$CI->load->database('', TRUE);
+			if (is_object($loaded))
+			{
+				$CI->db = $loaded;
+			}
 		}
 		if (!isset($CI->db) || !is_object($CI->db))
 		{
+			absen_data_store_set_last_db_error('Objek database gagal dibuat.');
 			return NULL;
 		}
 
@@ -171,9 +203,23 @@ if (!function_exists('absen_data_store_db_instance'))
 		}
 		if (!isset($CI->db->conn_id) || !$CI->db->conn_id)
 		{
+			$db_error_message = '';
+			if (method_exists($CI->db, 'error'))
+			{
+				$db_error_payload = $CI->db->error();
+				$db_error_message = isset($db_error_payload['message'])
+					? trim((string) $db_error_payload['message'])
+					: '';
+			}
+			if ($db_error_message === '')
+			{
+				$db_error_message = 'Koneksi mysqli gagal. Cek DB_HOST/DB_PORT/DB_USER/DB_PASS/DB_NAME.';
+			}
+			absen_data_store_set_last_db_error($db_error_message);
 			return NULL;
 		}
 
+		absen_data_store_set_last_db_error('');
 		$db_instance = $CI->db;
 		return $db_instance;
 	}

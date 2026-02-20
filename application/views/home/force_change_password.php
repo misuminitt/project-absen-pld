@@ -107,7 +107,39 @@ $password_notice_error = isset($password_notice_error) ? trim((string) $password
 			color: #1a4e7b;
 			border: 1px solid #c8dbee;
 		}
-	</style>
+	
+		/* mobile-fix-20260219 */
+		@media (max-width: 560px) {
+			body {
+				align-items: flex-start;
+				padding: calc(env(safe-area-inset-top, 0px) + 0.72rem) 0.72rem 0.9rem;
+			}
+
+			.card {
+				border-radius: 14px;
+				padding: 0.92rem;
+			}
+
+			h1 {
+				font-size: 1.05rem;
+			}
+
+			p {
+				font-size: 0.82rem;
+				line-height: 1.42;
+			}
+
+			.actions {
+				flex-direction: column;
+				align-items: stretch;
+			}
+
+			.btn {
+				width: 100%;
+				text-align: center;
+			}
+		}
+</style>
 </head>
 <body>
 	<section class="card">

@@ -373,10 +373,18 @@ if ($home_index_config_json === FALSE) {
 										<div>
 											<p class="account-label">Shift</p>
 											<select name="new_shift" class="account-input" required>
-												<option value="pagi">Shift Pagi - Sore (08:00 - 17:00)</option>
-												<option value="siang">Shift Siang - Malam (12:00 - 23:00)</option>
+												<option value="pagi">Shift Pagi - Sore (08:00 - 23:00)</option>
+												<option value="siang">Shift Siang - Malam (14:00 - 23:00)</option>
+												<option value="multishift">Multi Shift (06:30 - 23:59)</option>
 											</select>
 										</div>
+									</div>
+									<div>
+										<p class="account-label">Lintas Cabang</p>
+										<select name="new_cross_branch_enabled" class="account-input" required>
+											<option value="0" selected>Tidak</option>
+											<option value="1">Iya</option>
+										</select>
 									</div>
 									<div class="account-form-row two">
 										<div>
@@ -421,7 +429,7 @@ if ($home_index_config_json === FALSE) {
 									<div class="account-form-row two">
 										<div>
 											<p class="account-label">Titik Koordinat</p>
-											<input type="text" name="new_coordinate_point" class="account-input" placeholder="-6.217062, 106.1321109" required>
+											<input type="text" name="new_coordinate_point" class="account-input" placeholder="-6.217076, 106.132128" required>
 										</div>
 										<div>
 											<p class="account-label">Upload PP (Wajib)</p>
@@ -638,10 +646,18 @@ if ($home_index_config_json === FALSE) {
 										<div>
 											<p class="account-label">Shift</p>
 											<select name="edit_shift" id="editShiftInput" class="account-input" required>
-												<option value="pagi">Shift Pagi - Sore (08:00 - 17:00)</option>
-												<option value="siang">Shift Siang - Malam (12:00 - 23:00)</option>
+												<option value="pagi">Shift Pagi - Sore (08:00 - 23:00)</option>
+												<option value="siang">Shift Siang - Malam (14:00 - 23:00)</option>
+												<option value="multishift">Multi Shift (06:30 - 23:59)</option>
 											</select>
 										</div>
+									</div>
+									<div>
+										<p class="account-label">Lintas Cabang</p>
+										<select name="edit_cross_branch_enabled" id="editCrossBranchInput" class="account-input" required>
+											<option value="0">Tidak</option>
+											<option value="1">Iya</option>
+										</select>
 									</div>
 									<div>
 										<p class="account-label">Gaji Pokok (Rp)</p>

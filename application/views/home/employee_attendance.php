@@ -739,6 +739,8 @@ $notice_error = $this->session->flashdata('attendance_notice_error');
 								<th>Nama</th>
 								<th>Alamat</th>
 								<th>Jabatan</th>
+								<th>Cabang Asal</th>
+								<th>Cabang Absen</th>
 								<th>Telp</th>
 								<th>Tanggal</th>
 								<th>Shift</th>
@@ -802,6 +804,12 @@ $notice_error = $this->session->flashdata('attendance_notice_error');
 								$row_job_title = isset($row['job_title']) && trim((string) $row['job_title']) !== ''
 									? (string) $row['job_title']
 									: 'Teknisi';
+								$row_branch_origin = isset($row['branch_origin']) && trim((string) $row['branch_origin']) !== ''
+									? (string) $row['branch_origin']
+									: 'Baros';
+								$row_branch_attendance = isset($row['branch_attendance']) && trim((string) $row['branch_attendance']) !== ''
+									? (string) $row['branch_attendance']
+									: $row_branch_origin;
 								$row_phone = isset($row['phone']) && trim((string) $row['phone']) !== ''
 									? (string) $row['phone']
 									: '-';
@@ -835,6 +843,10 @@ $notice_error = $this->session->flashdata('attendance_notice_error');
 								{
 									$shift_short = 'Siang';
 								}
+								elseif (stripos($shift_name, 'multi') !== FALSE)
+								{
+									$shift_short = 'Multi';
+								}
 								?>
 								<tr class="attendance-row" data-id="<?php echo htmlspecialchars(strtolower($row_employee_id), ENT_QUOTES, 'UTF-8'); ?>" data-name="<?php echo htmlspecialchars(strtolower($row_username), ENT_QUOTES, 'UTF-8'); ?>" data-date-key="<?php echo htmlspecialchars($row_date_key, ENT_QUOTES, 'UTF-8'); ?>" data-date-label="<?php echo htmlspecialchars(isset($row['date_label']) ? (string) $row['date_label'] : '-', ENT_QUOTES, 'UTF-8'); ?>">
 									<td class="row-no"><?php echo $no; ?></td>
@@ -845,6 +857,8 @@ $notice_error = $this->session->flashdata('attendance_notice_error');
 									<td><?php echo htmlspecialchars($row_username !== '' ? $row_username : '-', ENT_QUOTES, 'UTF-8'); ?></td>
 									<td class="address-cell"><?php echo htmlspecialchars($row_address, ENT_QUOTES, 'UTF-8'); ?></td>
 									<td><?php echo htmlspecialchars($row_job_title, ENT_QUOTES, 'UTF-8'); ?></td>
+									<td><?php echo htmlspecialchars($row_branch_origin, ENT_QUOTES, 'UTF-8'); ?></td>
+									<td><?php echo htmlspecialchars($row_branch_attendance, ENT_QUOTES, 'UTF-8'); ?></td>
 									<td><?php echo htmlspecialchars($row_phone, ENT_QUOTES, 'UTF-8'); ?></td>
 									<td><?php echo htmlspecialchars(isset($row['date_label']) ? (string) $row['date_label'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
 									<td><span class="shift-chip"><?php echo htmlspecialchars($shift_short, ENT_QUOTES, 'UTF-8'); ?></span></td>

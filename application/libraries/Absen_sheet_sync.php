@@ -140,7 +140,7 @@ class Absen_sheet_sync {
 		$shift_profiles = function_exists('absen_shift_profile_book') ? absen_shift_profile_book() : array();
 		$default_shift = isset($shift_profiles['pagi']) && is_array($shift_profiles['pagi'])
 			? $shift_profiles['pagi']
-			: array('shift_name' => 'Shift Pagi - Sore', 'shift_time' => '08:00 - 17:00');
+			: array('shift_name' => 'Shift Pagi - Sore', 'shift_time' => '08:00 - 23:00');
 		$default_password = isset($this->config['default_user_password']) && trim((string) $this->config['default_user_password']) !== ''
 			? (string) $this->config['default_user_password']
 			: '123';
@@ -779,7 +779,7 @@ class Absen_sheet_sync {
 		$shift_profiles = function_exists('absen_shift_profile_book') ? absen_shift_profile_book() : array();
 		$default_shift = isset($shift_profiles['pagi']) && is_array($shift_profiles['pagi'])
 			? $shift_profiles['pagi']
-			: array('shift_name' => 'Shift Pagi - Sore', 'shift_time' => '08:00 - 17:00');
+			: array('shift_name' => 'Shift Pagi - Sore', 'shift_time' => '08:00 - 23:00');
 		$default_password = isset($this->config['default_user_password']) && trim((string) $this->config['default_user_password']) !== ''
 			? (string) $this->config['default_user_password']
 			: '123';
@@ -844,6 +844,10 @@ class Absen_sheet_sync {
 		if (isset($field_indexes['branch']))
 		{
 			$branch_column_letter = $this->column_letter_from_index((int) $field_indexes['branch']);
+		}
+		elseif (isset($field_indexes['branch_origin']))
+		{
+			$branch_column_letter = $this->column_letter_from_index((int) $field_indexes['branch_origin']);
 		}
 		$attendance_coordinate_updates = array();
 		$attendance_coordinate_update_rows = array();
@@ -964,9 +968,19 @@ class Absen_sheet_sync {
 			$address_raw = $this->get_attendance_row_value($row, $field_indexes, 'address');
 			$phone_raw = $this->get_attendance_row_value($row, $field_indexes, 'phone');
 			$branch_raw = $this->get_attendance_row_value($row, $field_indexes, 'branch');
+			if ($branch_raw === '')
+			{
+				$branch_raw = $this->get_attendance_row_value($row, $field_indexes, 'branch_origin');
+			}
+			$branch_attendance_raw = $this->get_attendance_row_value($row, $field_indexes, 'branch_attendance');
+			if ($branch_raw === '')
+			{
+				$branch_raw = $branch_attendance_raw;
+			}
 			$coordinate_raw = $this->get_attendance_row_value($row, $field_indexes, 'coordinate_point');
 			$employee_id_raw = $this->get_attendance_row_value($row, $field_indexes, 'employee_id');
 			$shift_name_raw = $this->get_attendance_row_value($row, $field_indexes, 'shift_name');
+			$cross_branch_raw = $this->get_attendance_row_value($row, $field_indexes, 'cross_branch_enabled');
 			$date_absen_raw = $this->get_attendance_row_value($row, $field_indexes, 'date_absen');
 			$date_meta = $this->parse_attendance_date_meta($date_absen_raw);
 			$record_date = isset($date_meta['anchor_date']) ? (string) $date_meta['anchor_date'] : '';
@@ -1121,6 +1135,11 @@ class Absen_sheet_sync {
 					)
 				);
 			}
+			$cross_branch_existing = $this->normalize_cross_branch_enabled_value(
+				isset($existing_account['cross_branch_enabled']) ? $existing_account['cross_branch_enabled'] : 0
+			);
+			$cross_branch_from_sheet = $this->normalize_cross_branch_enabled_value($cross_branch_raw);
+			$cross_branch_enabled = $cross_branch_from_sheet === 1 || $cross_branch_existing === 1 ? 1 : 0;
 
 			$coordinate_raw_value = trim((string) $coordinate_raw);
 			$coordinate_existing = isset($existing_account['coordinate_point']) ? trim((string) $existing_account['coordinate_point']) : '';
@@ -1205,6 +1224,7 @@ class Absen_sheet_sync {
 				'address' => $address_value,
 				'profile_photo' => $profile_photo,
 				'coordinate_point' => $coordinate_value,
+				'cross_branch_enabled' => $cross_branch_enabled,
 				'employee_status' => $status_value,
 				'sheet_row' => $existing_sheet_row > 1 ? $existing_sheet_row : (int) $row_number,
 				'sheet_sync_source' => $existing_sheet_source !== '' ? $existing_sheet_source : 'google_sheet',
@@ -1281,12 +1301,18 @@ class Absen_sheet_sync {
 				}
 
 				$month_policy = $this->calculate_month_work_policy_from_date($record_date);
+				$attendance_branch = $this->resolve_branch_name($branch_attendance_raw);
+				if ($attendance_branch === '')
+				{
+					$attendance_branch = $branch_value;
+				}
 				$attendance_row = array(
 					'username' => $username_key,
 					'date' => $record_date,
 					'date_label' => $date_label !== '' ? $date_label : date('d-m-Y', strtotime($record_date)),
 					'shift_name' => $shift_name_value,
 					'shift_time' => $shift_time_value,
+					'branch' => $attendance_branch,
 					'check_in_time' => $check_in_time,
 					'check_in_late' => $late_duration !== '' ? $late_duration : '00:00:00',
 					'check_in_photo' => $this->get_attendance_row_value($row, $field_indexes, 'foto_masuk'),
@@ -1971,6 +1997,14 @@ class Absen_sheet_sync {
 			if ($branch_scope !== '')
 			{
 				$row_branch_scope = $this->resolve_branch_name($this->get_attendance_row_value($row, $field_indexes, 'branch'));
+				if ($row_branch_scope === '')
+				{
+					$row_branch_scope = $this->resolve_branch_name($this->get_attendance_row_value($row, $field_indexes, 'branch_origin'));
+				}
+				if ($row_branch_scope === '')
+				{
+					$row_branch_scope = $this->resolve_branch_name($this->get_attendance_row_value($row, $field_indexes, 'branch_attendance'));
+				}
 				if ($row_branch_scope !== '' && strcasecmp($row_branch_scope, $branch_scope) !== 0)
 				{
 					continue;
@@ -2189,6 +2223,10 @@ class Absen_sheet_sync {
 			{
 				$branch_value = $this->default_branch_name();
 			}
+			$cross_branch_enabled = $this->normalize_cross_branch_enabled_value(
+				isset($account_row['cross_branch_enabled']) ? $account_row['cross_branch_enabled'] : 0
+			);
+			$cross_branch_label = $cross_branch_enabled === 1 ? 'Ya' : 'Tidak';
 			$phone_value = isset($account_row['phone']) ? trim((string) $account_row['phone']) : '';
 			$coordinate_point_value = isset($account_row['coordinate_point']) ? trim((string) $account_row['coordinate_point']) : '';
 			$shift_name_default = isset($account_row['shift_name']) ? trim((string) $account_row['shift_name']) : '';
@@ -2443,7 +2481,9 @@ class Absen_sheet_sync {
 			if ($latest_record !== NULL && is_array($latest_record))
 			{
 				$shift_name_latest = trim((string) (isset($latest_record['shift_name']) ? $latest_record['shift_name'] : ''));
-				if ($shift_name_latest !== '')
+				// Nama shift di sheet harus mengikuti profil akun terbaru.
+				// Shift dari record absensi lama hanya dipakai kalau profil akun kosong.
+				if ($shift_name_value === '' && $shift_name_latest !== '')
 				{
 					$shift_name_value = $shift_name_latest;
 				}
@@ -2484,6 +2524,17 @@ class Absen_sheet_sync {
 					$alasan_alpha = 'Tidak hadir';
 				}
 			}
+			$branch_attendance_value = $branch_value;
+			if ($latest_record !== NULL && is_array($latest_record))
+			{
+				$branch_attendance_latest = $this->resolve_branch_name(
+					isset($latest_record['branch']) ? (string) $latest_record['branch'] : ''
+				);
+				if ($branch_attendance_latest !== '')
+				{
+					$branch_attendance_value = $branch_attendance_latest;
+				}
+			}
 
 			$field_values = array(
 				'employee_id' => $employee_id,
@@ -2493,6 +2544,9 @@ class Absen_sheet_sync {
 				'address' => $address_value,
 				'phone' => $phone_value,
 				'branch' => $branch_value,
+				'branch_origin' => $branch_value,
+				'branch_attendance' => $branch_attendance_value,
+				'cross_branch_enabled' => $cross_branch_label,
 				'coordinate_point' => $coordinate_point_value,
 				'date_absen' => $date_absen_value,
 				'shift_name' => $shift_name_value,
@@ -3849,9 +3903,32 @@ class Absen_sheet_sync {
 			{
 				$field_key = 'phone';
 			}
+			elseif ($main === 'cabangasal' || $main === 'branchasal' || $main === 'originbranch')
+			{
+				$field_key = 'branch_origin';
+			}
+			elseif ($main === 'cabangabsen' || $main === 'branchabsen' || $main === 'attendancebranch')
+			{
+				$field_key = 'branch_attendance';
+			}
+			elseif ($main === 'lintascabang' || $main === 'crossbranch' || $main === 'branchlintas')
+			{
+				$field_key = 'cross_branch_enabled';
+			}
 			elseif ($main === 'cabang' || $main === 'branch')
 			{
-				$field_key = 'branch';
+				if ($sub === 'asal')
+				{
+					$field_key = 'branch_origin';
+				}
+				elseif ($sub === 'absen')
+				{
+					$field_key = 'branch_attendance';
+				}
+				else
+				{
+					$field_key = 'branch';
+				}
 			}
 			elseif (
 				$main === 'titikkoordinat' ||
@@ -4151,6 +4228,27 @@ class Absen_sheet_sync {
 		}
 
 		return $day_value;
+	}
+
+	protected function normalize_cross_branch_enabled_value($value)
+	{
+		if (is_bool($value))
+		{
+			return $value ? 1 : 0;
+		}
+
+		$text = strtolower(trim((string) $value));
+		if ($text === '')
+		{
+			return 0;
+		}
+
+		if ($text === '1' || $text === 'ya' || $text === 'yes' || $text === 'true' || $text === 'aktif' || $text === 'enabled')
+		{
+			return 1;
+		}
+
+		return 0;
 	}
 
 	protected function normalize_duration_value($value)
@@ -5056,6 +5154,9 @@ class Absen_sheet_sync {
 		$case_insensitive_fields = array(
 			'status',
 			'branch',
+			'branch_origin',
+			'branch_attendance',
+			'cross_branch_enabled',
 			'jenis_masuk',
 			'jenis_pulang'
 		);
@@ -5202,6 +5303,7 @@ class Absen_sheet_sync {
 			'password',
 			'display_name',
 			'branch',
+			'cross_branch_enabled',
 			'phone',
 			'shift_name',
 			'shift_time',
@@ -5286,6 +5388,9 @@ class Absen_sheet_sync {
 				'address' => 'Alamat',
 				'phone' => 'Tlp',
 				'branch' => 'Cabang',
+				'branch_origin' => 'Cabang Asal',
+				'branch_attendance' => 'Cabang Absen',
+				'cross_branch_enabled' => 'Lintas Cabang',
 				'total_izin' => 'Total Izin',
 				'total_cuti' => 'Total Cuti',
 				'coordinate_point' => 'Titik Koordinat',

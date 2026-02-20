@@ -8,11 +8,15 @@ if (!function_exists('absen_shift_profile_book'))
 		return array(
 			'pagi' => array(
 				'shift_name' => 'Shift Pagi - Sore',
-				'shift_time' => '08:00 - 17:00'
+				'shift_time' => '08:00 - 23:00'
 			),
 			'siang' => array(
 				'shift_name' => 'Shift Siang - Malam',
-				'shift_time' => '12:00 - 23:00'
+				'shift_time' => '14:00 - 23:00'
+			),
+			'multishift' => array(
+				'shift_name' => 'Multi Shift',
+				'shift_time' => '06:30 - 23:59'
 			)
 		);
 	}
@@ -86,6 +90,30 @@ if (!function_exists('absen_resolve_employee_branch'))
 		}
 
 		return '';
+	}
+}
+
+if (!function_exists('absen_resolve_cross_branch_enabled'))
+{
+	function absen_resolve_cross_branch_enabled($value)
+	{
+		if (is_bool($value))
+		{
+			return $value ? 1 : 0;
+		}
+
+		$text = strtolower(trim((string) $value));
+		if ($text === '')
+		{
+			return 0;
+		}
+
+		if ($text === '1' || $text === 'ya' || $text === 'yes' || $text === 'true' || $text === 'aktif' || $text === 'enabled')
+		{
+			return 1;
+		}
+
+		return 0;
 	}
 }
 
@@ -392,6 +420,7 @@ if (!function_exists('absen_default_account_book'))
 				'login_alias' => '',
 				'display_name' => (string) $username,
 				'branch' => absen_default_employee_branch(),
+				'cross_branch_enabled' => 0,
 				'phone' => absen_normalize_phone_number((string) $phone),
 				'shift_name' => (string) $shifts[$shift_key]['shift_name'],
 				'shift_time' => (string) $shifts[$shift_key]['shift_time'],
@@ -420,6 +449,7 @@ if (!function_exists('absen_default_account_book'))
 				'login_alias' => '',
 				'display_name' => 'admin',
 				'branch' => absen_default_employee_branch(),
+				'cross_branch_enabled' => 0,
 				'phone' => '',
 				'shift_name' => '',
 				'shift_time' => '',
@@ -443,6 +473,7 @@ if (!function_exists('absen_default_account_book'))
 				'login_alias' => '',
 				'display_name' => 'Developer',
 				'branch' => '',
+				'cross_branch_enabled' => 0,
 				'phone' => '',
 				'shift_name' => '',
 				'shift_time' => '',
@@ -466,6 +497,7 @@ if (!function_exists('absen_default_account_book'))
 				'login_alias' => '',
 				'display_name' => 'Bos',
 				'branch' => '',
+				'cross_branch_enabled' => 0,
 				'phone' => '',
 				'shift_name' => '',
 				'shift_time' => '',
@@ -593,6 +625,16 @@ if (!function_exists('absen_sanitize_account_book'))
 				$branch_resolved = absen_resolve_employee_branch($branch);
 				$branch = $branch_resolved !== '' ? $branch_resolved : absen_default_employee_branch();
 			}
+			$cross_branch_enabled = 0;
+			if ($role !== 'admin')
+			{
+				$cross_branch_raw = isset($row['cross_branch_enabled']) ? $row['cross_branch_enabled'] : '';
+				if ($cross_branch_raw === '' && isset($row['lintas_cabang']))
+				{
+					$cross_branch_raw = $row['lintas_cabang'];
+				}
+				$cross_branch_enabled = absen_resolve_cross_branch_enabled($cross_branch_raw);
+			}
 
 			$phone = absen_normalize_phone_number(isset($row['phone']) ? $row['phone'] : '');
 			$job_title = trim((string) (isset($row['job_title']) ? $row['job_title'] : ''));
@@ -690,16 +732,24 @@ if (!function_exists('absen_sanitize_account_book'))
 			else
 			{
 				$feature_permissions = array();
-				if ($shift_name === '' || $shift_time === '')
+				$fallback_shift_key = 'pagi';
+				$shift_name_lower = strtolower($shift_name);
+				$shift_time_lower = strtolower($shift_time);
+				if (strpos($shift_name_lower, 'multi') !== FALSE ||
+					(strpos($shift_time_lower, '06:30') !== FALSE && strpos($shift_time_lower, '23:59') !== FALSE))
 				{
-					$fallback_shift_key = 'pagi';
-					if (strpos(strtolower($shift_name), 'siang') !== FALSE || strpos(strtolower($shift_time), '12:00') !== FALSE)
-					{
-						$fallback_shift_key = 'siang';
-					}
-					$shift_name = (string) $shift_profiles[$fallback_shift_key]['shift_name'];
-					$shift_time = (string) $shift_profiles[$fallback_shift_key]['shift_time'];
+					$fallback_shift_key = 'multishift';
 				}
+				elseif (
+					strpos($shift_name_lower, 'siang') !== FALSE ||
+					strpos($shift_time_lower, '14:00') !== FALSE ||
+					strpos($shift_time_lower, '12:00') !== FALSE
+				)
+				{
+					$fallback_shift_key = 'siang';
+				}
+				$shift_name = (string) $shift_profiles[$fallback_shift_key]['shift_name'];
+				$shift_time = (string) $shift_profiles[$fallback_shift_key]['shift_time'];
 			}
 
 			$sanitized[$username_key] = array(
@@ -711,6 +761,7 @@ if (!function_exists('absen_sanitize_account_book'))
 				'login_alias' => $login_alias,
 				'display_name' => $display_name,
 				'branch' => $branch,
+				'cross_branch_enabled' => $cross_branch_enabled,
 				'phone' => $phone,
 				'shift_name' => $shift_name,
 				'shift_time' => $shift_time,
@@ -749,6 +800,7 @@ if (!function_exists('absen_sanitize_account_book'))
 			}
 
 			$sanitized[$required_username]['role'] = 'admin';
+			$sanitized[$required_username]['cross_branch_enabled'] = 0;
 			if (!isset($sanitized[$required_username]['password']) || trim((string) $sanitized[$required_username]['password']) === '')
 			{
 				$fallback_password = isset($required_defaults['password']) && trim((string) $required_defaults['password']) !== ''

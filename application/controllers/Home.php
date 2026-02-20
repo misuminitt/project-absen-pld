@@ -2,8 +2,10 @@
 defined('BASEPATH') OR exit('No direct script access allowed');
 
 class Home extends CI_Controller {
-	const OFFICE_LAT = -6.217062;
-	const OFFICE_LNG = 106.1321109;
+	const OFFICE_LAT = -6.217076;
+	const OFFICE_LNG = 106.132128;
+	const OFFICE_ALT_LAT = -6.270011;
+	const OFFICE_ALT_LNG = 106.120800;
 	const OFFICE_RADIUS_M = 100;
 	const MAX_GPS_ACCURACY_M = 50;
 	const CHECK_IN_MIN_TIME = '06:30:00';
@@ -13,6 +15,7 @@ class Home extends CI_Controller {
 	const ATTENDANCE_FORCE_LATE_USERS = array();
 	const ATTENDANCE_FORCE_LATE_DURATION = '00:30:00';
 	const ATTENDANCE_REMINDER_SLOTS = array('11:00', '13:00', '17:00');
+	const ATTENDANCE_REMINDER_SLOT_GRACE_MINUTES = 59;
 	const LATE_TOLERANCE_SECONDS = 600;
 	const WORK_DAYS_DEFAULT = 22;
 	const MIN_EFFECTIVE_WORK_DAYS = 20;
@@ -84,6 +87,15 @@ class Home extends CI_Controller {
 			$job_title = isset($user_profile['job_title']) && trim((string) $user_profile['job_title']) !== ''
 				? (string) $user_profile['job_title']
 				: $this->default_employee_job_title();
+			$attendance_branch = $this->resolve_attendance_branch_for_user($username, $user_profile);
+			$office_points = $this->attendance_office_points_for_branch($attendance_branch);
+			$primary_office = isset($office_points[0]) && is_array($office_points[0])
+				? $office_points[0]
+				: array(
+					'label' => 'Kantor',
+					'lat' => (float) self::OFFICE_LAT,
+					'lng' => (float) self::OFFICE_LNG
+				);
 			$is_first_loan = $this->is_first_loan_request($username);
 			$dashboard_snapshot = $this->build_user_dashboard_snapshot($username, $shift_name, $shift_time);
 			$data = array(
@@ -94,7 +106,7 @@ class Home extends CI_Controller {
 					: $this->default_employee_profile_photo(),
 				'job_title' => $job_title,
 				'shift_name' => $shift_name !== '' ? $shift_name : 'Shift Pagi - Sore',
-				'shift_time' => $shift_time !== '' ? $shift_time : '08:00 - 17:00',
+				'shift_time' => $shift_time !== '' ? $shift_time : '08:00 - 23:00',
 				'summary' => isset($dashboard_snapshot['summary']) && is_array($dashboard_snapshot['summary'])
 					? $dashboard_snapshot['summary']
 					: array(),
@@ -105,10 +117,11 @@ class Home extends CI_Controller {
 					? $dashboard_snapshot['recent_loans']
 					: array(),
 				'geofence' => array(
-					'office_lat' => self::OFFICE_LAT,
-					'office_lng' => self::OFFICE_LNG,
+					'office_lat' => isset($primary_office['lat']) ? (float) $primary_office['lat'] : (float) self::OFFICE_LAT,
+					'office_lng' => isset($primary_office['lng']) ? (float) $primary_office['lng'] : (float) self::OFFICE_LNG,
 					'radius_m' => self::OFFICE_RADIUS_M,
-					'max_accuracy_m' => self::MAX_GPS_ACCURACY_M
+					'max_accuracy_m' => self::MAX_GPS_ACCURACY_M,
+					'office_points' => $office_points
 				),
 				'loan_config' => array(
 					'min_principal' => 500000,
@@ -145,7 +158,7 @@ class Home extends CI_Controller {
 				? $admin_snapshot['recent_logs']
 				: array(),
 			'announcements' => array(
-				array('title' => 'Pengingat Check Out', 'content' => 'Jangan lupa lakukan check out sebelum jam 17:00 WIB.'),
+				array('title' => 'Pengingat Check Out', 'content' => 'Jangan lupa lakukan check out sebelum batas jam shift masing-masing.'),
 				array('title' => 'Verifikasi Data Profil', 'content' => 'Pastikan NIP, unit kerja, dan nomor telepon sudah sesuai.'),
 				array('title' => 'Kebijakan Keterlambatan', 'content' => 'Toleransi keterlambatan maksimal 10 menit dari jam masuk.')
 			),
@@ -519,6 +532,7 @@ class Home extends CI_Controller {
 		$branch = $this->resolve_employee_branch($this->input->post('new_branch', TRUE));
 		$phone = $this->normalize_phone_number($this->input->post('new_phone', TRUE));
 		$shift_key = strtolower(trim((string) $this->input->post('new_shift', TRUE)));
+		$cross_branch_enabled = $this->resolve_cross_branch_enabled_value($this->input->post('new_cross_branch_enabled', TRUE));
 		$salary_raw = trim((string) $this->input->post('new_salary_monthly', TRUE));
 		$salary_digits = preg_replace('/\D+/', '', $salary_raw);
 		$salary_monthly = $salary_digits === '' ? 0 : (int) $salary_digits;
@@ -657,6 +671,7 @@ class Home extends CI_Controller {
 			'role' => 'user',
 			'display_name' => $display_name,
 			'branch' => $branch,
+			'cross_branch_enabled' => $cross_branch_enabled,
 			'phone' => $phone,
 			'shift_name' => (string) $shift_profiles[$shift_key]['shift_name'],
 			'shift_time' => (string) $shift_profiles[$shift_key]['shift_time'],
@@ -723,6 +738,7 @@ class Home extends CI_Controller {
 		$create_note = 'Buat akun karyawan baru.';
 		$create_note .= ' Jabatan: '.$job_title.'.';
 		$create_note .= ' Cabang: '.$branch.'.';
+		$create_note .= ' Lintas cabang: '.($cross_branch_enabled === 1 ? 'Iya' : 'Tidak').'.';
 		$this->log_activity_event(
 			'create_account',
 			'account_data',
@@ -2177,6 +2193,8 @@ class Home extends CI_Controller {
 		$branch = $this->resolve_employee_branch($this->input->post('edit_branch', TRUE));
 		$phone = $this->normalize_phone_number($this->input->post('edit_phone', TRUE));
 		$shift_key = strtolower(trim((string) $this->input->post('edit_shift', TRUE)));
+		$has_cross_branch_field = $this->input->post('edit_cross_branch_enabled', FALSE) !== NULL;
+		$cross_branch_enabled = $this->resolve_cross_branch_enabled_value($this->input->post('edit_cross_branch_enabled', TRUE));
 		$salary_raw = trim((string) $this->input->post('edit_salary_monthly', TRUE));
 		$salary_digits = preg_replace('/\D+/', '', $salary_raw);
 		$salary_monthly = $salary_digits === '' ? 0 : (int) $salary_digits;
@@ -2342,6 +2360,9 @@ class Home extends CI_Controller {
 			'role' => 'user',
 			'display_name' => $display_name_value,
 			'branch' => $branch,
+			'cross_branch_enabled' => $has_cross_branch_field
+				? $cross_branch_enabled
+				: $this->resolve_cross_branch_enabled_value(isset($current_row['cross_branch_enabled']) ? $current_row['cross_branch_enabled'] : 0),
 			'phone' => $phone,
 			'shift_name' => (string) $shift_profiles[$shift_key]['shift_name'],
 			'shift_time' => (string) $shift_profiles[$shift_key]['shift_time'],
@@ -2448,6 +2469,7 @@ class Home extends CI_Controller {
 		$track_keys = array(
 			'display_name' => 'nama',
 			'branch' => 'cabang',
+			'cross_branch_enabled' => 'lintas_cabang',
 			'phone' => 'tlp',
 			'shift_name' => 'shift',
 			'salary_monthly' => 'gaji_pokok',
@@ -3351,8 +3373,16 @@ class Home extends CI_Controller {
 			return;
 		}
 
-		$distance_m = $this->calculate_distance_meter((float) $latitude, (float) $longitude, self::OFFICE_LAT, self::OFFICE_LNG);
-		$geofence_check = $this->evaluate_geofence($distance_m, $accuracy_m);
+		$username = (string) $this->session->userdata('absen_username');
+		$user_profile = $this->get_employee_profile($username);
+		$attendance_branch = $this->resolve_attendance_branch_for_user($username, $user_profile);
+		$shift_name = (string) $this->session->userdata('absen_shift_name');
+		$shift_time = (string) $this->session->userdata('absen_shift_time');
+		$shift_key = $this->resolve_shift_key_from_shift_values($shift_name, $shift_time);
+		$nearest_office = $this->nearest_attendance_office((float) $latitude, (float) $longitude, $attendance_branch);
+		$distance_m = isset($nearest_office['distance_m']) ? (float) $nearest_office['distance_m'] : 0.0;
+		$office_label = isset($nearest_office['label']) ? (string) $nearest_office['label'] : 'kantor';
+		$geofence_check = $this->evaluate_geofence($distance_m, $accuracy_m, $office_label);
 		if ($geofence_check['inside'] !== TRUE)
 		{
 			$this->json_response(array(
@@ -3362,13 +3392,9 @@ class Home extends CI_Controller {
 			return;
 		}
 
-		$username = (string) $this->session->userdata('absen_username');
 		$is_time_window_bypassed = $this->should_bypass_attendance_time_window($username);
-		$shift_name = (string) $this->session->userdata('absen_shift_name');
-		$shift_time = (string) $this->session->userdata('absen_shift_time');
 		$session_salary_tier = strtoupper(trim((string) $this->session->userdata('absen_salary_tier')));
 		$session_salary_monthly = (float) $this->session->userdata('absen_salary_monthly');
-		$user_profile = $this->get_employee_profile($username);
 		$profile_salary_tier = isset($user_profile['salary_tier']) ? strtoupper(trim((string) $user_profile['salary_tier'])) : '';
 		$profile_salary_monthly = isset($user_profile['salary_monthly']) ? (float) $user_profile['salary_monthly'] : 0;
 		$profile_weekly_day_off = isset($user_profile['weekly_day_off'])
@@ -3389,31 +3415,40 @@ class Home extends CI_Controller {
 
 		if ($action === 'masuk')
 		{
-			if (!$is_time_window_bypassed && $current_seconds < $this->time_to_seconds(self::CHECK_IN_MIN_TIME))
+			$check_in_window = $this->resolve_shift_check_in_window($shift_key);
+			$check_in_start_time = isset($check_in_window['start']) ? (string) $check_in_window['start'] : self::CHECK_IN_MIN_TIME;
+			$check_in_end_time = isset($check_in_window['end']) ? (string) $check_in_window['end'] : self::CHECK_IN_MAX_TIME;
+			$check_in_start_label = isset($check_in_window['start_label']) ? (string) $check_in_window['start_label'] : '06:30';
+			$check_in_end_label = isset($check_in_window['end_label']) ? (string) $check_in_window['end_label'] : '17:00';
+
+			if (!$is_time_window_bypassed && $current_seconds < $this->time_to_seconds($check_in_start_time))
 			{
 				$this->json_response(array(
 					'success' => FALSE,
-					'message' => 'Absen masuk baru bisa dilakukan mulai jam 06:30 WIB.'
+					'message' => 'Absen masuk baru bisa dilakukan mulai jam '.$check_in_start_label.' WIB.'
 				), 422);
 				return;
 			}
 
-			if (!$is_time_window_bypassed && $current_seconds > $this->time_to_seconds(self::CHECK_IN_MAX_TIME))
+			if (!$is_time_window_bypassed && $current_seconds > $this->time_to_seconds($check_in_end_time))
 			{
 				$this->json_response(array(
 					'success' => FALSE,
-					'message' => 'Batas maksimal absen masuk adalah jam 17:00 WIB.'
+					'message' => 'Batas maksimal absen masuk adalah jam '.$check_in_end_label.' WIB.'
 				), 422);
 				return;
 			}
 		}
 		else
 		{
-			if (!$is_time_window_bypassed && $current_seconds > $this->time_to_seconds(self::CHECK_OUT_MAX_TIME))
+			$check_out_window = $this->resolve_shift_check_out_window($shift_key);
+			$check_out_end_time = isset($check_out_window['end']) ? (string) $check_out_window['end'] : self::CHECK_OUT_MAX_TIME;
+			$check_out_end_label = isset($check_out_window['end_label']) ? (string) $check_out_window['end_label'] : '23:59';
+			if (!$is_time_window_bypassed && $current_seconds > $this->time_to_seconds($check_out_end_time))
 			{
 				$this->json_response(array(
 					'success' => FALSE,
-					'message' => 'Batas maksimal absen pulang adalah jam 23:59 WIB.'
+					'message' => 'Batas maksimal absen pulang adalah jam '.$check_out_end_label.' WIB.'
 				), 422);
 				return;
 			}
@@ -3438,6 +3473,7 @@ class Home extends CI_Controller {
 				'date_label' => $date_label,
 				'shift_name' => $shift_name,
 				'shift_time' => $shift_time,
+				'branch' => $attendance_branch,
 				'check_in_time' => '',
 				'check_in_late' => '00:00:00',
 				'check_in_photo' => '',
@@ -3471,6 +3507,7 @@ class Home extends CI_Controller {
 		$record = $records[$record_index];
 		$record['shift_name'] = $shift_name;
 		$record['shift_time'] = $shift_time;
+		$record['branch'] = $attendance_branch;
 		$record['salary_tier'] = $salary_tier;
 		$record['salary_monthly'] = number_format($salary_monthly, 0, '.', '');
 		$record['work_days_per_month'] = $work_days;
@@ -3750,6 +3787,20 @@ class Home extends CI_Controller {
 			$records[$i]['phone'] = isset($row_profile['phone']) && trim((string) $row_profile['phone']) !== ''
 				? (string) $row_profile['phone']
 				: $this->get_employee_phone($row_username);
+			$row_branch_origin = isset($row_profile['branch']) ? (string) $row_profile['branch'] : '';
+			$row_branch_origin = $this->resolve_employee_branch($row_branch_origin);
+			if ($row_branch_origin === '')
+			{
+				$row_branch_origin = $this->default_employee_branch();
+			}
+			$row_branch_attendance = isset($records[$i]['branch']) ? (string) $records[$i]['branch'] : '';
+			$row_branch_attendance = $this->resolve_employee_branch($row_branch_attendance);
+			if ($row_branch_attendance === '')
+			{
+				$row_branch_attendance = $row_branch_origin;
+			}
+			$records[$i]['branch_origin'] = $row_branch_origin;
+			$records[$i]['branch_attendance'] = $row_branch_attendance;
 			$row_weekly_day_off = isset($row_profile['weekly_day_off'])
 				? $this->resolve_employee_weekly_day_off($row_profile['weekly_day_off'])
 				: $this->default_weekly_day_off();
@@ -3819,18 +3870,19 @@ class Home extends CI_Controller {
 				$records[$i]['days_in_month'] = $month_policy['days_in_month'];
 				$records[$i]['weekly_off_days'] = $month_policy['weekly_off_days'];
 			}
+			$row_branch_for_distance = $row_branch_attendance;
 
 			if ((!isset($records[$i]['check_in_distance_m']) || $records[$i]['check_in_distance_m'] === '') &&
 				isset($records[$i]['check_in_lat']) && isset($records[$i]['check_in_lng']) &&
 				is_numeric($records[$i]['check_in_lat']) && is_numeric($records[$i]['check_in_lng']))
 			{
+				$nearest_check_in_office = $this->nearest_attendance_office(
+					(float) $records[$i]['check_in_lat'],
+					(float) $records[$i]['check_in_lng'],
+					$row_branch_for_distance
+				);
 				$records[$i]['check_in_distance_m'] = number_format(
-					$this->calculate_distance_meter(
-						(float) $records[$i]['check_in_lat'],
-						(float) $records[$i]['check_in_lng'],
-						self::OFFICE_LAT,
-						self::OFFICE_LNG
-					),
+					isset($nearest_check_in_office['distance_m']) ? (float) $nearest_check_in_office['distance_m'] : 0,
 					2,
 					'.',
 					''
@@ -3841,13 +3893,13 @@ class Home extends CI_Controller {
 				isset($records[$i]['check_out_lat']) && isset($records[$i]['check_out_lng']) &&
 				is_numeric($records[$i]['check_out_lat']) && is_numeric($records[$i]['check_out_lng']))
 			{
+				$nearest_check_out_office = $this->nearest_attendance_office(
+					(float) $records[$i]['check_out_lat'],
+					(float) $records[$i]['check_out_lng'],
+					$row_branch_for_distance
+				);
 				$records[$i]['check_out_distance_m'] = number_format(
-					$this->calculate_distance_meter(
-						(float) $records[$i]['check_out_lat'],
-						(float) $records[$i]['check_out_lng'],
-						self::OFFICE_LAT,
-						self::OFFICE_LNG
-					),
+					isset($nearest_check_out_office['distance_m']) ? (float) $nearest_check_out_office['distance_m'] : 0,
 					2,
 					'.',
 					''
@@ -6318,7 +6370,7 @@ class Home extends CI_Controller {
 		}
 		if ($shift_time === '')
 		{
-			$shift_time = '08:00 - 17:00';
+			$shift_time = '08:00 - 23:00';
 		}
 
 		$today_key = date('Y-m-d');
@@ -6729,7 +6781,7 @@ class Home extends CI_Controller {
 			}
 		}
 
-		return '17:00';
+		return '23:00';
 	}
 
 	private function build_admin_dashboard_summary_only()
@@ -8275,6 +8327,9 @@ class Home extends CI_Controller {
 					? (string) $profile['display_name']
 					: $username,
 				'branch' => isset($profile['branch']) ? (string) $profile['branch'] : $this->default_employee_branch(),
+				'cross_branch_enabled' => $this->resolve_cross_branch_enabled_value(
+					isset($profile['cross_branch_enabled']) ? $profile['cross_branch_enabled'] : 0
+				),
 				'phone' => isset($profile['phone']) ? (string) $profile['phone'] : '',
 				'shift_name' => isset($profile['shift_name']) ? (string) $profile['shift_name'] : '',
 				'shift_key' => $this->resolve_shift_key_from_profile($profile),
@@ -8300,14 +8355,181 @@ class Home extends CI_Controller {
 
 	private function resolve_shift_key_from_profile($profile)
 	{
-		$shift_name = isset($profile['shift_name']) ? strtolower(trim((string) $profile['shift_name'])) : '';
-		$shift_time = isset($profile['shift_time']) ? strtolower(trim((string) $profile['shift_time'])) : '';
-		if (strpos($shift_name, 'siang') !== FALSE || strpos($shift_time, '12:00') !== FALSE)
+		$shift_name = isset($profile['shift_name']) ? (string) $profile['shift_name'] : '';
+		$shift_time = isset($profile['shift_time']) ? (string) $profile['shift_time'] : '';
+		return $this->resolve_shift_key_from_shift_values($shift_name, $shift_time);
+	}
+
+	private function resolve_shift_key_from_shift_values($shift_name = '', $shift_time = '')
+	{
+		$shift_name = strtolower(trim((string) $shift_name));
+		$shift_time = strtolower(trim((string) $shift_time));
+		if (strpos($shift_name, 'multi') !== FALSE ||
+			(strpos($shift_time, '06:30') !== FALSE && strpos($shift_time, '23:59') !== FALSE))
+		{
+			return 'multishift';
+		}
+		if (
+			strpos($shift_name, 'siang') !== FALSE ||
+			strpos($shift_time, '14:00') !== FALSE ||
+			strpos($shift_time, '12:00') !== FALSE
+		)
 		{
 			return 'siang';
 		}
 
 		return 'pagi';
+	}
+
+	private function resolve_shift_check_in_window($shift_key = '')
+	{
+		$shift_key = strtolower(trim((string) $shift_key));
+		if ($shift_key === 'siang')
+		{
+			return array(
+				'start' => '13:30:00',
+				'end' => '23:00:00',
+				'start_label' => '13:30',
+				'end_label' => '23:00'
+			);
+		}
+		if ($shift_key === 'multishift')
+		{
+			return array(
+				'start' => self::CHECK_IN_MIN_TIME,
+				'end' => self::CHECK_OUT_MAX_TIME,
+				'start_label' => '06:30',
+				'end_label' => '23:59'
+			);
+		}
+
+		return array(
+			'start' => '07:30:00',
+			'end' => self::CHECK_IN_MAX_TIME,
+			'start_label' => '07:30',
+			'end_label' => '17:00'
+		);
+	}
+
+	private function resolve_shift_check_out_window($shift_key = '')
+	{
+		$shift_key = strtolower(trim((string) $shift_key));
+		if ($shift_key === 'multishift')
+		{
+			return array(
+				'end' => self::CHECK_OUT_MAX_TIME,
+				'end_label' => '23:59'
+			);
+		}
+
+		return array(
+			'end' => '23:00:00',
+			'end_label' => '23:00'
+		);
+	}
+
+	private function resolve_attendance_branch_for_user($username = '', $profile = array())
+	{
+		$username_key = strtolower(trim((string) $username));
+		$branch_value = '';
+		if (is_array($profile) && isset($profile['branch']))
+		{
+			$branch_value = (string) $profile['branch'];
+		}
+
+		if ($branch_value === '' && $username_key !== '')
+		{
+			$session_username = strtolower(trim((string) $this->session->userdata('absen_username')));
+			if ($session_username !== '' && $session_username === $username_key)
+			{
+				$branch_value = (string) $this->session->userdata('absen_branch');
+			}
+		}
+
+		if ($branch_value === '' && $username_key !== '')
+		{
+			$profile_lookup = $this->get_employee_profile($username_key);
+			if (is_array($profile_lookup) && isset($profile_lookup['branch']))
+			{
+				$branch_value = (string) $profile_lookup['branch'];
+			}
+		}
+
+		$resolved_branch = $this->resolve_employee_branch($branch_value);
+		if ($resolved_branch === '')
+		{
+			$resolved_branch = $this->default_employee_branch();
+		}
+
+		return $resolved_branch;
+	}
+
+	private function attendance_office_points_for_branch($branch = '')
+	{
+		$resolved_branch = $this->resolve_employee_branch($branch);
+		if ($resolved_branch === '')
+		{
+			$resolved_branch = $this->default_employee_branch();
+		}
+
+		if (strcasecmp($resolved_branch, 'Cadasari') === 0)
+		{
+			return array(
+				array(
+					'label' => 'Kantor 2',
+					'lat' => (float) self::OFFICE_ALT_LAT,
+					'lng' => (float) self::OFFICE_ALT_LNG
+				)
+			);
+		}
+
+		return array(
+			array(
+				'label' => 'Kantor 1',
+				'lat' => (float) self::OFFICE_LAT,
+				'lng' => (float) self::OFFICE_LNG
+			)
+		);
+	}
+
+	private function nearest_attendance_office($latitude, $longitude, $branch = '')
+	{
+		$points = $this->attendance_office_points_for_branch($branch);
+		$nearest = array(
+			'label' => 'kantor',
+			'distance_m' => INF,
+			'lat' => (float) self::OFFICE_LAT,
+			'lng' => (float) self::OFFICE_LNG
+		);
+
+		for ($i = 0; $i < count($points); $i += 1)
+		{
+			$point = isset($points[$i]) && is_array($points[$i]) ? $points[$i] : array();
+			$point_lat = isset($point['lat']) ? (float) $point['lat'] : (float) self::OFFICE_LAT;
+			$point_lng = isset($point['lng']) ? (float) $point['lng'] : (float) self::OFFICE_LNG;
+			$distance_m = $this->calculate_distance_meter((float) $latitude, (float) $longitude, $point_lat, $point_lng);
+			if ($distance_m < $nearest['distance_m'])
+			{
+				$nearest['distance_m'] = $distance_m;
+				$nearest['label'] = isset($point['label']) && trim((string) $point['label']) !== ''
+					? (string) $point['label']
+					: 'kantor';
+				$nearest['lat'] = $point_lat;
+				$nearest['lng'] = $point_lng;
+			}
+		}
+
+		if (!is_finite($nearest['distance_m']))
+		{
+			$nearest['distance_m'] = $this->calculate_distance_meter(
+				(float) $latitude,
+				(float) $longitude,
+				(float) self::OFFICE_LAT,
+				(float) self::OFFICE_LNG
+			);
+		}
+
+		return $nearest;
 	}
 
 	private function rename_username_in_rows($rows, $old_username, $new_username)
@@ -9323,6 +9545,32 @@ class Home extends CI_Controller {
 		return '';
 	}
 
+	private function resolve_cross_branch_enabled_value($value)
+	{
+		if (function_exists('absen_resolve_cross_branch_enabled'))
+		{
+			return ((int) absen_resolve_cross_branch_enabled($value)) === 1 ? 1 : 0;
+		}
+
+		if (is_bool($value))
+		{
+			return $value ? 1 : 0;
+		}
+
+		$text = strtolower(trim((string) $value));
+		if ($text === '')
+		{
+			return 0;
+		}
+
+		if ($text === '1' || $text === 'ya' || $text === 'yes' || $text === 'true' || $text === 'aktif' || $text === 'enabled')
+		{
+			return 1;
+		}
+
+		return 0;
+	}
+
 	private function employee_job_title_options()
 	{
 		return array(
@@ -9973,9 +10221,12 @@ class Home extends CI_Controller {
 					? trim((string) $account['display_name'])
 					: $username_key,
 				'branch' => $this->resolve_employee_branch(isset($account['branch']) ? (string) $account['branch'] : ''),
+				'cross_branch_enabled' => $this->resolve_cross_branch_enabled_value(
+					isset($account['cross_branch_enabled']) ? $account['cross_branch_enabled'] : 0
+				),
 				'phone' => isset($account['phone']) ? (string) $account['phone'] : '',
 				'shift_name' => isset($account['shift_name']) ? (string) $account['shift_name'] : 'Shift Pagi - Sore',
-				'shift_time' => isset($account['shift_time']) ? (string) $account['shift_time'] : '08:00 - 17:00',
+				'shift_time' => isset($account['shift_time']) ? (string) $account['shift_time'] : '08:00 - 23:00',
 				'job_title' => $job_title,
 				'salary_tier' => isset($account['salary_tier']) ? (string) $account['salary_tier'] : 'A',
 				'salary_monthly' => isset($account['salary_monthly']) ? (int) $account['salary_monthly'] : 0,
@@ -10026,6 +10277,11 @@ class Home extends CI_Controller {
 			{
 				$profile['coordinate_point'] = '';
 			}
+			if (!isset($profile['cross_branch_enabled']))
+			{
+				$profile['cross_branch_enabled'] = 0;
+			}
+			$profile['cross_branch_enabled'] = $this->resolve_cross_branch_enabled_value($profile['cross_branch_enabled']);
 			if (!isset($profile['weekly_day_off']))
 			{
 				$profile['weekly_day_off'] = $this->default_weekly_day_off();
@@ -10042,6 +10298,7 @@ class Home extends CI_Controller {
 			'profile_photo' => $this->default_employee_profile_photo(),
 			'address' => $this->default_employee_address(),
 			'job_title' => $this->default_employee_job_title(),
+			'cross_branch_enabled' => 0,
 			'coordinate_point' => '',
 			'weekly_day_off' => $this->default_weekly_day_off()
 		);
@@ -10189,6 +10446,14 @@ class Home extends CI_Controller {
 		}
 
 		$phone_normalized = $is_group_target ? $phone_raw : $this->normalize_phone_number($phone_raw);
+		if ($is_group_target)
+		{
+			$normalized_group_target = $this->normalize_fonnte_group_id($phone_normalized);
+			if ($normalized_group_target !== '')
+			{
+				$phone_normalized = $normalized_group_target;
+			}
+		}
 		$message = trim((string) $message);
 
 		if ($phone_normalized === '')
@@ -10567,17 +10832,27 @@ class Home extends CI_Controller {
 		{
 			return '';
 		}
-		if (strpos($group_id, '@broadcast') !== FALSE)
+
+		$group_id_lower = strtolower($group_id);
+		if (preg_match('/([0-9\-]+@g\.us)/', $group_id_lower, $matches) === 1)
 		{
-			return $group_id;
+			return (string) $matches[1];
 		}
-		if (strpos($group_id, '@g.us') !== FALSE)
+		if (preg_match('/([0-9\-]+@broadcast)/', $group_id_lower, $matches) === 1)
 		{
-			return $group_id;
+			return (string) $matches[1];
 		}
 		if (preg_match('/^\d+\-\d+$/', $group_id) === 1)
 		{
 			return $group_id.'@g.us';
+		}
+		if (strpos($group_id_lower, '@broadcast') !== FALSE)
+		{
+			return $group_id_lower;
+		}
+		if (strpos($group_id_lower, '@g.us') !== FALSE)
+		{
+			return $group_id_lower;
 		}
 
 		return '';
@@ -10649,8 +10924,38 @@ class Home extends CI_Controller {
 			return in_array($slot_text, $allowed_slots, TRUE) ? $slot_text : '';
 		}
 
-		$current_slot = date('H:i');
-		return in_array($current_slot, $allowed_slots, TRUE) ? $current_slot : '';
+		$current_minutes = ((int) date('H')) * 60 + ((int) date('i'));
+		$grace_minutes = (int) self::ATTENDANCE_REMINDER_SLOT_GRACE_MINUTES;
+		if ($grace_minutes < 0)
+		{
+			$grace_minutes = 0;
+		}
+
+		$best_slot = '';
+		$best_slot_minutes = -1;
+		for ($i = 0; $i < count($allowed_slots); $i += 1)
+		{
+			$candidate = isset($allowed_slots[$i]) ? trim((string) $allowed_slots[$i]) : '';
+			if (!preg_match('/^\d{2}\:\d{2}$/', $candidate))
+			{
+				continue;
+			}
+
+			$parts = explode(':', $candidate);
+			$candidate_minutes = ((int) $parts[0]) * 60 + ((int) $parts[1]);
+			$minute_diff = $current_minutes - $candidate_minutes;
+			if ($minute_diff < 0 || $minute_diff > $grace_minutes)
+			{
+				continue;
+			}
+			if ($candidate_minutes > $best_slot_minutes)
+			{
+				$best_slot = $candidate;
+				$best_slot_minutes = $candidate_minutes;
+			}
+		}
+
+		return $best_slot;
 	}
 
 	private function resolve_attendance_reminder_group_target(&$error_message = '')
@@ -11154,13 +11459,26 @@ class Home extends CI_Controller {
 		{
 			return FALSE;
 		}
-		if (preg_match('/^\d{2}\:\d{2}(?:\:\d{2})?$/', $value) !== 1)
+		if (preg_match('/^(\d{1,2})\:(\d{2})(?:\:(\d{2}))?$/', $value, $matches) === 1)
+		{
+			$hour = (int) $matches[1];
+			$minute = isset($matches[2]) ? (int) $matches[2] : 0;
+			$second = isset($matches[3]) && $matches[3] !== '' ? (int) $matches[3] : 0;
+			if ($hour < 0 || $hour > 23 || $minute < 0 || $minute > 59 || $second < 0 || $second > 59)
+			{
+				return FALSE;
+			}
+
+			return sprintf('%02d:%02d:%02d', $hour, $minute, $second) !== '00:00:00';
+		}
+
+		$timestamp = strtotime($value);
+		if ($timestamp === FALSE)
 		{
 			return FALSE;
 		}
 
-		$normalized = strlen($value) === 5 ? $value.':00' : $value;
-		return $normalized !== '00:00:00';
+		return date('H:i:s', $timestamp) !== '00:00:00';
 	}
 
 	private function duration_to_seconds($duration_value)
@@ -12359,9 +12677,7 @@ class Home extends CI_Controller {
 				return FALSE;
 			}
 			$shift_profiles = function_exists('absen_shift_profile_book') ? absen_shift_profile_book() : array();
-			$shift_key = strpos(strtolower($shift_name_old), 'siang') !== FALSE || strpos(strtolower($shift_name_old), '12:00') !== FALSE
-				? 'siang'
-				: 'pagi';
+			$shift_key = $this->resolve_shift_key_from_shift_values($shift_name_old, '');
 			if (!isset($shift_profiles[$shift_key]))
 			{
 				$message = 'Rollback shift dibatalkan karena konfigurasi shift tidak tersedia.';
@@ -12592,17 +12908,22 @@ class Home extends CI_Controller {
 		$this->append_data_log($entry);
 	}
 
-	private function evaluate_geofence($distance_m, $accuracy_m)
+	private function evaluate_geofence($distance_m, $accuracy_m, $office_label = '')
 	{
 		$radius_m = (float) self::OFFICE_RADIUS_M;
 		$distance_m = (float) $distance_m;
 		$accuracy_m = (float) $accuracy_m;
+		$office_label = trim((string) $office_label);
+		if ($office_label === '')
+		{
+			$office_label = 'titik kantor';
+		}
 
 		if ($distance_m <= $radius_m && $accuracy_m <= (float) self::MAX_GPS_ACCURACY_M)
 		{
 			return array(
 				'inside' => TRUE,
-				'message' => 'Lokasi valid di dalam radius kantor.'
+				'message' => 'Lokasi valid di dalam radius '.$office_label.'.'
 			);
 		}
 
@@ -12610,7 +12931,7 @@ class Home extends CI_Controller {
 		{
 			return array(
 				'inside' => TRUE,
-				'message' => 'Lokasi valid di dalam radius kantor (toleransi akurasi GPS).'
+				'message' => 'Lokasi valid di dalam radius '.$office_label.' (toleransi akurasi GPS).'
 			);
 		}
 
@@ -12618,7 +12939,7 @@ class Home extends CI_Controller {
 		{
 			return array(
 				'inside' => FALSE,
-				'message' => 'Lokasi di luar radius kantor. Jarak kamu '.round($distance_m, 2).'m dari titik kantor (maks '.self::OFFICE_RADIUS_M.'m).'
+				'message' => 'Lokasi di luar radius '.$office_label.'. Jarak kamu '.round($distance_m, 2).'m dari '.$office_label.' (maks '.self::OFFICE_RADIUS_M.'m).'
 			);
 		}
 

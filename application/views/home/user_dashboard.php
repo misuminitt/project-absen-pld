@@ -29,17 +29,72 @@ if (strpos($profile_photo_url, 'data:') !== 0 && preg_match('/^https?:\/\//i', $
 }
 $job_title = isset($job_title) && $job_title !== '' ? (string) $job_title : 'Teknisi';
 $shift_name = isset($shift_name) && $shift_name !== '' ? (string) $shift_name : 'Shift Pagi - Sore';
-$shift_time = isset($shift_time) && $shift_time !== '' ? (string) $shift_time : '08:00 - 17:00';
+$shift_time = isset($shift_time) && $shift_time !== '' ? (string) $shift_time : '08:00 - 23:00';
+$shift_name_lower = strtolower($shift_name);
+$shift_time_lower = strtolower($shift_time);
+$shift_key_dashboard = 'pagi';
+if (strpos($shift_name_lower, 'multi') !== FALSE ||
+	(strpos($shift_time_lower, '06:30') !== FALSE && strpos($shift_time_lower, '23:59') !== FALSE))
+{
+	$shift_key_dashboard = 'multishift';
+}
+elseif (
+	strpos($shift_name_lower, 'siang') !== FALSE ||
+	strpos($shift_time_lower, '14:00') !== FALSE ||
+	strpos($shift_time_lower, '12:00') !== FALSE
+)
+{
+	$shift_key_dashboard = 'siang';
+}
+$hero_note_text = 'Absen masuk dibuka mulai 07:30 WIB. Batas maksimal absen masuk 17:00 WIB.';
+$attendance_rule_text = 'Masuk: 07:30 - 17:00 WIB | Pulang: maksimal 23:00 WIB (wajib sudah absen masuk)';
+if ($shift_key_dashboard === 'siang')
+{
+	$hero_note_text = 'Mode Shift Siang aktif. Absen masuk bisa dilakukan dari jam 13:30 sampai 23:00 WIB.';
+	$attendance_rule_text = 'Masuk: 13:30 - 23:00 WIB | Pulang: maksimal 23:00 WIB (wajib sudah absen masuk)';
+}
+elseif ($shift_key_dashboard === 'multishift')
+{
+	$hero_note_text = 'Mode Multi Shift aktif. Absen masuk bisa dilakukan dari jam 06:30 sampai 23:59 WIB.';
+	$attendance_rule_text = 'Masuk: 06:30 - 23:59 WIB | Pulang: maksimal 23:59 WIB (wajib sudah absen masuk)';
+}
 $geofence = isset($geofence) && is_array($geofence) ? $geofence : array();
 $loan_config = isset($loan_config) && is_array($loan_config) ? $loan_config : array();
 $loan_min_principal = isset($loan_config['min_principal']) ? (int) $loan_config['min_principal'] : 500000;
 $loan_max_principal = isset($loan_config['max_principal']) ? (int) $loan_config['max_principal'] : 10000000;
 $password_notice_success = isset($password_notice_success) ? trim((string) $password_notice_success) : '';
 $password_notice_error = isset($password_notice_error) ? trim((string) $password_notice_error) : '';
-$office_lat = isset($geofence['office_lat']) ? (float) $geofence['office_lat'] : -6.217062;
-$office_lng = isset($geofence['office_lng']) ? (float) $geofence['office_lng'] : 106.1321109;
+$office_lat = isset($geofence['office_lat']) ? (float) $geofence['office_lat'] : -6.217076;
+$office_lng = isset($geofence['office_lng']) ? (float) $geofence['office_lng'] : 106.132128;
 $office_radius_m = isset($geofence['radius_m']) ? (float) $geofence['radius_m'] : 100.0;
 $max_accuracy_m = isset($geofence['max_accuracy_m']) ? (float) $geofence['max_accuracy_m'] : 50.0;
+$office_points = isset($geofence['office_points']) && is_array($geofence['office_points']) ? $geofence['office_points'] : array();
+$normalized_office_points = array();
+for ($office_point_i = 0; $office_point_i < count($office_points); $office_point_i += 1)
+{
+	$office_row = isset($office_points[$office_point_i]) && is_array($office_points[$office_point_i])
+		? $office_points[$office_point_i]
+		: array();
+	$office_row_lat = isset($office_row['lat']) ? (float) $office_row['lat'] : 0.0;
+	$office_row_lng = isset($office_row['lng']) ? (float) $office_row['lng'] : 0.0;
+	if (!is_finite($office_row_lat) || !is_finite($office_row_lng))
+	{
+		continue;
+	}
+	$normalized_office_points[] = array(
+		'label' => isset($office_row['label']) ? (string) $office_row['label'] : 'Kantor',
+		'lat' => $office_row_lat,
+		'lng' => $office_row_lng
+	);
+}
+if (empty($normalized_office_points))
+{
+	$normalized_office_points[] = array(
+		'label' => 'Kantor',
+		'lat' => $office_lat,
+		'lng' => $office_lng
+	);
+}
 $logo_file = 'src/assets/pns_logo_nav.png';
 if (is_file(FCPATH.'src/assets/pns_logo_nav.png'))
 {
@@ -86,7 +141,8 @@ $user_dashboard_config_json = json_encode(array(
 	'officeLat' => $office_lat,
 	'officeLng' => $office_lng,
 	'officeRadiusM' => $office_radius_m,
-	'maxAccuracyM' => $max_accuracy_m
+	'maxAccuracyM' => $max_accuracy_m,
+	'officePoints' => $normalized_office_points
 ), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
 if ($user_dashboard_config_json === FALSE) {
 	$user_dashboard_config_json = '{}';
@@ -124,7 +180,7 @@ if ($user_dashboard_config_json === FALSE) {
 				<h1 class="hero-title">Halo, <?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?>. Siap absen hari ini?</h1>
 			</div>
 			<p class="hero-subtitle">Setiap absen wajib kamera dan GPS aktif. Ambil foto langsung dari popup absensi sebelum menyimpan.</p>
-			<p class="hero-note">Absen masuk dibuka mulai 06:30 WIB. Batas maksimal absen pulang adalah 23:59 WIB.</p>
+			<p class="hero-note"><?php echo htmlspecialchars($hero_note_text, ENT_QUOTES, 'UTF-8'); ?></p>
 			<p class="shift-badge">Jabatan: <?php echo htmlspecialchars($job_title, ENT_QUOTES, 'UTF-8'); ?></p>
 			<p class="shift-badge"><?php echo htmlspecialchars($shift_name, ENT_QUOTES, 'UTF-8'); ?> | <?php echo htmlspecialchars($shift_time, ENT_QUOTES, 'UTF-8'); ?></p>
 
@@ -162,7 +218,7 @@ if ($user_dashboard_config_json === FALSE) {
 				</div>
 				<div class="meta-box warning">
 					<p class="meta-label">Target Jam Pulang</p>
-					<p class="meta-value"><span id="summaryTargetPulang"><?php echo htmlspecialchars(isset($summary['target_pulang']) ? (string) $summary['target_pulang'] : '17:00', ENT_QUOTES, 'UTF-8'); ?></span> WIB</p>
+					<p class="meta-value"><span id="summaryTargetPulang"><?php echo htmlspecialchars(isset($summary['target_pulang']) ? (string) $summary['target_pulang'] : '23:00', ENT_QUOTES, 'UTF-8'); ?></span> WIB</p>
 				</div>
 			</div>
 
@@ -330,7 +386,7 @@ if ($user_dashboard_config_json === FALSE) {
 							</div>
 							<div class="info-item">
 								<p class="info-title">Aturan Waktu</p>
-								<p class="info-value">Masuk: mulai 06:30 WIB | Pulang: maksimal 23:59 WIB</p>
+								<p class="info-value"><?php echo htmlspecialchars($attendance_rule_text, ENT_QUOTES, 'UTF-8'); ?></p>
 							</div>
 							<div class="info-item">
 								<p class="info-title">GPS</p>

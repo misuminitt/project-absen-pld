@@ -4,12 +4,38 @@ $username = isset($username) ? (string) $username : 'user';
 $password_notice_success = isset($password_notice_success) ? trim((string) $password_notice_success) : '';
 $password_notice_error = isset($password_notice_error) ? trim((string) $password_notice_error) : '';
 ?>
+<?php
+$_home_theme_cookie_value = isset($_COOKIE['home_index_theme']) ? strtolower(trim((string) $_COOKIE['home_index_theme'])) : '';
+$_home_theme_session_value = '';
+if (isset($this) && isset($this->session) && method_exists($this->session, 'userdata'))
+{
+	$_home_theme_session_value = strtolower(trim((string) $this->session->userdata('home_index_theme')));
+}
+if ($_home_theme_cookie_value === 'dark' || $_home_theme_cookie_value === 'light')
+{
+	$_home_theme_value = $_home_theme_cookie_value;
+}
+elseif ($_home_theme_session_value === 'dark' || $_home_theme_session_value === 'light')
+{
+	$_home_theme_value = $_home_theme_session_value;
+}
+else
+{
+	$_home_theme_value = '';
+}
+$_home_theme_is_dark = $_home_theme_value === 'dark';
+$_home_theme_html_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
+$_home_theme_html_data = ' data-theme="' . ($_home_theme_is_dark ? 'dark' : 'light') . '"';
+$_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
+?>
 <!DOCTYPE html>
-<html lang="id">
+<html lang="id"<?php echo $_home_theme_html_class; ?><?php echo $_home_theme_html_data; ?>>
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<title><?php echo isset($title) ? htmlspecialchars($title, ENT_QUOTES, 'UTF-8') : 'Ganti Password'; ?></title>
+	<link rel="icon" type="image/svg+xml" href="/src/assets/sinyal.svg">
+	<link rel="shortcut icon" type="image/svg+xml" href="/src/assets/sinyal.svg">
 	<link rel="preconnect" href="https://fonts.googleapis.com">
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 	<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -140,8 +166,39 @@ $password_notice_error = isset($password_notice_error) ? trim((string) $password
 			}
 		}
 </style>
+	<script>
+		(function () {
+			var themeValue = "";
+			try {
+				themeValue = String(window.localStorage.getItem("home_index_theme") || "").toLowerCase();
+			} catch (error) {}
+			if (themeValue !== "dark" && themeValue !== "light") {
+				var cookieMatch = document.cookie.match(/(?:^|;\s*)home_index_theme=(dark|light)\b/i);
+				if (cookieMatch && cookieMatch[1]) {
+					themeValue = String(cookieMatch[1]).toLowerCase();
+				}
+			}
+			if (themeValue === "dark" || themeValue === "light") {
+				try {
+					window.localStorage.setItem("home_index_theme", themeValue);
+				} catch (error) {}
+				try {
+					document.cookie = "home_index_theme=" + encodeURIComponent(themeValue) + ";path=/;max-age=31536000;SameSite=Lax";
+				} catch (error) {}
+			}
+			if (themeValue === "dark") {
+				document.documentElement.classList.add("theme-dark");
+				document.documentElement.setAttribute("data-theme", "dark");
+			} else if (themeValue === "light") {
+				document.documentElement.classList.remove("theme-dark");
+				document.documentElement.setAttribute("data-theme", "light");
+			}
+		})();
+	</script>
+	<script src="<?php echo htmlspecialchars('/src/assets/js/theme-global-init.js?v=20260225f', ENT_QUOTES, 'UTF-8'); ?>"></script>
+		<link rel="stylesheet" href="<?php echo htmlspecialchars('/src/assets/css/theme-global.css?v=20260225k', ENT_QUOTES, 'UTF-8'); ?>">
 </head>
-<body>
+<body<?php echo $_home_theme_body_class; ?>>
 	<section class="card">
 		<h1>Halo, <?php echo htmlspecialchars($username, ENT_QUOTES, 'UTF-8'); ?>. Ganti password dulu.</h1>
 		<p>Untuk keamanan akun, password wajib diganti sebelum melanjutkan ke dashboard.</p>

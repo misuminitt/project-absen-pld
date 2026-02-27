@@ -15,13 +15,24 @@
 	if (!isFinite(lockRefreshSeconds) || lockRefreshSeconds < 3) {
 		lockRefreshSeconds = 5;
 	}
+	var backupRequiredDirections = Array.isArray(config.syncBackupRequiredDirections)
+		? config.syncBackupRequiredDirections
+		: ['sheet_to_web_attendance', 'web_to_sheet'];
+	var backupDirectionMap = {};
+	for (var directionIndex = 0; directionIndex < backupRequiredDirections.length; directionIndex += 1) {
+		var directionKey = String(backupRequiredDirections[directionIndex] || '').trim().toLowerCase();
+		if (directionKey !== '') {
+			backupDirectionMap[directionKey] = true;
+		}
+	}
 
 	var state = {
 		revision: parseInt(config.collabRevision, 10),
 		sinceEventId: 0,
 		snoozeUntil: 0,
 		autoRefreshScheduled: false,
-		pendingSync: false
+		pendingSync: false,
+		syncBackupReady: config.syncBackupReady === true
 	};
 	if (!isFinite(state.revision) || state.revision < 0) {
 		state.revision = 0;
@@ -69,6 +80,7 @@
 	bindEmployeeVersionFields();
 	restoreDraftOnLoad();
 	bindSyncForms();
+	updateSyncBackupButtonState();
 	bindLogoutGuard();
 
 	updateToastTop();
@@ -296,6 +308,44 @@
 		});
 	}
 
+	function syncFormRequiresBackup(form) {
+		if (!form) {
+			return false;
+		}
+		if (String(form.getAttribute('data-requires-backup') || '') === '1') {
+			return true;
+		}
+		var direction = String(form.getAttribute('data-sync-direction') || '').trim().toLowerCase();
+		return !!backupDirectionMap[direction];
+	}
+
+	function updateSyncBackupButtonState() {
+		var syncForms = document.querySelectorAll('form.sync-control-form');
+		for (var i = 0; i < syncForms.length; i += 1) {
+			var form = syncForms[i];
+			if (!syncFormRequiresBackup(form)) {
+				continue;
+			}
+			var submitButton = form.querySelector('button[type="submit"], input[type="submit"]');
+			if (!submitButton) {
+				continue;
+			}
+			if (state.syncBackupReady) {
+				submitButton.disabled = false;
+				submitButton.classList.remove('is-disabled');
+				submitButton.removeAttribute('data-sync-backup-locked');
+				submitButton.removeAttribute('aria-disabled');
+				submitButton.removeAttribute('title');
+				continue;
+			}
+			submitButton.disabled = false;
+			submitButton.classList.add('is-disabled');
+			submitButton.setAttribute('data-sync-backup-locked', '1');
+			submitButton.setAttribute('aria-disabled', 'true');
+			submitButton.setAttribute('title', 'Wajib backup local dulu sebelum sync.');
+		}
+	}
+
 	function escapeHtml(value) {
 		var text = String(value || '');
 		return text
@@ -316,8 +366,14 @@
 			sync_accounts_from_sheet: 'Sync akun dari sheet',
 			sync_attendance_from_sheet: 'Sync data absen dari sheet',
 			sync_web_to_sheet: 'Sync data web ke sheet',
+			reset_total_alpha: 'Reset total alpha',
 			update_account_field: 'Edit field akun',
 			update_account_username: 'Ganti username akun',
+			submit_day_off_swap_request: 'Pengajuan tukar hari libur',
+			approve_day_off_swap_request: 'Setujui pengajuan tukar hari libur',
+			reject_day_off_swap_request: 'Tolak pengajuan tukar hari libur',
+			create_day_off_swap: 'Atur tukar hari libur',
+			delete_day_off_swap: 'Batalkan tukar hari libur',
 			update_privileged_password: 'Ubah akun privileged',
 			update_privileged_display_name: 'Ubah nama akun privileged',
 			create_feature_admin_account: 'Buat akun admin fitur',
@@ -1051,6 +1107,16 @@
 						return;
 					}
 					event.preventDefault();
+					if (syncFormRequiresBackup(form) && !state.syncBackupReady) {
+						showToast(
+							'Backup Wajib Sebelum Sync',
+							'Sebelum sync, klik "Backup Local Dulu (Wajib)" dulu untuk buat snapshot data di server.',
+							'warning',
+							12000
+						);
+						updateSyncBackupButtonState();
+						return;
+					}
 					checkSyncLockStatus()
 						.then(function (lock) {
 							if (lock.active && lock.owner !== '' && lock.owner !== actor) {
@@ -1058,10 +1124,18 @@
 								return;
 							}
 							suppressLogoutToastUntil = Date.now() + 5000;
+							if (syncFormRequiresBackup(form)) {
+								state.syncBackupReady = false;
+								updateSyncBackupButtonState();
+							}
 							form.setAttribute('data-sync-bypass', '1');
 							form.submit();
 						})
 						.catch(function () {
+							if (syncFormRequiresBackup(form)) {
+								state.syncBackupReady = false;
+								updateSyncBackupButtonState();
+							}
 							form.setAttribute('data-sync-bypass', '1');
 							form.submit();
 						});

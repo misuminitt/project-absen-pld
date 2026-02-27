@@ -25,13 +25,40 @@ $build_month_page_url = function ($page_number) {
 	$page_value = max(1, (int) $page_number);
 	return site_url('home/employee_data_monthly').'?page='.$page_value;
 };
+$export_month_url = site_url('home/employee_data_monthly').'?month='.rawurlencode($selected_month).'&export=excel';
+?>
+<?php
+$_home_theme_cookie_value = isset($_COOKIE['home_index_theme']) ? strtolower(trim((string) $_COOKIE['home_index_theme'])) : '';
+$_home_theme_session_value = '';
+if (isset($this) && isset($this->session) && method_exists($this->session, 'userdata'))
+{
+	$_home_theme_session_value = strtolower(trim((string) $this->session->userdata('home_index_theme')));
+}
+if ($_home_theme_cookie_value === 'dark' || $_home_theme_cookie_value === 'light')
+{
+	$_home_theme_value = $_home_theme_cookie_value;
+}
+elseif ($_home_theme_session_value === 'dark' || $_home_theme_session_value === 'light')
+{
+	$_home_theme_value = $_home_theme_session_value;
+}
+else
+{
+	$_home_theme_value = '';
+}
+$_home_theme_is_dark = $_home_theme_value === 'dark';
+$_home_theme_html_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
+$_home_theme_html_data = ' data-theme="' . ($_home_theme_is_dark ? 'dark' : 'light') . '"';
+$_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 ?>
 <!DOCTYPE html>
-<html lang="id">
+<html lang="id"<?php echo $_home_theme_html_class; ?><?php echo $_home_theme_html_data; ?>>
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<title><?php echo isset($title) ? htmlspecialchars($title, ENT_QUOTES, 'UTF-8') : 'Data Absensi Bulanan'; ?></title>
+	<link rel="icon" type="image/svg+xml" href="/src/assets/sinyal.svg">
+	<link rel="shortcut icon" type="image/svg+xml" href="/src/assets/sinyal.svg">
 	<link rel="preconnect" href="https://fonts.googleapis.com">
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 	<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -178,6 +205,13 @@ $build_month_page_url = function ($page_number) {
 			gap: 0.5rem;
 		}
 
+		.table-tools-actions {
+			display: flex;
+			align-items: center;
+			gap: 0.5rem;
+			flex-wrap: wrap;
+		}
+
 		.month-submit {
 			border: 0;
 			border-radius: 10px;
@@ -188,6 +222,11 @@ $build_month_page_url = function ($page_number) {
 			color: #ffffff;
 			background: linear-gradient(145deg, #1d5ea2 0%, #2b82d5 100%);
 			cursor: pointer;
+		}
+
+		.btn.excel {
+			background: #1e8f4d;
+			color: #ffffff;
 		}
 
 		.search-help {
@@ -331,6 +370,140 @@ $build_month_page_url = function ($page_number) {
 			font-size: 0.9rem;
 			color: #526a82;
 		}
+
+		/* Fallback dark-mode khusus halaman bulanan (tetap bekerja walau cache global belum update) */
+		html.theme-dark body,
+		body.theme-dark {
+			background: #0d1a28 !important;
+			color: #e6eef8 !important;
+		}
+
+		html.theme-dark .meta-line,
+		body.theme-dark .meta-line {
+			color: #c4d5e7 !important;
+		}
+
+		html.theme-dark .table-card,
+		body.theme-dark .table-card {
+			background: linear-gradient(180deg, #122436 0%, #101f2f 100%) !important;
+			border-color: #324a61 !important;
+			box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32) !important;
+		}
+
+		html.theme-dark .mode-link,
+		body.theme-dark .mode-link {
+			background: #10283c !important;
+			border-color: #38566f !important;
+			color: #dbe8f6 !important;
+		}
+
+		html.theme-dark .mode-link.active,
+		body.theme-dark .mode-link.active {
+			background: linear-gradient(140deg, #2f79c1 0%, #1b588f 100%) !important;
+			border-color: #4f89c1 !important;
+			color: #ffffff !important;
+		}
+
+		html.theme-dark .btn.outline,
+		body.theme-dark .btn.outline {
+			background: rgba(10, 44, 72, 0.68) !important;
+			border-color: rgba(171, 203, 233, 0.45) !important;
+			color: #f4f8ff !important;
+		}
+
+		html.theme-dark .search-input,
+		html.theme-dark .month-input,
+		body.theme-dark .search-input,
+		body.theme-dark .month-input {
+			background: #0f2436 !important;
+			border-color: #3e5974 !important;
+			color: #e6eef8 !important;
+		}
+
+		html.theme-dark .search-input::placeholder,
+		body.theme-dark .search-input::placeholder {
+			color: #9eb4ca !important;
+		}
+
+		html.theme-dark .search-help,
+		body.theme-dark .search-help {
+			color: #c1d0e0 !important;
+		}
+
+		html.theme-dark .month-pager,
+		body.theme-dark .month-pager {
+			background: transparent !important;
+		}
+
+		html.theme-dark .pager-btn,
+		body.theme-dark .pager-btn {
+			background: #16344c !important;
+			border-color: #4a6f8e !important;
+			color: #eaf4ff !important;
+		}
+
+		html.theme-dark .pager-btn.active,
+		body.theme-dark .pager-btn.active {
+			background: linear-gradient(140deg, #2f79c1 0%, #1b588f 100%) !important;
+			border-color: #4f89c1 !important;
+			color: #ffffff !important;
+		}
+
+		html.theme-dark .pager-btn.is-disabled,
+		body.theme-dark .pager-btn.is-disabled {
+			background: #1b3044 !important;
+			border-color: #3a5771 !important;
+			color: #9eb4ca !important;
+			opacity: 1 !important;
+		}
+
+		html.theme-dark th,
+		body.theme-dark th {
+			background: #11273b !important;
+			border-color: #32495f !important;
+			color: #d4e4f5 !important;
+		}
+
+		html.theme-dark td,
+		body.theme-dark td {
+			border-color: #2e455b !important;
+			color: #e3edf8 !important;
+		}
+
+		html.theme-dark tbody tr:nth-child(2n),
+		body.theme-dark tbody tr:nth-child(2n) {
+			background: rgba(16, 33, 49, 0.58) !important;
+		}
+
+		html.theme-dark tbody tr:hover,
+		html.theme-dark tbody tr:focus-within,
+		body.theme-dark tbody tr:hover,
+		body.theme-dark tbody tr:focus-within {
+			background: #1a3248 !important;
+		}
+
+		html.theme-dark .count-pill,
+		body.theme-dark .count-pill {
+			background: #21384e !important;
+			color: #e3effb !important;
+			border: 1px solid #47617a !important;
+		}
+
+		html.theme-dark .money,
+		body.theme-dark .money {
+			color: #d8eaff !important;
+		}
+
+		html.theme-dark .money.minus,
+		body.theme-dark .money.minus {
+			color: #ffd3d3 !important;
+		}
+
+		html.theme-dark ::selection,
+		body.theme-dark ::selection {
+			background: rgba(87, 145, 198, 0.45) !important;
+			color: #f4f8ff !important;
+		}
 	
 		/* mobile-fix-20260219 */
 		@media (max-width: 860px) {
@@ -388,6 +561,12 @@ $build_month_page_url = function ($page_number) {
 				gap: 0.42rem;
 			}
 
+			.table-tools-actions {
+				width: 100%;
+				flex-direction: column;
+				align-items: stretch;
+			}
+
 			.month-input {
 				width: 100%;
 				min-width: 0;
@@ -425,6 +604,10 @@ $build_month_page_url = function ($page_number) {
 			}
 
 			.month-submit {
+				width: 100%;
+			}
+
+			.table-tools-actions .btn.excel {
 				width: 100%;
 			}
 
@@ -469,8 +652,50 @@ $build_month_page_url = function ($page_number) {
 			}
 		}
 </style>
+	<script>
+		(function () {
+			var themeValue = "";
+			try {
+				themeValue = String(window.localStorage.getItem("home_index_theme") || "").toLowerCase();
+			} catch (error) {}
+			if (themeValue !== "dark" && themeValue !== "light") {
+				var cookieMatch = document.cookie.match(/(?:^|;\s*)home_index_theme=(dark|light)\b/i);
+				if (cookieMatch && cookieMatch[1]) {
+					themeValue = String(cookieMatch[1]).toLowerCase();
+				}
+			}
+			if (themeValue !== "dark" && themeValue !== "light") {
+				var rootTheme = String(document.documentElement.getAttribute("data-theme") || "").toLowerCase();
+				if (rootTheme === "dark" || rootTheme === "light") {
+					themeValue = rootTheme;
+				}
+			}
+			if (themeValue !== "dark" && themeValue !== "light") {
+				themeValue = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+					? "dark"
+					: "light";
+			}
+			if (themeValue === "dark" || themeValue === "light") {
+				try {
+					window.localStorage.setItem("home_index_theme", themeValue);
+				} catch (error) {}
+				try {
+					document.cookie = "home_index_theme=" + encodeURIComponent(themeValue) + ";path=/;max-age=31536000;SameSite=Lax";
+				} catch (error) {}
+			}
+			if (themeValue === "dark") {
+				document.documentElement.classList.add("theme-dark");
+				document.documentElement.setAttribute("data-theme", "dark");
+			} else {
+				document.documentElement.classList.remove("theme-dark");
+				document.documentElement.setAttribute("data-theme", "light");
+			}
+		})();
+	</script>
+	<script src="<?php echo htmlspecialchars('/src/assets/js/theme-global-init.js?v=20260225f', ENT_QUOTES, 'UTF-8'); ?>"></script>
+		<link rel="stylesheet" href="<?php echo htmlspecialchars('/src/assets/css/theme-global.css?v=20260225k', ENT_QUOTES, 'UTF-8'); ?>">
 </head>
-<body>
+<body<?php echo $_home_theme_body_class; ?>>
 	<div class="page">
 		<div class="head">
 			<h1 class="title">Data Absensi Bulanan</h1>
@@ -507,19 +732,25 @@ $build_month_page_url = function ($page_number) {
 
 			<?php if (empty($rows)): ?>
 				<div class="table-tools">
-					<form method="get" action="<?php echo site_url('home/employee_data_monthly'); ?>" class="month-form">
-						<input type="month" name="month" class="month-input" value="<?php echo htmlspecialchars($selected_month, ENT_QUOTES, 'UTF-8'); ?>">
-						<button type="submit" class="month-submit">Terapkan</button>
-					</form>
+					<div class="table-tools-actions">
+						<form method="get" action="<?php echo site_url('home/employee_data_monthly'); ?>" class="month-form">
+							<input type="month" name="month" class="month-input" value="<?php echo htmlspecialchars($selected_month, ENT_QUOTES, 'UTF-8'); ?>">
+							<button type="submit" class="month-submit">Terapkan</button>
+						</form>
+						<a href="<?php echo htmlspecialchars($export_month_url, ENT_QUOTES, 'UTF-8'); ?>" class="btn excel">Export Excel</a>
+					</div>
 				</div>
 				<div class="empty">Belum ada data absensi / pengajuan diterima pada bulan ini.</div>
 			<?php else: ?>
 				<div class="table-tools">
 					<input id="monthlySearchInput" type="text" class="search-input" placeholder="Cari ID atau nama karyawan...">
-					<form method="get" action="<?php echo site_url('home/employee_data_monthly'); ?>" class="month-form">
-						<input type="month" name="month" class="month-input" value="<?php echo htmlspecialchars($selected_month, ENT_QUOTES, 'UTF-8'); ?>">
-						<button type="submit" class="month-submit">Terapkan</button>
-					</form>
+					<div class="table-tools-actions">
+						<form method="get" action="<?php echo site_url('home/employee_data_monthly'); ?>" class="month-form">
+							<input type="month" name="month" class="month-input" value="<?php echo htmlspecialchars($selected_month, ENT_QUOTES, 'UTF-8'); ?>">
+							<button type="submit" class="month-submit">Terapkan</button>
+						</form>
+						<a href="<?php echo htmlspecialchars($export_month_url, ENT_QUOTES, 'UTF-8'); ?>" class="btn excel">Export Excel</a>
+					</div>
 				</div>
 				<p class="search-help">Rumus bulanan: total telat + (alpha + izin), cuti tidak dipotong gaji.</p>
 				<div class="table-wrap">
@@ -565,26 +796,43 @@ $build_month_page_url = function ($page_number) {
 								$employee_id = isset($row['employee_id']) && trim((string) $row['employee_id']) !== '' ? (string) $row['employee_id'] : '-';
 								$profile_photo = isset($row['profile_photo']) && trim((string) $row['profile_photo']) !== ''
 									? (string) $row['profile_photo']
-									: '/src/assets/fotoku.JPG';
+									: (is_file(FCPATH.'src/assets/fotoku.webp') ? '/src/assets/fotoku.webp' : '/src/assets/fotoku.JPG');
 								$profile_photo_url = $profile_photo;
 								if (strpos($profile_photo_url, 'data:') !== 0 && preg_match('/^https?:\/\//i', $profile_photo_url) !== 1)
 								{
 									$profile_photo_relative = ltrim($profile_photo_url, '/\\');
 									$profile_photo_info = pathinfo($profile_photo_relative);
 									$profile_photo_thumb_relative = '';
+									$profile_photo_cache_version = 0;
+									$profile_photo_absolute = FCPATH.str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $profile_photo_relative);
+									if (is_file($profile_photo_absolute))
+									{
+										$profile_photo_cache_version = (int) @filemtime($profile_photo_absolute);
+									}
 									if (isset($profile_photo_info['filename']) && trim((string) $profile_photo_info['filename']) !== '')
 									{
 										$profile_photo_dir = isset($profile_photo_info['dirname']) ? (string) $profile_photo_info['dirname'] : '';
 										$profile_photo_thumb_relative = $profile_photo_dir !== '' && $profile_photo_dir !== '.'
-											? $profile_photo_dir.'/'.$profile_photo_info['filename'].'_thumb.jpg'
-											: $profile_photo_info['filename'].'_thumb.jpg';
+											? $profile_photo_dir.'/'.$profile_photo_info['filename'].'_thumb.webp'
+											: $profile_photo_info['filename'].'_thumb.webp';
 									}
 									if ($profile_photo_thumb_relative !== '' &&
 										is_file(FCPATH.str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $profile_photo_thumb_relative)))
 									{
-										$profile_photo_relative = $profile_photo_thumb_relative;
+										$profile_photo_thumb_absolute = FCPATH.str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $profile_photo_thumb_relative);
+										$profile_photo_thumb_version = (int) @filemtime($profile_photo_thumb_absolute);
+										// Pakai thumbnail hanya jika tidak lebih lama dari foto utama.
+										if ($profile_photo_thumb_version >= $profile_photo_cache_version)
+										{
+											$profile_photo_relative = $profile_photo_thumb_relative;
+											$profile_photo_cache_version = $profile_photo_thumb_version;
+										}
 									}
 									$profile_photo_url = base_url(ltrim($profile_photo_relative, '/'));
+									if ($profile_photo_cache_version > 0)
+									{
+										$profile_photo_url .= '?v='.$profile_photo_cache_version;
+									}
 								}
 								$address = isset($row['address']) && trim((string) $row['address']) !== ''
 									? (string) $row['address']

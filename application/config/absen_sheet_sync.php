@@ -73,6 +73,9 @@ $config['absen_sheet_sync'] = array(
 	'default_user_password' => '123',
 	'writeback_on_web_change' => FALSE,
 	'prune_missing_sheet_users' => TRUE,
+	'fixed_account_sheet_rows' => array(
+		'supriatna' => 25
+	),
 	'attendance_sync_enabled' => $attendance_sync_enabled,
 	'attendance_push_enabled' => $attendance_push_enabled,
 	'attendance_sheet_gid' => $attendance_sheet_gid,

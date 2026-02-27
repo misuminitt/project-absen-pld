@@ -104,6 +104,45 @@ $ci_env_path = __DIR__.DIRECTORY_SEPARATOR.'.env';
 ci_load_env_file($ci_env_local_path);
 ci_load_env_file($ci_env_path);
 
+if (PHP_SAPI !== 'cli' && PHP_SAPI !== 'phpdbg')
+{
+	$forwarded_proto = '';
+	if (!empty($_SERVER['HTTP_X_FORWARDED_PROTO']))
+	{
+		$parts = explode(',', (string) $_SERVER['HTTP_X_FORWARDED_PROTO']);
+		$forwarded_proto = strtolower(trim((string) $parts[0]));
+	}
+
+	$is_https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off');
+	if ($forwarded_proto === 'https')
+	{
+		$is_https = TRUE;
+	}
+	elseif (!empty($_SERVER['HTTP_X_FORWARDED_SSL']) && strtolower((string) $_SERVER['HTTP_X_FORWARDED_SSL']) === 'on')
+	{
+		$is_https = TRUE;
+	}
+	elseif (!empty($_SERVER['HTTP_CF_VISITOR']))
+	{
+		$cf_visitor = json_decode((string) $_SERVER['HTTP_CF_VISITOR'], TRUE);
+		if (is_array($cf_visitor) && isset($cf_visitor['scheme']) && strtolower((string) $cf_visitor['scheme']) === 'https')
+		{
+			$is_https = TRUE;
+		}
+	}
+
+	$http_host = isset($_SERVER['HTTP_HOST']) ? (string) $_SERVER['HTTP_HOST'] : '';
+	$host_only = strtolower(preg_replace('/:\d+$/', '', $http_host));
+	$is_local_host = in_array($host_only, array('localhost', '127.0.0.1', '::1'), TRUE);
+
+	if (!$is_https && !$is_local_host && $http_host !== '')
+	{
+		$request_uri = isset($_SERVER['REQUEST_URI']) ? (string) $_SERVER['REQUEST_URI'] : '/';
+		header('Location: https://'.$http_host.$request_uri, TRUE, 301);
+		exit;
+	}
+}
+
 /*
  *---------------------------------------------------------------
  * APPLICATION ENVIRONMENT

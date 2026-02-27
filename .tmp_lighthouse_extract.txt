@@ -1,0 +1,320 @@
+
+--- PAGE 1 ---
+https://absenpanha.com/home
+There were issues affecting this run of Lighthouse:
+A page navigation was detected during the run. Using timespan mode to audit page navigations
+is not recommended. Use navigation mode to audit page navigations for better third-party
+attribution and main thread detection.
+0–49 50–89 90–100
+Show audits relevant to:All TBT INP
+Performance
+20/24
+Best
+Practices
+7/8
+Performance
+20/24
+METRICS Expand view
+Total Blocking Time
+20 ms
+Cumulative Layout Shift
+0.077
+Interaction to Next Paint
+40 ms
+2/26/26, 4:24 PM about:blank
+about:blank 1/10
+
+--- PAGE 2 ---
+INSIGHTS
+INP breakdown
+Start investigating how to improve INP by looking at the longest subpart.INP Unscored
+These insights are also available in the Chrome DevTools Performance Panel - record a trace to view more detailed information.
+Input delay 0 ms
+Processing duration 0 ms
+Presentation delay 20 ms
+DIAGNOSTICS
+Reduce unused JavaScript —Est savings of 235 KiB
+Reduce unused JavaScript and defer loading scripts until they are required to decrease bytes consumed by network activity.
+Learn how to reduce unused JavaScript. Unscored
+Avoid enormous network payloads —Total size was 11,047 KiB
+Large network payloads cost users real money and are highly correlated with long load times. Learn how to reduce payload
+sizes. Unscored
+JSDelivr CDN Cdn  254.3 KiB 235.1 KiB
+…dist/lightweight-charts.standalone.production.js 50.9 KiB 47.0 KiB
+…dist/lightweight-charts.standalone.production.js 50.9 KiB 47.0 KiB
+…dist/lightweight-charts.standalone.production.js 50.9 KiB 47.0 KiB
+…dist/lightweight-charts.standalone.production.js 50.9 KiB 47.0 KiB
+…dist/lightweight-charts.standalone.production.js 50.9 KiB 47.0 KiB
+( c d n . j s d e l i v r . n e t )
+( c d n . j s d e l i v r . n e t )
+( c d n . j s d e l i v r . n e t )
+( c d n . j s d e l i v r . n e t )
+( c d n . j s d e l i v r . n e t )
+Subpart Duration
+URL Transfer
+Size
+Est
+Savings
+2/26/26, 4:24 PM about:blank
+about:blank 2/10
+
+--- PAGE 3 ---
+ Show 3rd-party resources (1)
+Reduce JavaScript execution time —2.2 s
+Consider reducing the time spent parsing, compiling, and executing JS. You may find delivering smaller JS payloads helps
+with this. Learn how to reduce Javascript execution time. TBT Unscored
+absenpanha.com 1st Party 3,757.8 KiB
+/login 765.5 KiB
+…assets/pns_logo_nav.png 332.5 KiB
+…assets/pns_logo_nav.png 332.5 KiB
+…assets/pns_logo_nav.png 332.5 KiB
+…assets/pns_logo_nav.png 332.5 KiB
+…assets/pns_logo_nav.png 332.5 KiB
+…assets/pns_logo_nav.png 332.5 KiB
+…assets/pns_logo_nav.png 332.5 KiB
+…assets/pns_logo_nav.png 332.5 KiB
+…assets/pns_logo_nav.png 332.5 KiB
+( a b s e n p a n h a . c om )
+( a b s e n p a n h a . c om )
+( a b s e n p a n h a . c om )
+( a b s e n p a n h a . c om )
+( a b s e n p a n h a . c om )
+( a b s e n p a n h a . c om )
+( a b s e n p a n h a . c om )
+( a b s e n p a n h a . c om )
+( a b s e n p a n h a . c om )
+( a b s e n p a n h a . c om )
+absenpanha.com 1st Party 8,193 ms 1,724 ms 57 ms
+/home 7,378 ms 1,446 ms 41 ms
+…js/home-index-collab.js?v=177… 374 ms 76 ms 5 ms
+…js/home-index.js?v=177… 135 ms 72 ms 3 ms
+/login 114 ms 57 ms 2 ms
+…js/theme-global-init.js?v=20260225d 76 ms 27 ms 3 ms
+( a b s e n p a n h a . c om )
+( a b s e n p a n h a . c om )
+( a b s e n p a n h a . c om )
+( a b s e n p a n h a . c om )
+( a b s e n p a n h a . c om )
+URL Transfer Size
+URL Total CPU
+Time Script EvaluationScript Parse
+2/26/26, 4:24 PM about:blank
+about:blank 3/10
+
+--- PAGE 4 ---
+Minimize main-thread work —14.2 s
+Consider reducing the time spent parsing, compiling and executing JS. You may find delivering smaller JS payloads helps
+with this. Learn how to minimize main-thread workTBT Unscored
+Avoid long main-thread tasks —2 long tasks found
+Lists the longest tasks on the main thread, useful for identifying worst contributors to input delay. Learn how to avoid long
+main-thread tasksTBT Unscored
+…js/home-user-dashboard.js?v=6d70477… 59 ms 37 ms 0 ms
+/home/employee_data 57 ms 8 ms 2 ms
+Unattributable 5,326 ms 143 ms 0 ms
+Unattributable 5,326 ms 143 ms 0 ms
+JSDelivr CDN Cdn  495 ms 253 ms 15 ms
+…dist/lightweight-charts.standalone.production.js 495 ms 253 ms 15 ms
+( a b s e n p a n h a . c om )
+( a b s e n p a n h a . c om )
+( c d n . j s d e l i v r . n e t )
+Other 7,915 ms
+Rendering 2,167 ms
+Script Evaluation 2,156 ms
+Style & Layout 1,559 ms
+Parse HTML & CSS 149 ms
+Garbage Collection 130 ms
+Script Parsing & Compilation 95 ms
+absenpanha.com 1st Party 120 ms
+URL Total CPU
+Time Script EvaluationScript Parse
+Category Time Spent
+URL Start Time Duration
+2/26/26, 4:24 PM about:blank
+about:blank 4/10
+
+--- PAGE 5 ---
+More information about the performance of your application. These numbers don't directly affect the Performance score.
+/home 83,240 ms 62 ms
+/login 35,206 ms 58 ms
+( a b s e n p a n h a . c om )
+( a b s e n p a n h a . c om )
+PASSED AUDITS (22) Hide
+Use efficient cache lifetimes
+A long cache lifetime can speed up repeat visits to your page. Learn more about caching. Unscored
+Layout shift culprits
+Layout shifts occur when elements move absent any user interaction. Investigate the causes of layout shifts, such as
+elements being added, removed, or their fonts changing as the page loads.CLS Unscored
+Document request latency
+Your first network request is the most important. Reduce its latency by avoiding redirects, ensuring a fast server response,
+and enabling text compression.Unscored
+Optimize DOM size
+A large DOM can increase the duration of style calculations and layout reflows, impacting page responsiveness. A large
+DOM will also increase memory usage. Learn how to avoid an excessive DOM size. INP Unscored
+Duplicated JavaScript
+Remove large, duplicate JavaScript modules from bundles to reduce unnecessary bytes consumed by network activity.
+Unscored
+Font display
+Total elements 30
+DOM depth 7
+Most children 7
+URL Start Time Duration
+Statistic Element Value
+2/26/26, 4:24 PM about:blank
+about:blank 5/10
+
+--- PAGE 6 ---
+Consider setting font-display to swap or optional to ensure text is consistently visible. swap can be further optimized to
+mitigate layout shifts with font metric overrides. INP Unscored
+Forced reflow
+A forced reflow occurs when JavaScript queries geometric properties (such as offsetWidth) after styles have been
+invalidated by a change to the DOM state. This can result in poor performance. Learn more about forced reflows and
+possible mitigations.Unscored
+Improve image delivery
+Reducing the download time of images can improve the perceived load time of the page and LCP. Learn more about
+optimizing image sizeUnscored
+LCP breakdown
+Each subpart has specific improvement strategies. Ideally, most of the LCP time should be spent on loading the resources,
+not within delays.Unscored
+LCP request discovery
+Optimize LCP by making the LCP image discoverable from the HTML immediately, and avoiding lazy-loadingUnscored
+Legacy JavaScript
+Polyfills and transforms enable older browsers to use new JavaScript features. However, many aren't necessary for modern
+browsers. Consider modifying your JavaScript build process to not transpile Baseline features, unless you know you must
+support older browsers. Learn why most sites can deploy ES6+ code without transpilingUnscored
+Modern HTTP
+HTTP/2 and HTTP/3 offer many benefits over HTTP/1.1, such as multiplexing. Learn more about using modern HTTP.
+Unscored
+Network dependency tree
+Avoid chaining critical requests by reducing the length of chains, reducing the download size of resources, or deferring the
+download of unnecessary resources to improve page load.Unscored
+Maximum critical path latency: 0 ms
+Initial Navigation
+2/26/26, 4:24 PM about:blank
+about:blank 6/10
+
+--- PAGE 7 ---
+Preconnected origins
+preconnect hints help the browser establish a connection earlier in the page load, saving time when the first
+request for that origin is made. The following are the origins that the page preconnected to.
+no origins were preconnected
+Preconnect candidates
+Add preconnect hints to your most important origins, but try to use no more than 4.
+No additional origins are good candidates for preconnecting
+Render blocking requests
+Requests are blocking the page's initial render, which may delay LCP. Deferring or inlining can move these network requests
+out of the critical path.Unscored
+3rd parties
+3rd party code can significantly impact load performance. Reduce and defer loading of 3rd party code to prioritize your
+page's content.Unscored
+Optimize viewport for mobile
+Tap interactions may be delayed by up to 300 ms if the viewport is not optimized for mobile.INP Unscored
+Minify CSS
+Minifying CSS files can reduce network payload sizes. Learn how to minify CSS. Unscored
+Minify JavaScript
+Minifying JavaScript files can reduce payload sizes and script parse time. Learn how to minify JavaScript. Unscored
+User Timing marks and measures
+Consider instrumenting your app with the User Timing API to measure your app's real-world performance during key user
+experiences. Learn more about User Timing marks. Unscored
+Avoid non-composited animations
+2/26/26, 4:24 PM about:blank
+about:blank 7/10
+
+--- PAGE 8 ---
+Animations which are not composited can be janky and increase CLS. Learn how to avoid non-composited animationsCLS
+Unscored
+Image elements have explicit width and height
+Set an explicit width and height on image elements to reduce layout shifts and improve CLS. Learn how to set image
+dimensionsCLS Unscored
+Page didn't prevent back/forward cache restoration
+Many navigations are performed by going back to a previous page, or forwards again. The back/forward cache (bfcache) can
+speed up these return navigations. Learn more about the bfcacheUnscored
+Best Practices
+7/8
+GENERAL
+Browser errors were logged to the console
+Errors logged to the console indicate unresolved problems. They can come from network request failures and other browser
+concerns. Learn more about this errors in console diagnostic audit
+Cloudflare Utility  
+/beacon.min.js/v67327c5…:1:0 Failed to load resource: net::ERR_BLOCKED_BY_CLIENT
+/beacon.min.js/v67327c5…:1:0 Failed to load resource: net::ERR_BLOCKED_BY_CLIENT
+/beacon.min.js/v67327c5…:1:0 Failed to load resource: net::ERR_BLOCKED_BY_CLIENT
+/beacon.min.js/v67327c5…:1:0 Failed to load resource: net::ERR_BLOCKED_BY_CLIENT
+/beacon.min.js/v67327c5…:1:0 Failed to load resource: net::ERR_BLOCKED_BY_CLIENT
+/beacon.min.js/v67327c5…:1:0 Failed to load resource: net::ERR_BLOCKED_BY_CLIENT
+/beacon.min.js/v67327c5…:1:0 Failed to load resource: net::ERR_BLOCKED_BY_CLIENT
+( s t a t i c . c l ou d f l a r e i n s i g h t s . c om )
+( s t a t i c . c l ou d f l a r e i n s i g h t s . c om )
+( s t a t i c . c l ou d f l a r e i n s i g h t s . c om )
+( s t a t i c . c l ou d f l a r e i n s i g h t s . c om )
+( s t a t i c . c l ou d f l a r e i n s i g h t s . c om )
+( s t a t i c . c l ou d f l a r e i n s i g h t s . c om )
+( s t a t i c . c l ou d f l a r e i n s i g h t s . c om )
+Source Description
+2/26/26, 4:24 PM about:blank
+about:blank 8/10
+
+--- PAGE 9 ---
+/beacon.min.js/v67327c5…:1:0 Failed to load resource: net::ERR_BLOCKED_BY_CLIENT
+/beacon.min.js/v67327c5…:1:0 Failed to load resource: net::ERR_BLOCKED_BY_CLIENT
+/beacon.min.js/v67327c5…:1:0 Failed to load resource: net::ERR_BLOCKED_BY_CLIENT
+/beacon.min.js/v67327c5…:1:0 Failed to load resource: net::ERR_BLOCKED_BY_CLIENT
+/beacon.min.js/v67327c5…:1:0 Failed to load resource: net::ERR_BLOCKED_BY_CLIENT
+/beacon.min.js/v67327c5…:1:0 Failed to load resource: net::ERR_BLOCKED_BY_CLIENT
+/beacon.min.js/v67327c5…:1:0 Failed to load resource: net::ERR_BLOCKED_BY_CLIENT
+/beacon.min.js/v67327c5…:1:0 Failed to load resource: net::ERR_BLOCKED_BY_CLIENT
+/beacon.min.js/v67327c5…:1:0 Failed to load resource: net::ERR_BLOCKED_BY_CLIENT
+/beacon.min.js/v67327c5…:1:0 Failed to load resource: net::ERR_BLOCKED_BY_CLIENT
+/beacon.min.js/v67327c5…:1:0 Failed to load resource: net::ERR_BLOCKED_BY_CLIENT
+/beacon.min.js/v67327c5…:1:0 Failed to load resource: net::ERR_BLOCKED_BY_CLIENT
+( s t a t i c . c l ou d f l a r e i n s i g h t s . c om )
+( s t a t i c . c l ou d f l a r e i n s i g h t s . c om )
+( s t a t i c . c l ou d f l a r e i n s i g h t s . c om )
+( s t a t i c . c l ou d f l a r e i n s i g h t s . c om )
+( s t a t i c . c l ou d f l a r e i n s i g h t s . c om )
+( s t a t i c . c l ou d f l a r e i n s i g h t s . c om )
+( s t a t i c . c l ou d f l a r e i n s i g h t s . c om )
+( s t a t i c . c l ou d f l a r e i n s i g h t s . c om )
+( s t a t i c . c l ou d f l a r e i n s i g h t s . c om )
+( s t a t i c . c l ou d f l a r e i n s i g h t s . c om )
+( s t a t i c . c l ou d f l a r e i n s i g h t s . c om )
+( s t a t i c . c l ou d f l a r e i n s i g h t s . c om )
+PASSED AUDITS (7) Hide
+Uses HTTPS
+All sites should be protected with HTTPS, even ones that don't handle sensitive data. This includes avoiding mixed content,
+where some resources are loaded over HTTP despite the initial request being served over HTTPS. HTTPS prevents intruders
+from tampering with or passively listening in on the communications between your app and your users, and is a prerequisite
+for HTTP/2 and many new web platform APIs. Learn more about HTTPS.
+Avoids deprecated APIs
+Deprecated APIs will eventually be removed from the browser. Learn more about deprecated APIs.
+Avoids third-party cookies
+Third-party cookies may be blocked in some contexts. Learn more about preparing for third-party cookie restrictions.
+Displays images with correct aspect ratio
+Source Description
+2/26/26, 4:24 PM about:blank
+about:blank 9/10
+
+--- PAGE 10 ---
+Generated by Lighthouse 13.0.1 | File an issue
+Image display dimensions should match natural aspect ratio. Learn more about image aspect ratio.
+Serves images with appropriate resolution
+Image natural dimensions should be proportional to the display size and the pixel ratio to maximize image clarity. Learn how
+to provide responsive images.
+No issues in the Issues panel in Chrome Devtools
+Issues logged to the Issues panel in Chrome Devtools indicate unresolved problems. They can come from network request
+failures, insufficient security controls, and other browser concerns. Open up the Issues panel in Chrome DevTools for more
+details on each issue.
+Page has valid source maps
+Source maps translate minified code to the original source code. This helps developers debug in production. In addition,
+Lighthouse is able to provide further insights. Consider deploying source maps to take advantage of these benefits. Learn
+more about source maps. Unscored
+Captured at Feb 26, 2026, 4:20
+PM GMT+7
+Emulated Desktop with
+Lighthouse 13.0.1
+Single page session
+User interactions timespan
+ Custom throttling
+ Using Chromium 145.0.0.0 with
+devtools
+2/26/26, 4:24 PM about:blank
+about:blank 10/10

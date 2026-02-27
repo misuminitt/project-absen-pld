@@ -5,13 +5,41 @@ $notice_success = $this->session->flashdata('loan_notice_success');
 $notice_warning = $this->session->flashdata('loan_notice_warning');
 $notice_error = $this->session->flashdata('loan_notice_error');
 $is_developer_actor = isset($is_developer_actor) && $is_developer_actor === TRUE;
+$can_process_loan_requests = isset($can_process_loan_requests) && $can_process_loan_requests === TRUE;
+$can_delete_loan_requests = isset($can_delete_loan_requests) && $can_delete_loan_requests === TRUE;
+?>
+<?php
+$_home_theme_cookie_value = isset($_COOKIE['home_index_theme']) ? strtolower(trim((string) $_COOKIE['home_index_theme'])) : '';
+$_home_theme_session_value = '';
+if (isset($this) && isset($this->session) && method_exists($this->session, 'userdata'))
+{
+	$_home_theme_session_value = strtolower(trim((string) $this->session->userdata('home_index_theme')));
+}
+if ($_home_theme_cookie_value === 'dark' || $_home_theme_cookie_value === 'light')
+{
+	$_home_theme_value = $_home_theme_cookie_value;
+}
+elseif ($_home_theme_session_value === 'dark' || $_home_theme_session_value === 'light')
+{
+	$_home_theme_value = $_home_theme_session_value;
+}
+else
+{
+	$_home_theme_value = '';
+}
+$_home_theme_is_dark = $_home_theme_value === 'dark';
+$_home_theme_html_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
+$_home_theme_html_data = ' data-theme="' . ($_home_theme_is_dark ? 'dark' : 'light') . '"';
+$_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 ?>
 <!DOCTYPE html>
-<html lang="id">
+<html lang="id"<?php echo $_home_theme_html_class; ?><?php echo $_home_theme_html_data; ?>>
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<title><?php echo isset($title) ? htmlspecialchars($title, ENT_QUOTES, 'UTF-8') : 'Pengajuan Pinjaman'; ?></title>
+	<link rel="icon" type="image/svg+xml" href="/src/assets/sinyal.svg">
+	<link rel="shortcut icon" type="image/svg+xml" href="/src/assets/sinyal.svg">
 	<link rel="preconnect" href="https://fonts.googleapis.com">
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 	<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -203,6 +231,29 @@ $is_developer_actor = isset($is_developer_actor) && $is_developer_actor === TRUE
 			color: #ad2d2d;
 		}
 
+		html.theme-dark .status-chip {
+			font-weight: 800;
+			border: 1px solid rgba(168, 195, 221, 0.42);
+		}
+
+		html.theme-dark .status-chip.waiting {
+			background: #4c3b1e !important;
+			border-color: #8f6f34 !important;
+			color: #ffe9bc !important;
+		}
+
+		html.theme-dark .status-chip.approved {
+			background: #1d4031 !important;
+			border-color: #2f6f53 !important;
+			color: #d4f8e6 !important;
+		}
+
+		html.theme-dark .status-chip.rejected {
+			background: #4a222b !important;
+			border-color: #8f4c58 !important;
+			color: #ffdbe1 !important;
+		}
+
 		.reason {
 			white-space: pre-wrap;
 			word-break: break-word;
@@ -237,12 +288,24 @@ $is_developer_actor = isset($is_developer_actor) && $is_developer_actor === TRUE
 			background: #fbfdff;
 		}
 
+		html.theme-dark #loanPageMeta.table-meta,
+		html.theme-dark .table-card .table-meta {
+			background: #13273a !important;
+			color: #d9e7f6 !important;
+			border-top: 1px solid #35516b !important;
+		}
+
 		.pager {
 			display: flex;
 			align-items: center;
 			gap: 0.45rem;
 			padding: 0 0.85rem 0.9rem;
 			flex-wrap: wrap;
+		}
+
+		html.theme-dark #loanPager.pager {
+			background: #13273a !important;
+			border-top: 1px solid #35516b;
 		}
 
 		.pager-btn {
@@ -261,14 +324,30 @@ $is_developer_actor = isset($is_developer_actor) && $is_developer_actor === TRUE
 			cursor: pointer;
 		}
 
+		html.theme-dark #loanPager .pager-btn {
+			background: #173149 !important;
+			border-color: #486985 !important;
+			color: #e4effd !important;
+		}
+
 		.pager-btn:hover {
 			background: #f0f7ff;
+		}
+
+		html.theme-dark #loanPager .pager-btn:hover {
+			background: #1e3d5a !important;
 		}
 
 		.pager-btn.active {
 			background: linear-gradient(180deg, #1f6fbd 0%, #0f5c93 100%);
 			border-color: #0f5c93;
 			color: #ffffff;
+		}
+
+		html.theme-dark #loanPager .pager-btn.active {
+			background: linear-gradient(180deg, #2f79c1 0%, #1b588f 100%) !important;
+			border-color: #4f89c1 !important;
+			color: #ffffff !important;
 		}
 
 		.pager-btn.wide {
@@ -479,14 +558,46 @@ $is_developer_actor = isset($is_developer_actor) && $is_developer_actor === TRUE
 			}
 		}
 </style>
+	<script>
+		(function () {
+			var themeValue = "";
+			try {
+				themeValue = String(window.localStorage.getItem("home_index_theme") || "").toLowerCase();
+			} catch (error) {}
+			if (themeValue !== "dark" && themeValue !== "light") {
+				var cookieMatch = document.cookie.match(/(?:^|;\s*)home_index_theme=(dark|light)\b/i);
+				if (cookieMatch && cookieMatch[1]) {
+					themeValue = String(cookieMatch[1]).toLowerCase();
+				}
+			}
+			if (themeValue === "dark" || themeValue === "light") {
+				try {
+					window.localStorage.setItem("home_index_theme", themeValue);
+				} catch (error) {}
+				try {
+					document.cookie = "home_index_theme=" + encodeURIComponent(themeValue) + ";path=/;max-age=31536000;SameSite=Lax";
+				} catch (error) {}
+			}
+			if (themeValue === "dark") {
+				document.documentElement.classList.add("theme-dark");
+				document.documentElement.setAttribute("data-theme", "dark");
+			} else if (themeValue === "light") {
+				document.documentElement.classList.remove("theme-dark");
+				document.documentElement.setAttribute("data-theme", "light");
+			}
+		})();
+	</script>
+	<script src="<?php echo htmlspecialchars('/src/assets/js/theme-global-init.js?v=20260225f', ENT_QUOTES, 'UTF-8'); ?>"></script>
+		<link rel="stylesheet" href="<?php echo htmlspecialchars('/src/assets/css/theme-global.css?v=20260225k', ENT_QUOTES, 'UTF-8'); ?>">
 </head>
-<body>
+<body<?php echo $_home_theme_body_class; ?>>
 	<div class="page">
 		<div class="head">
 			<h1 class="title">Pengajuan Pinjaman</h1>
 			<div class="actions">
 				<a href="<?php echo site_url('home'); ?>" class="btn outline">Kembali Dashboard</a>
 				<a href="<?php echo site_url('home/leave_requests'); ?>" class="btn outline">Data Cuti / Izin</a>
+				<a href="<?php echo site_url('home/day_off_swap_requests'); ?>" class="btn outline">Tukar Hari Libur</a>
 				<a href="<?php echo site_url('home/employee_data'); ?>" class="btn outline">Data Absensi</a>
 				<a href="<?php echo site_url('logout'); ?>" class="btn primary">Logout</a>
 			</div>
@@ -547,7 +658,7 @@ $is_developer_actor = isset($is_developer_actor) && $is_developer_actor === TRUE
 								$employee_id_value = isset($row['employee_id']) && trim((string) $row['employee_id']) !== '' ? (string) $row['employee_id'] : '-';
 								$profile_photo_value = isset($row['profile_photo']) && trim((string) $row['profile_photo']) !== ''
 									? (string) $row['profile_photo']
-									: '/src/assets/fotoku.JPG';
+									: (is_file(FCPATH.'src/assets/fotoku.webp') ? '/src/assets/fotoku.webp' : '/src/assets/fotoku.JPG');
 								$profile_photo_url = $profile_photo_value;
 								if (strpos($profile_photo_url, 'data:') !== 0 && preg_match('/^https?:\/\//i', $profile_photo_url) !== 1)
 								{
@@ -558,8 +669,8 @@ $is_developer_actor = isset($is_developer_actor) && $is_developer_actor === TRUE
 									{
 										$profile_photo_dir = isset($profile_photo_info['dirname']) ? (string) $profile_photo_info['dirname'] : '';
 										$profile_photo_thumb_relative = $profile_photo_dir !== '' && $profile_photo_dir !== '.'
-											? $profile_photo_dir.'/'.$profile_photo_info['filename'].'_thumb.jpg'
-											: $profile_photo_info['filename'].'_thumb.jpg';
+											? $profile_photo_dir.'/'.$profile_photo_info['filename'].'_thumb.webp'
+											: $profile_photo_info['filename'].'_thumb.webp';
 									}
 									if ($profile_photo_thumb_relative !== '' &&
 										is_file(FCPATH.str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $profile_photo_thumb_relative)))
@@ -588,16 +699,16 @@ $is_developer_actor = isset($is_developer_actor) && $is_developer_actor === TRUE
 									<td><span class="status-chip <?php echo htmlspecialchars($status_class, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($status_label, ENT_QUOTES, 'UTF-8'); ?></span></td>
 									<td>
 										<div class="admin-actions">
-											<?php if ($is_waiting && $request_id !== ''): ?>
+											<?php if ($can_process_loan_requests && $is_waiting && $request_id !== ''): ?>
 												<form method="post" action="<?php echo site_url('home/update_loan_request_status'); ?>" class="admin-action-form">
 													<input type="hidden" name="request_id" value="<?php echo htmlspecialchars($request_id, ENT_QUOTES, 'UTF-8'); ?>">
 													<button type="submit" name="status" value="diterima" class="admin-btn approve">Terima</button>
 													<button type="submit" name="status" value="ditolak" class="admin-btn reject">Tolak</button>
 												</form>
 											<?php else: ?>
-												<span class="processed-label">Sudah diproses</span>
+												<span class="processed-label"><?php echo $is_waiting ? 'Akses dibatasi' : 'Sudah diproses'; ?></span>
 											<?php endif; ?>
-											<?php if ($is_developer_actor && $request_id !== ''): ?>
+											<?php if ($can_delete_loan_requests && $request_id !== ''): ?>
 												<form method="post" action="<?php echo site_url('home/delete_loan_request'); ?>" class="admin-action-form" onsubmit="return window.confirm('Hapus data pinjaman ini?');">
 													<input type="hidden" name="request_id" value="<?php echo htmlspecialchars($request_id, ENT_QUOTES, 'UTF-8'); ?>">
 													<button type="submit" class="admin-btn delete">Hapus</button>

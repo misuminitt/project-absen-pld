@@ -1,0 +1,33 @@
+﻿name: absenpanha
+
+description: AbsenPanha mobile WebView app.
+publish_to: "none"
+
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  permission_handler: ^11.3.1
+  webview_flutter: ^4.9.0
+  webview_flutter_android: ^3.16.9
+  webview_flutter_wkwebview: ^3.14.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.14.3
+
+flutter:
+  uses-material-design: true
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "../src/assets/logo_apps.png"
+  min_sdk_android: 19

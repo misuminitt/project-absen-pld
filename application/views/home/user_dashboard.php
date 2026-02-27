@@ -3,38 +3,57 @@
 $summary = isset($summary) && is_array($summary) ? $summary : array();
 $recent_logs = isset($recent_logs) && is_array($recent_logs) ? $recent_logs : array();
 $recent_loans = isset($recent_loans) && is_array($recent_loans) ? $recent_loans : array();
+$day_off_swap_requests = isset($day_off_swap_requests) && is_array($day_off_swap_requests) ? array_values($day_off_swap_requests) : array();
 $username = isset($username) && $username !== '' ? (string) $username : 'user';
 $profile_photo = isset($profile_photo) && trim((string) $profile_photo) !== ''
 	? (string) $profile_photo
-	: '/src/assets/fotoku.JPG';
+	: (is_file(FCPATH.'src/assets/fotoku.webp') ? '/src/assets/fotoku.webp' : '/src/assets/fotoku.JPG');
 $profile_photo_url = $profile_photo;
 if (strpos($profile_photo_url, 'data:') !== 0 && preg_match('/^https?:\/\//i', $profile_photo_url) !== 1)
 {
 	$profile_photo_relative = ltrim($profile_photo_url, '/\\');
 	$profile_photo_info = pathinfo($profile_photo_relative);
 	$profile_photo_thumb_relative = '';
+	$profile_photo_cache_version = 0;
+	$profile_photo_absolute = FCPATH.str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $profile_photo_relative);
+	if (is_file($profile_photo_absolute))
+	{
+		$profile_photo_cache_version = (int) @filemtime($profile_photo_absolute);
+	}
 	if (isset($profile_photo_info['filename']) && trim((string) $profile_photo_info['filename']) !== '')
 	{
 		$profile_photo_dir = isset($profile_photo_info['dirname']) ? (string) $profile_photo_info['dirname'] : '';
 		$profile_photo_thumb_relative = $profile_photo_dir !== '' && $profile_photo_dir !== '.'
-			? $profile_photo_dir.'/'.$profile_photo_info['filename'].'_thumb.jpg'
-			: $profile_photo_info['filename'].'_thumb.jpg';
+			? $profile_photo_dir.'/'.$profile_photo_info['filename'].'_thumb.webp'
+			: $profile_photo_info['filename'].'_thumb.webp';
 	}
 	if ($profile_photo_thumb_relative !== '' &&
 		is_file(FCPATH.str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $profile_photo_thumb_relative)))
 	{
-		$profile_photo_relative = $profile_photo_thumb_relative;
+		$profile_photo_thumb_absolute = FCPATH.str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $profile_photo_thumb_relative);
+		$profile_photo_thumb_version = (int) @filemtime($profile_photo_thumb_absolute);
+		// Pakai thumbnail hanya jika tidak lebih lama dari foto utama.
+		if ($profile_photo_thumb_version >= $profile_photo_cache_version)
+		{
+			$profile_photo_relative = $profile_photo_thumb_relative;
+			$profile_photo_cache_version = $profile_photo_thumb_version;
+		}
 	}
 	$profile_photo_url = base_url(ltrim($profile_photo_relative, '/'));
+	if ($profile_photo_cache_version > 0)
+	{
+		$profile_photo_url .= '?v='.$profile_photo_cache_version;
+	}
 }
 $job_title = isset($job_title) && $job_title !== '' ? (string) $job_title : 'Teknisi';
 $shift_name = isset($shift_name) && $shift_name !== '' ? (string) $shift_name : 'Shift Pagi - Sore';
-$shift_time = isset($shift_time) && $shift_time !== '' ? (string) $shift_time : '08:00 - 23:00';
+$shift_time = isset($shift_time) && $shift_time !== '' ? (string) $shift_time : '08:00 - 17:00';
 $shift_name_lower = strtolower($shift_name);
 $shift_time_lower = strtolower($shift_time);
 $shift_key_dashboard = 'pagi';
 if (strpos($shift_name_lower, 'multi') !== FALSE ||
-	(strpos($shift_time_lower, '06:30') !== FALSE && strpos($shift_time_lower, '23:59') !== FALSE))
+	((strpos($shift_time_lower, '08:00') !== FALSE || strpos($shift_time_lower, '07:00') !== FALSE || strpos($shift_time_lower, '06:30') !== FALSE) &&
+	 (strpos($shift_time_lower, '23:59') !== FALSE || strpos($shift_time_lower, '23:00') !== FALSE)))
 {
 	$shift_key_dashboard = 'multishift';
 }
@@ -46,17 +65,49 @@ elseif (
 {
 	$shift_key_dashboard = 'siang';
 }
-$hero_note_text = 'Absen masuk dibuka mulai 07:30 WIB. Batas maksimal absen masuk 17:00 WIB.';
-$attendance_rule_text = 'Masuk: 07:30 - 17:00 WIB | Pulang: maksimal 23:00 WIB (wajib sudah absen masuk)';
+if ($shift_key_dashboard === 'multishift')
+{
+	$shift_time = '08:00 - 23:59';
+}
+elseif ($shift_key_dashboard === 'siang')
+{
+	$shift_time = '14:00 - 23:59';
+}
+else
+{
+	$shift_time = '08:00 - 17:00';
+}
+
+$hero_note_text = 'Absen masuk dibuka mulai 07:30 WIB. Jam masuk resmi 08:00 WIB (tidak telat sampai 08:00).';
+$attendance_rule_text = 'Masuk: dibuka 07:30 WIB | Jam masuk resmi 08:00 WIB | Pulang: maksimal 23:00 WIB (wajib sudah absen masuk)';
+$attendance_shift_detail_lines = array();
 if ($shift_key_dashboard === 'siang')
 {
 	$hero_note_text = 'Mode Shift Siang aktif. Absen masuk bisa dilakukan dari jam 13:30 sampai 23:00 WIB.';
-	$attendance_rule_text = 'Masuk: 13:30 - 23:00 WIB | Pulang: maksimal 23:00 WIB (wajib sudah absen masuk)';
+	$attendance_rule_text = 'Masuk: 13:30 - 23:00 WIB | Tidak telat sampai 14:00 WIB | Pulang: maksimal 23:59 WIB (wajib sudah absen masuk)';
+	$attendance_shift_detail_lines = array(
+		'Tidak telat jika absen masuk pukul 13:30 - 14:00 WIB.',
+		'Mulai telat pada pukul 14:01 - 23:59 WIB.',
+		'Agar tidak telat: lakukan absen sebelum 14:01 WIB.'
+	);
 }
 elseif ($shift_key_dashboard === 'multishift')
 {
-	$hero_note_text = 'Mode Multi Shift aktif. Absen masuk bisa dilakukan dari jam 06:30 sampai 23:59 WIB.';
-	$attendance_rule_text = 'Masuk: 06:30 - 23:59 WIB | Pulang: maksimal 23:59 WIB (wajib sudah absen masuk)';
+	$hero_note_text = 'Mode Multi Shift aktif. Absen dibuka 07:30 WIB. Jam masuk resmi 08:00 atau 14:00 WIB.';
+	$attendance_rule_text = 'Masuk: dibuka 07:30 - 23:00 WIB | Tidak telat sampai 08:00 atau 14:00 WIB | Pulang: maksimal 23:59 WIB (wajib sudah absen masuk)';
+	$attendance_shift_detail_lines = array(
+		'Tidak telat jika absen masuk pukul 07:30 - 08:00 WIB atau 13:30 - 14:00 WIB.',
+		'Mulai telat pada pukul 08:01 - 13:29 WIB dan 14:01 - 23:59 WIB.',
+		'Agar tidak telat: lakukan absen sebelum 08:01 WIB atau pada slot 13:30 - 14:00 WIB.'
+	);
+}
+else
+{
+	$attendance_shift_detail_lines = array(
+		'Tidak telat jika absen masuk pukul 07:30 - 08:00 WIB.',
+		'Mulai telat pada pukul 08:01 - 17:00 WIB.',
+		'Agar tidak telat: lakukan absen sebelum 08:01 WIB.'
+	);
 }
 $geofence = isset($geofence) && is_array($geofence) ? $geofence : array();
 $loan_config = isset($loan_config) && is_array($loan_config) ? $loan_config : array();
@@ -64,11 +115,19 @@ $loan_min_principal = isset($loan_config['min_principal']) ? (int) $loan_config[
 $loan_max_principal = isset($loan_config['max_principal']) ? (int) $loan_config['max_principal'] : 10000000;
 $password_notice_success = isset($password_notice_success) ? trim((string) $password_notice_success) : '';
 $password_notice_error = isset($password_notice_error) ? trim((string) $password_notice_error) : '';
+$swap_request_notice_success = isset($swap_request_notice_success) ? trim((string) $swap_request_notice_success) : '';
+$swap_request_notice_error = isset($swap_request_notice_error) ? trim((string) $swap_request_notice_error) : '';
 $office_lat = isset($geofence['office_lat']) ? (float) $geofence['office_lat'] : -6.217076;
 $office_lng = isset($geofence['office_lng']) ? (float) $geofence['office_lng'] : 106.132128;
 $office_radius_m = isset($geofence['radius_m']) ? (float) $geofence['radius_m'] : 100.0;
 $max_accuracy_m = isset($geofence['max_accuracy_m']) ? (float) $geofence['max_accuracy_m'] : 50.0;
 $office_points = isset($geofence['office_points']) && is_array($geofence['office_points']) ? $geofence['office_points'] : array();
+$office_fallback_points = isset($geofence['office_fallback_points']) && is_array($geofence['office_fallback_points'])
+	? $geofence['office_fallback_points']
+	: array();
+$attendance_branch = isset($geofence['attendance_branch']) ? trim((string) $geofence['attendance_branch']) : '';
+$geofence_cross_branch_enabled = isset($geofence['cross_branch_enabled']) ? ((int) $geofence['cross_branch_enabled'] === 1 ? 1 : 0) : 0;
+$geofence_shift_key = isset($geofence['shift_key']) ? trim((string) $geofence['shift_key']) : '';
 $normalized_office_points = array();
 for ($office_point_i = 0; $office_point_i < count($office_points); $office_point_i += 1)
 {
@@ -95,36 +154,69 @@ if (empty($normalized_office_points))
 		'lng' => $office_lng
 	);
 }
-$logo_file = 'src/assets/pns_logo_nav.png';
-if (is_file(FCPATH.'src/assets/pns_logo_nav.png'))
+$normalized_office_fallback_points = array();
+for ($office_fallback_i = 0; $office_fallback_i < count($office_fallback_points); $office_fallback_i += 1)
 {
-	$logo_file = 'src/assets/pns_logo_nav.png';
+	$office_fallback_row = isset($office_fallback_points[$office_fallback_i]) && is_array($office_fallback_points[$office_fallback_i])
+		? $office_fallback_points[$office_fallback_i]
+		: array();
+	$office_fallback_lat = isset($office_fallback_row['lat']) ? (float) $office_fallback_row['lat'] : 0.0;
+	$office_fallback_lng = isset($office_fallback_row['lng']) ? (float) $office_fallback_row['lng'] : 0.0;
+	if (!is_finite($office_fallback_lat) || !is_finite($office_fallback_lng))
+	{
+		continue;
+	}
+	$normalized_office_fallback_points[] = array(
+		'label' => isset($office_fallback_row['label']) ? (string) $office_fallback_row['label'] : 'Kantor',
+		'lat' => $office_fallback_lat,
+		'lng' => $office_fallback_lng
+	);
 }
-elseif (is_file(FCPATH.'src/assts/pns_logo_nav.png'))
+$navbar_logo_file = 'src/assets/pns_logo_nav.svg';
+$favicon_file = 'src/assets/sinyal.svg';
+$favicon_type = 'image/svg+xml';
+
+$navbar_logo_url = base_url($navbar_logo_file);
+$navbar_logo_version = is_file(FCPATH.$navbar_logo_file) ? (string) @md5_file(FCPATH.$navbar_logo_file) : '';
+if ($navbar_logo_version !== '')
 {
-	$logo_file = 'src/assts/pns_logo_nav.png';
+	$navbar_logo_url .= '?v='.rawurlencode($navbar_logo_version);
 }
-elseif (is_file(FCPATH.'src/assets/pns_new.png'))
+
+$favicon_url = site_url('home/favicon');
+$favicon_version = is_file(FCPATH.$favicon_file) ? (string) @md5_file(FCPATH.$favicon_file) : '';
+if ($favicon_version !== '')
 {
-	$logo_file = 'src/assets/pns_new.png';
+	$favicon_url .= '?v='.rawurlencode($favicon_version);
 }
-elseif (is_file(FCPATH.'src/assts/pns_new.png'))
-{
-	$logo_file = 'src/assts/pns_new.png';
-}
-elseif (is_file(FCPATH.'src/assets/pns_dashboard.png'))
-{
-	$logo_file = 'src/assets/pns_dashboard.png';
-}
-elseif (is_file(FCPATH.'src/assts/pns_dashboard.png'))
-{
-	$logo_file = 'src/assts/pns_dashboard.png';
-}
-$logo_url = base_url($logo_file);
 $user_dashboard_css_file = 'src/assets/css/home-user-dashboard.css';
 $user_dashboard_js_file = 'src/assets/js/home-user-dashboard.js';
-$user_dashboard_css_version = is_file(FCPATH.$user_dashboard_css_file) ? (string) filemtime(FCPATH.$user_dashboard_css_file) : '1';
-$user_dashboard_js_version = is_file(FCPATH.$user_dashboard_js_file) ? (string) filemtime(FCPATH.$user_dashboard_js_file) : '1';
+$theme_global_css_file = 'src/assets/css/theme-global.css';
+$theme_global_js_file = 'src/assets/js/theme-global-init.js';
+$user_dashboard_css_path = FCPATH.$user_dashboard_css_file;
+$user_dashboard_js_path = FCPATH.$user_dashboard_js_file;
+$theme_global_css_path = FCPATH.$theme_global_css_file;
+$theme_global_js_path = FCPATH.$theme_global_js_file;
+$user_dashboard_css_version = is_file($user_dashboard_css_path) ? (string) @md5_file($user_dashboard_css_path) : '1';
+$user_dashboard_js_version = is_file($user_dashboard_js_path) ? (string) @md5_file($user_dashboard_js_path) : '1';
+$theme_global_css_version = is_file($theme_global_css_path) ? (string) @filemtime($theme_global_css_path) : '1';
+$theme_global_js_version = is_file($theme_global_js_path) ? (string) @filemtime($theme_global_js_path) : '1';
+if ($user_dashboard_css_version === '')
+{
+	$user_dashboard_css_version = '1';
+}
+if ($user_dashboard_js_version === '')
+{
+	$user_dashboard_js_version = '1';
+}
+if ($theme_global_css_version === '')
+{
+	$theme_global_css_version = '1';
+}
+if ($theme_global_js_version === '')
+{
+	$theme_global_js_version = '1';
+}
 $user_dashboard_config_json = json_encode(array(
 	'submitEndpoint' => parse_url(site_url('home/submit_attendance'), PHP_URL_PATH),
 	'leaveRequestEndpoint' => parse_url(site_url('home/submit_leave_request'), PHP_URL_PATH),
@@ -138,36 +230,106 @@ $user_dashboard_config_json = json_encode(array(
 		'isFirstLoan' => isset($loan_config['is_first_loan']) ? (bool) $loan_config['is_first_loan'] : TRUE
 	),
 	'shiftTimeText' => $shift_time,
+	'shiftKey' => $geofence_shift_key !== '' ? $geofence_shift_key : $shift_key_dashboard,
+	'attendanceBranch' => $attendance_branch,
+	'crossBranchEnabled' => $geofence_cross_branch_enabled,
 	'officeLat' => $office_lat,
 	'officeLng' => $office_lng,
 	'officeRadiusM' => $office_radius_m,
 	'maxAccuracyM' => $max_accuracy_m,
-	'officePoints' => $normalized_office_points
+	'officePoints' => $normalized_office_points,
+	'officeFallbackPoints' => $normalized_office_fallback_points
 ), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
 if ($user_dashboard_config_json === FALSE) {
 	$user_dashboard_config_json = '{}';
 }
 ?>
+<?php
+$_home_theme_cookie_value = isset($_COOKIE['home_index_theme']) ? strtolower(trim((string) $_COOKIE['home_index_theme'])) : '';
+$_home_theme_session_value = '';
+if (isset($this) && isset($this->session) && method_exists($this->session, 'userdata'))
+{
+	$_home_theme_session_value = strtolower(trim((string) $this->session->userdata('home_index_theme')));
+}
+if ($_home_theme_cookie_value === 'dark' || $_home_theme_cookie_value === 'light')
+{
+	$_home_theme_value = $_home_theme_cookie_value;
+}
+elseif ($_home_theme_session_value === 'dark' || $_home_theme_session_value === 'light')
+{
+	$_home_theme_value = $_home_theme_session_value;
+}
+else
+{
+	$_home_theme_value = '';
+}
+$_home_theme_is_dark = $_home_theme_value === 'dark';
+$_home_theme_html_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
+$_home_theme_html_data = ' data-theme="' . ($_home_theme_is_dark ? 'dark' : 'light') . '"';
+$_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
+?>
 <!DOCTYPE html>
-<html lang="id">
+<html lang="id"<?php echo $_home_theme_html_class; ?><?php echo $_home_theme_html_data; ?>>
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<title><?php echo isset($title) ? htmlspecialchars($title, ENT_QUOTES, 'UTF-8') : 'Dashboard Absen - User'; ?></title>
+	<link rel="icon" type="<?php echo htmlspecialchars($favicon_type, ENT_QUOTES, 'UTF-8'); ?>" href="/src/assets/sinyal.svg">
+	<link rel="shortcut icon" type="<?php echo htmlspecialchars($favicon_type, ENT_QUOTES, 'UTF-8'); ?>" href="/src/assets/sinyal.svg">
 	<link rel="preconnect" href="https://fonts.googleapis.com">
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 		<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 	<link rel="stylesheet" href="<?php echo htmlspecialchars(base_url($user_dashboard_css_file), ENT_QUOTES, 'UTF-8'); ?>?v=<?php echo rawurlencode($user_dashboard_css_version); ?>">
+	<script>
+		(function () {
+			var themeValue = "";
+			try {
+				themeValue = String(window.localStorage.getItem("home_index_theme") || "").toLowerCase();
+			} catch (error) {}
+			if (themeValue !== "dark" && themeValue !== "light") {
+				var cookieMatch = document.cookie.match(/(?:^|;\s*)home_index_theme=(dark|light)\b/i);
+				if (cookieMatch && cookieMatch[1]) {
+					themeValue = String(cookieMatch[1]).toLowerCase();
+				}
+			}
+			if (themeValue === "dark" || themeValue === "light") {
+				try {
+					window.localStorage.setItem("home_index_theme", themeValue);
+				} catch (error) {}
+				try {
+					document.cookie = "home_index_theme=" + encodeURIComponent(themeValue) + ";path=/;max-age=31536000;SameSite=Lax";
+				} catch (error) {}
+			}
+			if (themeValue === "dark") {
+				document.documentElement.classList.add("theme-dark");
+				document.documentElement.setAttribute("data-theme", "dark");
+			} else if (themeValue === "light") {
+				document.documentElement.classList.remove("theme-dark");
+				document.documentElement.setAttribute("data-theme", "light");
+			}
+		})();
+	</script>
+	<script src="<?php echo htmlspecialchars(base_url($theme_global_js_file), ENT_QUOTES, 'UTF-8'); ?>?v=<?php echo rawurlencode($theme_global_js_version); ?>"></script>
+		<link rel="stylesheet" href="<?php echo htmlspecialchars(base_url($theme_global_css_file), ENT_QUOTES, 'UTF-8'); ?>?v=<?php echo rawurlencode($theme_global_css_version); ?>">
 </head>
-<body>
+<body<?php echo $_home_theme_body_class; ?> data-theme-mobile-toggle="1" data-theme-native-toggle="1">
 	<nav class="topbar">
 		<div class="topbar-container">
 			<div class="topbar-inner">
 				<a href="<?php echo site_url('home'); ?>" class="brand">
-					<img class="brand-logo" src="<?php echo htmlspecialchars($logo_url, ENT_QUOTES, 'UTF-8'); ?>" alt="Logo Absen Online">
+					<img class="brand-logo" src="<?php echo htmlspecialchars($navbar_logo_url, ENT_QUOTES, 'UTF-8'); ?>" alt="Logo Absen Online">
 					<span class="brand-text">Dashboard User Absen</span>
 				</a>
-				<a href="<?php echo site_url('logout'); ?>" class="logout">Logout</a>
+				<div class="topbar-actions">
+					<button type="button" class="theme-navbar-toggle" id="themeToggleButton" aria-label="Aktifkan mode malam" aria-pressed="false" title="Ganti ke mode malam">
+						<span class="theme-navbar-toggle-track" aria-hidden="true">
+							<span class="theme-navbar-toggle-icon sun">&#9728;</span>
+							<span class="theme-navbar-toggle-icon moon">&#9790;</span>
+							<span class="theme-navbar-toggle-knob"></span>
+						</span>
+					</button>
+					<a href="<?php echo site_url('logout'); ?>" class="logout">Logout</a>
+				</div>
 			</div>
 		</div>
 	</nav>
@@ -190,7 +352,8 @@ if ($user_dashboard_config_json === FALSE) {
 						<p class="action-title">Absen</p>
 						<p class="action-text">Tap untuk pilih absen masuk atau pulang.</p>
 					</button>
-					<button type="button" class="action-btn leave" data-request-type="cuti">
+					<button type="button" class="action-btn leave is-coming-soon" disabled aria-disabled="true" title="COMING SOON">
+						<span class="coming-soon-badge">COMING SOON</span>
 						<p class="action-title">Pengajuan Cuti</p>
 						<p class="action-text">Ajukan cuti jika kamu akan libur kerja.</p>
 					</button>
@@ -203,6 +366,10 @@ if ($user_dashboard_config_json === FALSE) {
 					<button type="button" class="action-btn loan" data-loan-open="true">
 						<p class="action-title">Pengajuan Pinjaman</p>
 						<p class="action-text">Ajukan pinjaman dengan nominal, tenor, alasan, dan rincian otomatis.</p>
+					</button>
+					<button type="button" class="action-btn swap" data-swap-open="true">
+						<p class="action-title">Pengajuan Tukar Libur</p>
+						<p class="action-text">Ajukan tukar hari libur 1x. Wajib menunggu persetujuan admin.</p>
 					</button>
 				</div>
 			</div>
@@ -275,12 +442,14 @@ if ($user_dashboard_config_json === FALSE) {
 							<th>Masuk</th>
 							<th>Pulang</th>
 							<th>Status</th>
+							<th>Catatan</th>
+							<th>Potongan</th>
 						</tr>
 					</thead>
 					<tbody id="historyTableBody">
 						<?php if (empty($recent_logs)): ?>
 							<tr>
-								<td colspan="4">Belum ada riwayat absensi.</td>
+								<td colspan="6">Belum ada riwayat absensi.</td>
 							</tr>
 						<?php else: ?>
 							<?php foreach ($recent_logs as $log): ?>
@@ -293,6 +462,8 @@ if ($user_dashboard_config_json === FALSE) {
 									<td><?php echo htmlspecialchars(isset($log['masuk']) ? (string) $log['masuk'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
 									<td><?php echo htmlspecialchars(isset($log['pulang']) ? (string) $log['pulang'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
 									<td><span class="badge <?php echo htmlspecialchars($status_class, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars(isset($log['status']) ? (string) $log['status'] : '-', ENT_QUOTES, 'UTF-8'); ?></span></td>
+									<td><?php echo htmlspecialchars(isset($log['catatan']) ? (string) $log['catatan'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
+									<td><?php echo htmlspecialchars(isset($log['potongan']) ? (string) $log['potongan'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
 								</tr>
 							<?php endforeach; ?>
 						<?php endif; ?>
@@ -383,6 +554,13 @@ if ($user_dashboard_config_json === FALSE) {
 							<div class="info-item">
 								<p class="info-title">Shift</p>
 								<p id="shiftValue" class="info-value"><?php echo htmlspecialchars($shift_name.' ('.$shift_time.')', ENT_QUOTES, 'UTF-8'); ?></p>
+								<?php if (!empty($attendance_shift_detail_lines)): ?>
+									<ul class="shift-detail-list">
+										<?php foreach ($attendance_shift_detail_lines as $shift_detail_line): ?>
+											<li><?php echo htmlspecialchars((string) $shift_detail_line, ENT_QUOTES, 'UTF-8'); ?></li>
+										<?php endforeach; ?>
+									</ul>
+								<?php endif; ?>
 							</div>
 							<div class="info-item">
 								<p class="info-title">Aturan Waktu</p>
@@ -530,11 +708,460 @@ if ($user_dashboard_config_json === FALSE) {
 		</section>
 	</div>
 
+	<div id="swapDayOffModal" class="request-modal" aria-hidden="true">
+		<div class="modal-overlay" data-swap-close></div>
+		<section class="request-panel" role="dialog" aria-modal="true" aria-labelledby="swapDayOffTitle">
+			<div class="request-head">
+				<h2 id="swapDayOffTitle" class="request-title">Form Pengajuan Tukar Hari Libur</h2>
+				<button type="button" class="modal-close" id="closeSwapDayOffModal" aria-label="Tutup popup tukar hari libur">&times;</button>
+			</div>
+			<div class="request-body">
+				<form id="swapDayOffRequestForm" class="request-form" method="post" action="<?php echo site_url('home/submit_day_off_swap_request'); ?>">
+					<p class="request-kind">Jenis pengajuan: <strong>Tukar Hari Libur (1x)</strong></p>
+					<div class="request-grid">
+						<div class="request-field">
+							<label for="swapWorkdayDate" class="request-label">Tanggal Libur Asli (jadi masuk)</label>
+							<input id="swapWorkdayDate" class="request-input" type="date" name="swap_workday_date" required>
+						</div>
+						<div class="request-field">
+							<label for="swapOffdayDate" class="request-label">Tanggal Libur Pengganti (jadi libur)</label>
+							<input id="swapOffdayDate" class="request-input" type="date" name="swap_offday_date" required>
+						</div>
+					</div>
+					<div class="request-field">
+						<label for="swapNoteInput" class="request-label">Alasan/Catatan (Wajib)</label>
+						<textarea id="swapNoteInput" class="request-textarea" name="swap_note" maxlength="200" placeholder="Contoh: acara keluarga" required></textarea>
+					</div>
+					<button type="submit" class="request-submit">Kirim Pengajuan Tukar Libur</button>
+				</form>
+			</div>
+		</section>
+	</div>
+
 	<div id="toastMessage" class="toast" role="status" aria-live="polite"></div>
 
-		<script>
+	<script>
 		window.__USER_DASHBOARD_CONFIG = <?php echo $user_dashboard_config_json; ?>;
+		(function (cfg) {
+			if (!cfg || typeof cfg !== 'object') {
+				window.__USER_DASHBOARD_CONFIG = {};
+				return;
+			}
+			var points = Array.isArray(cfg.officePoints) ? cfg.officePoints.slice() : [];
+			var fallbackPoints = Array.isArray(cfg.officeFallbackPoints) ? cfg.officeFallbackPoints : [];
+			var branch = String(cfg.attendanceBranch || '').toLowerCase();
+			var crossBranchEnabled = Number(cfg.crossBranchEnabled) === 1 ? 1 : 0;
+			var shouldIncludeFallback = crossBranchEnabled === 1;
+			var defaultFallbackPoints = [
+				{ label: 'Kantor 1', lat: -6.217076, lng: 106.132128 },
+				{ label: 'Kantor 2', lat: -6.270039, lng: 106.120796 }
+			];
+			var normalized = [];
+			var seen = {};
+			var pushUnique = function (sourceList) {
+				for (var i = 0; i < sourceList.length; i += 1) {
+					var row = sourceList[i] && typeof sourceList[i] === 'object' ? sourceList[i] : {};
+					var lat = Number(row.lat);
+					var lng = Number(row.lng);
+					if (!isFinite(lat) || !isFinite(lng)) {
+						continue;
+					}
+					var key = lat.toFixed(6) + ',' + lng.toFixed(6);
+					if (seen[key]) {
+						continue;
+					}
+					seen[key] = true;
+					normalized.push({
+						label: String(row.label || 'Kantor'),
+						lat: lat,
+						lng: lng
+					});
+				}
+			};
+			pushUnique(points);
+			if (shouldIncludeFallback) {
+				pushUnique(fallbackPoints);
+				if (normalized.length < 2) {
+					pushUnique(defaultFallbackPoints);
+				}
+			}
+			if (!normalized.length) {
+				var primaryLat = Number(cfg.officeLat);
+				var primaryLng = Number(cfg.officeLng);
+				if (isFinite(primaryLat) && isFinite(primaryLng)) {
+					normalized.push({
+						label: 'Kantor',
+						lat: primaryLat,
+						lng: primaryLng
+					});
+				}
+			}
+			if (branch === 'cadasari' && normalized.length > 1 && shouldIncludeFallback) {
+				normalized.sort(function (a, b) {
+					var aIsKantor2 = String(a.label || '').toLowerCase().indexOf('kantor 2') !== -1;
+					var bIsKantor2 = String(b.label || '').toLowerCase().indexOf('kantor 2') !== -1;
+					if (aIsKantor2 === bIsKantor2) {
+						return 0;
+					}
+					return aIsKantor2 ? -1 : 1;
+				});
+			}
+			cfg.officePoints = normalized;
+			window.__USER_DASHBOARD_CONFIG = cfg;
+		})(window.__USER_DASHBOARD_CONFIG || {});
 	</script>
 	<script defer src="<?php echo htmlspecialchars(base_url($user_dashboard_js_file), ENT_QUOTES, 'UTF-8'); ?>?v=<?php echo rawurlencode($user_dashboard_js_version); ?>"></script>
+	<script>
+	(function () {
+		var tbody = document.getElementById('historyTableBody');
+		if (!tbody) {
+			return;
+		}
+
+		var rowCache = Object.create(null);
+		var normalizeTimer = null;
+		var isNormalizing = false;
+		var observer = null;
+
+		function text(value) {
+			return String(value || '').replace(/\s+/g, ' ').trim();
+		}
+
+		function rowKeyFromCells(cells) {
+			if (!cells || cells.length < 1) {
+				return '';
+			}
+			return text(cells[0].textContent);
+		}
+
+		function rowKeyFromPayload(row) {
+			var payload = row && typeof row === 'object' ? row : {};
+			return text(payload.tanggal);
+		}
+
+		function ensureRowCells(row, count) {
+			while (row.cells.length < count) {
+				row.appendChild(document.createElement('td'));
+			}
+		}
+
+		function isEmpty(v) {
+			var t = text(v);
+			return t === '' || t === '-';
+		}
+
+		function cacheValue(value) {
+			return isEmpty(value) ? '' : text(value);
+		}
+
+		function scheduleNormalize(delayMs) {
+			if (normalizeTimer !== null) {
+				return;
+			}
+			var wait = typeof delayMs === 'number' && delayMs >= 0 ? delayMs : 40;
+			normalizeTimer = window.setTimeout(function () {
+				normalizeTimer = null;
+				normalizeHistoryRowsInDom();
+			}, wait);
+		}
+
+		function normalizeHistoryRowsInDom() {
+			if (isNormalizing) {
+				return;
+			}
+			isNormalizing = true;
+			if (observer) {
+				observer.disconnect();
+			}
+
+			var rows = tbody.querySelectorAll('tr');
+			try {
+				for (var i = 0; i < rows.length; i += 1) {
+					var row = rows[i];
+					if (row.cells.length === 1) {
+						var colspanRaw = row.cells[0].getAttribute('colspan');
+						var colspanVal = parseInt(colspanRaw || '1', 10);
+						if (isFinite(colspanVal) && colspanVal > 1) {
+							continue;
+						}
+					}
+					ensureRowCells(row, 6);
+					var cells = row.cells;
+					var key = rowKeyFromCells(cells);
+					if (key === '') {
+						continue;
+					}
+
+					var cache = rowCache[key] || { catatan: '', potongan: '' };
+					var catatanNow = text(cells[4].textContent);
+					var potonganNow = text(cells[5].textContent);
+					var catatanFixed = isEmpty(catatanNow) ? (cache.catatan !== '' ? cache.catatan : '-') : catatanNow;
+					var potonganFixed = isEmpty(potonganNow) ? (cache.potongan !== '' ? cache.potongan : '-') : potonganNow;
+
+					if (catatanNow !== catatanFixed) {
+						cells[4].textContent = catatanFixed;
+					}
+					if (potonganNow !== potonganFixed) {
+						cells[5].textContent = potonganFixed;
+					}
+
+					rowCache[key] = {
+						catatan: cacheValue(catatanFixed) !== '' ? cacheValue(catatanFixed) : cache.catatan,
+						potongan: cacheValue(potonganFixed) !== '' ? cacheValue(potonganFixed) : cache.potongan
+					};
+				}
+			} finally {
+				isNormalizing = false;
+				if (observer) {
+					observer.observe(tbody, { childList: true });
+				}
+			}
+		}
+
+		function normalizePayloadRows(rows) {
+			if (!Array.isArray(rows)) {
+				return rows;
+			}
+			for (var i = 0; i < rows.length; i += 1) {
+				var payloadRow = rows[i] && typeof rows[i] === 'object' ? rows[i] : {};
+				var key = rowKeyFromPayload(payloadRow);
+				if (key === '') {
+					continue;
+				}
+				var cache = rowCache[key] || { catatan: '', potongan: '' };
+				var catatanRaw = text(payloadRow.catatan);
+				var potonganRaw = text(payloadRow.potongan);
+				var catatanFixed = isEmpty(catatanRaw) ? (cache.catatan !== '' ? cache.catatan : '-') : catatanRaw;
+				var potonganFixed = isEmpty(potonganRaw) ? (cache.potongan !== '' ? cache.potongan : '-') : potonganRaw;
+
+				payloadRow.catatan = catatanFixed;
+				payloadRow.potongan = potonganFixed;
+				rows[i] = payloadRow;
+
+				rowCache[key] = {
+					catatan: cacheValue(catatanFixed) !== '' ? cacheValue(catatanFixed) : cache.catatan,
+					potongan: cacheValue(potonganFixed) !== '' ? cacheValue(potonganFixed) : cache.potongan
+				};
+			}
+			scheduleNormalize(20);
+			return rows;
+		}
+
+		function isLiveDataRequest(url) {
+			var value = String(url || '').toLowerCase();
+			if (value === '') {
+				return false;
+			}
+			return value.indexOf('/home/user_dashboard_live_data') !== -1
+				|| value.indexOf('/index.php/home/user_dashboard_live_data') !== -1
+				|| value.indexOf('home/user_dashboard_live_data') === 0
+				|| value.indexOf('index.php/home/user_dashboard_live_data') === 0
+				|| value.indexOf('user_dashboard_live_data') !== -1;
+		}
+
+		function patchLiveDataFetch() {
+			if (window.__USER_DASHBOARD_FETCH_PATCHED === true) {
+				return;
+			}
+			if (typeof window.fetch !== 'function' || typeof window.Response !== 'function') {
+				return;
+			}
+			var nativeFetch = window.fetch.bind(window);
+			window.__USER_DASHBOARD_FETCH_PATCHED = true;
+			window.fetch = function (input, init) {
+				var requestUrl = '';
+				if (typeof input === 'string') {
+					requestUrl = input;
+				}
+				else if (input && typeof input.url === 'string') {
+					requestUrl = input.url;
+				}
+
+				var result = nativeFetch(input, init);
+				if (!isLiveDataRequest(requestUrl)) {
+					return result;
+				}
+
+				return result.then(function (response) {
+					if (!response || typeof response.clone !== 'function') {
+						return response;
+					}
+					var contentType = '';
+					if (response.headers && typeof response.headers.get === 'function') {
+						contentType = String(response.headers.get('content-type') || '').toLowerCase();
+					}
+					if (contentType.indexOf('application/json') === -1) {
+						return response;
+					}
+
+					return response.clone().json().then(function (payload) {
+						if (!payload || payload.success !== true || !Array.isArray(payload.recent_logs)) {
+							return response;
+						}
+						payload.recent_logs = normalizePayloadRows(payload.recent_logs);
+						var headers = response.headers ? new Headers(response.headers) : new Headers();
+						headers.set('Content-Type', 'application/json; charset=utf-8');
+						return new Response(JSON.stringify(payload), {
+							status: response.status,
+							statusText: response.statusText,
+							headers: headers
+						});
+					}).catch(function () {
+						return response;
+					});
+				});
+			};
+		}
+
+		observer = new MutationObserver(function () {
+			scheduleNormalize(30);
+		});
+	observer.observe(tbody, { childList: true });
+	scheduleNormalize(0);
+	patchLiveDataFetch();
+	}());
+	</script>
+	<script>
+	(function () {
+		var modal = document.getElementById('swapDayOffModal');
+		if (!modal) {
+			return;
+		}
+		var toast = document.getElementById('toastMessage');
+		var openButtons = document.querySelectorAll('[data-swap-open]');
+		var closeButton = document.getElementById('closeSwapDayOffModal');
+		var overlayClose = modal.querySelector('[data-swap-close]');
+		var firstField = document.getElementById('swapWorkdayDate');
+		var form = document.getElementById('swapDayOffRequestForm');
+		var submitButton = form ? form.querySelector('button[type="submit"]') : null;
+		var submitLabel = submitButton ? String(submitButton.textContent || 'Kirim Pengajuan Tukar Libur') : 'Kirim Pengajuan Tukar Libur';
+		var toastTimer = null;
+		var initialSuccess = <?php echo json_encode($swap_request_notice_success, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+		var initialError = <?php echo json_encode($swap_request_notice_error, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+
+		function showToast(message) {
+			if (!toast) {
+				return;
+			}
+			toast.textContent = String(message || '');
+			toast.classList.add('show');
+			if (toastTimer !== null) {
+				window.clearTimeout(toastTimer);
+			}
+			toastTimer = window.setTimeout(function () {
+				toast.classList.remove('show');
+			}, 7000);
+		}
+
+		function isOpen(elementId) {
+			var el = document.getElementById(elementId);
+			return !!(el && el.classList && el.classList.contains('show'));
+		}
+
+		function updateBodyOverflow() {
+			var hasModalOpen = modal.classList.contains('show')
+				|| isOpen('attendanceModal')
+				|| isOpen('requestModal')
+				|| isOpen('loanModal');
+			document.body.style.overflow = hasModalOpen ? 'hidden' : '';
+		}
+
+		function openModal() {
+			modal.classList.add('show');
+			modal.setAttribute('aria-hidden', 'false');
+			updateBodyOverflow();
+			if (firstField) {
+				window.setTimeout(function () {
+					firstField.focus();
+				}, 30);
+			}
+		}
+
+		function closeModal() {
+			modal.classList.remove('show');
+			modal.setAttribute('aria-hidden', 'true');
+			updateBodyOverflow();
+		}
+
+		for (var i = 0; i < openButtons.length; i += 1) {
+			openButtons[i].addEventListener('click', function (event) {
+				event.preventDefault();
+				openModal();
+			});
+		}
+
+		if (closeButton) {
+			closeButton.addEventListener('click', closeModal);
+		}
+		if (overlayClose) {
+			overlayClose.addEventListener('click', closeModal);
+		}
+		if (form) {
+			form.addEventListener('submit', function (event) {
+				if (typeof window.fetch !== 'function' || typeof window.FormData !== 'function') {
+					closeModal();
+					return;
+				}
+				event.preventDefault();
+
+				var actionUrl = String(form.getAttribute('action') || '').trim();
+				if (actionUrl === '') {
+					showToast('Endpoint pengajuan tukar libur tidak ditemukan.');
+					return;
+				}
+
+				var formData = new FormData(form);
+				if (submitButton) {
+					submitButton.disabled = true;
+					submitButton.textContent = 'Mengirim...';
+				}
+
+				fetch(actionUrl, {
+					method: 'POST',
+					body: formData,
+					headers: {
+						'X-Requested-With': 'XMLHttpRequest'
+					}
+				}).then(function (response) {
+					return response.json().catch(function () {
+						return {
+							success: false,
+							message: 'Respons server tidak valid.'
+						};
+					}).then(function (payload) {
+						if (!response.ok || !payload || payload.success !== true) {
+							throw new Error(payload && payload.message ? payload.message : 'Pengajuan tukar hari libur gagal dikirim.');
+						}
+						return payload;
+					});
+				}).then(function (payload) {
+					showToast(payload.message || 'Pengajuan tukar hari libur berhasil dikirim.');
+					form.reset();
+					closeModal();
+				}).catch(function (error) {
+					showToast(error && error.message ? error.message : 'Pengajuan tukar hari libur gagal dikirim.');
+				}).finally(function () {
+					if (submitButton) {
+						submitButton.disabled = false;
+						submitButton.textContent = submitLabel;
+					}
+				});
+			});
+		}
+
+		document.addEventListener('keydown', function (event) {
+			if (event.key === 'Escape' && modal.classList.contains('show')) {
+				closeModal();
+			}
+		});
+
+		if (initialSuccess) {
+			showToast(initialSuccess);
+		}
+		else if (initialError) {
+			showToast(initialError);
+		}
+	}());
+	</script>
 </body>
 </html>

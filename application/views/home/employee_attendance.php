@@ -36,14 +36,43 @@ for ($record_i = 0; $record_i < count($records_source); $record_i += 1)
 <?php
 $notice_success = $this->session->flashdata('attendance_notice_success');
 $notice_error = $this->session->flashdata('attendance_notice_error');
+$can_edit_attendance_records = isset($can_edit_attendance_records) && $can_edit_attendance_records === TRUE;
+$can_delete_attendance_records = isset($can_delete_attendance_records) && $can_delete_attendance_records === TRUE;
+$can_partial_delete_attendance_records = isset($can_partial_delete_attendance_records) && $can_partial_delete_attendance_records === TRUE;
 $can_edit_attendance_datetime = isset($can_edit_attendance_datetime) && $can_edit_attendance_datetime === TRUE;
 ?>
+<?php
+$_home_theme_cookie_value = isset($_COOKIE['home_index_theme']) ? strtolower(trim((string) $_COOKIE['home_index_theme'])) : '';
+$_home_theme_session_value = '';
+if (isset($this) && isset($this->session) && method_exists($this->session, 'userdata'))
+{
+	$_home_theme_session_value = strtolower(trim((string) $this->session->userdata('home_index_theme')));
+}
+if ($_home_theme_cookie_value === 'dark' || $_home_theme_cookie_value === 'light')
+{
+	$_home_theme_value = $_home_theme_cookie_value;
+}
+elseif ($_home_theme_session_value === 'dark' || $_home_theme_session_value === 'light')
+{
+	$_home_theme_value = $_home_theme_session_value;
+}
+else
+{
+	$_home_theme_value = '';
+}
+$_home_theme_is_dark = $_home_theme_value === 'dark';
+$_home_theme_html_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
+$_home_theme_html_data = ' data-theme="' . ($_home_theme_is_dark ? 'dark' : 'light') . '"';
+$_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
+?>
 <!DOCTYPE html>
-<html lang="id">
+<html lang="id"<?php echo $_home_theme_html_class; ?><?php echo $_home_theme_html_data; ?>>
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<title><?php echo isset($title) ? htmlspecialchars($title, ENT_QUOTES, 'UTF-8') : 'Data Absensi Karyawan'; ?></title>
+	<link rel="icon" type="image/svg+xml" href="/src/assets/sinyal.svg">
+	<link rel="shortcut icon" type="image/svg+xml" href="/src/assets/sinyal.svg">
 	<link rel="preconnect" href="https://fonts.googleapis.com">
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 	<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -399,6 +428,20 @@ $can_edit_attendance_datetime = isset($can_edit_attendance_datetime) && $can_edi
 			background: linear-gradient(145deg, #a72f2f 0%, #d34a4a 100%);
 		}
 
+		.delete-part-btn {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			border: 0;
+			border-radius: 8px;
+			padding: 0.38rem 0.58rem;
+			font-size: 0.72rem;
+			font-weight: 700;
+			cursor: pointer;
+			color: #ffffff;
+			background: linear-gradient(145deg, #8a5a1a 0%, #d5902d 100%);
+		}
+
 		.edit-modal {
 			position: fixed;
 			inset: 0;
@@ -699,8 +742,39 @@ $can_edit_attendance_datetime = isset($can_edit_attendance_datetime) && $can_edi
 			}
 		}
 </style>
+	<script>
+		(function () {
+			var themeValue = "";
+			try {
+				themeValue = String(window.localStorage.getItem("home_index_theme") || "").toLowerCase();
+			} catch (error) {}
+			if (themeValue !== "dark" && themeValue !== "light") {
+				var cookieMatch = document.cookie.match(/(?:^|;\s*)home_index_theme=(dark|light)\b/i);
+				if (cookieMatch && cookieMatch[1]) {
+					themeValue = String(cookieMatch[1]).toLowerCase();
+				}
+			}
+			if (themeValue === "dark" || themeValue === "light") {
+				try {
+					window.localStorage.setItem("home_index_theme", themeValue);
+				} catch (error) {}
+				try {
+					document.cookie = "home_index_theme=" + encodeURIComponent(themeValue) + ";path=/;max-age=31536000;SameSite=Lax";
+				} catch (error) {}
+			}
+			if (themeValue === "dark") {
+				document.documentElement.classList.add("theme-dark");
+				document.documentElement.setAttribute("data-theme", "dark");
+			} else if (themeValue === "light") {
+				document.documentElement.classList.remove("theme-dark");
+				document.documentElement.setAttribute("data-theme", "light");
+			}
+		})();
+	</script>
+	<script src="<?php echo htmlspecialchars('/src/assets/js/theme-global-init.js?v=20260225f', ENT_QUOTES, 'UTF-8'); ?>"></script>
+		<link rel="stylesheet" href="<?php echo htmlspecialchars('/src/assets/css/theme-global.css?v=20260225k', ENT_QUOTES, 'UTF-8'); ?>">
 </head>
-<body>
+<body<?php echo $_home_theme_body_class; ?>>
 	<div class="page">
 		<div class="head">
 			<h1 class="title">Data Absensi Karyawan</h1>
@@ -783,26 +857,42 @@ $can_edit_attendance_datetime = isset($can_edit_attendance_datetime) && $can_edi
 									: '-';
 								$row_profile_photo = isset($row['profile_photo']) && trim((string) $row['profile_photo']) !== ''
 									? (string) $row['profile_photo']
-									: '/src/assets/fotoku.JPG';
+									: (is_file(FCPATH.'src/assets/fotoku.webp') ? '/src/assets/fotoku.webp' : '/src/assets/fotoku.JPG');
 								$row_profile_photo_url = $row_profile_photo;
 								if (strpos($row_profile_photo_url, 'data:') !== 0 && preg_match('/^https?:\/\//i', $row_profile_photo_url) !== 1)
 								{
 									$row_profile_photo_relative = ltrim($row_profile_photo_url, '/\\');
 									$row_profile_photo_info = pathinfo($row_profile_photo_relative);
 									$row_profile_photo_thumb_relative = '';
+									$row_profile_photo_cache_version = 0;
+									$row_profile_photo_absolute = FCPATH.str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $row_profile_photo_relative);
+									if (is_file($row_profile_photo_absolute))
+									{
+										$row_profile_photo_cache_version = (int) @filemtime($row_profile_photo_absolute);
+									}
 									if (isset($row_profile_photo_info['filename']) && trim((string) $row_profile_photo_info['filename']) !== '')
 									{
 										$row_profile_photo_dir = isset($row_profile_photo_info['dirname']) ? (string) $row_profile_photo_info['dirname'] : '';
 										$row_profile_photo_thumb_relative = $row_profile_photo_dir !== '' && $row_profile_photo_dir !== '.'
-											? $row_profile_photo_dir.'/'.$row_profile_photo_info['filename'].'_thumb.jpg'
-											: $row_profile_photo_info['filename'].'_thumb.jpg';
+											? $row_profile_photo_dir.'/'.$row_profile_photo_info['filename'].'_thumb.webp'
+											: $row_profile_photo_info['filename'].'_thumb.webp';
 									}
 									if ($row_profile_photo_thumb_relative !== '' &&
 										is_file(FCPATH.str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $row_profile_photo_thumb_relative)))
 									{
-										$row_profile_photo_relative = $row_profile_photo_thumb_relative;
+										$row_profile_photo_thumb_absolute = FCPATH.str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $row_profile_photo_thumb_relative);
+										$row_profile_photo_thumb_version = (int) @filemtime($row_profile_photo_thumb_absolute);
+										if ($row_profile_photo_thumb_version >= $row_profile_photo_cache_version)
+										{
+											$row_profile_photo_relative = $row_profile_photo_thumb_relative;
+											$row_profile_photo_cache_version = $row_profile_photo_thumb_version;
+										}
 									}
 									$row_profile_photo_url = base_url(ltrim($row_profile_photo_relative, '/'));
+									if ($row_profile_photo_cache_version > 0)
+									{
+										$row_profile_photo_url .= '?v='.$row_profile_photo_cache_version;
+									}
 								}
 								$row_address = isset($row['address']) && trim((string) $row['address']) !== ''
 									? (string) $row['address']
@@ -920,24 +1010,51 @@ $can_edit_attendance_datetime = isset($can_edit_attendance_datetime) && $can_edi
 									<td><?php echo htmlspecialchars($late_reason_display, ENT_QUOTES, 'UTF-8'); ?></td>
 									<td>
 										<div class="row-actions">
-											<button
-												type="button"
-												class="edit-btn"
-												data-edit-row
-												data-username="<?php echo htmlspecialchars($row_username, ENT_QUOTES, 'UTF-8'); ?>"
-												data-date="<?php echo htmlspecialchars($row_date_key, ENT_QUOTES, 'UTF-8'); ?>"
-												data-date-label="<?php echo htmlspecialchars(isset($row['date_label']) ? (string) $row['date_label'] : '-', ENT_QUOTES, 'UTF-8'); ?>"
-												data-check-in-time="<?php echo htmlspecialchars($check_in_raw, ENT_QUOTES, 'UTF-8'); ?>"
-												data-check-out-time="<?php echo htmlspecialchars($check_out_raw, ENT_QUOTES, 'UTF-8'); ?>"
-												data-current-cut="<?php echo htmlspecialchars((string) max(0, (int) round($salary_cut_amount)), ENT_QUOTES, 'UTF-8'); ?>"
-												data-record-version="<?php echo (int) $row_record_version; ?>"
-											>Edit</button>
-											<form method="post" action="<?php echo site_url('home/delete_attendance_record'); ?>" class="row-delete-form" onsubmit="return window.confirm('Hapus data absensi ini?');">
-												<input type="hidden" name="username" value="<?php echo htmlspecialchars($row_username, ENT_QUOTES, 'UTF-8'); ?>">
-												<input type="hidden" name="date" value="<?php echo htmlspecialchars($row_date_key, ENT_QUOTES, 'UTF-8'); ?>">
-												<input type="hidden" name="expected_version" value="<?php echo (int) $row_record_version; ?>">
-												<button type="submit" class="delete-btn">Hapus</button>
-											</form>
+											<?php if ($can_edit_attendance_records): ?>
+												<button
+													type="button"
+													class="edit-btn"
+													data-edit-row
+													data-username="<?php echo htmlspecialchars($row_username, ENT_QUOTES, 'UTF-8'); ?>"
+													data-date="<?php echo htmlspecialchars($row_date_key, ENT_QUOTES, 'UTF-8'); ?>"
+													data-date-label="<?php echo htmlspecialchars(isset($row['date_label']) ? (string) $row['date_label'] : '-', ENT_QUOTES, 'UTF-8'); ?>"
+													data-check-in-time="<?php echo htmlspecialchars($check_in_raw, ENT_QUOTES, 'UTF-8'); ?>"
+													data-check-out-time="<?php echo htmlspecialchars($check_out_raw, ENT_QUOTES, 'UTF-8'); ?>"
+													data-current-cut="<?php echo htmlspecialchars((string) max(0, (int) round($salary_cut_amount)), ENT_QUOTES, 'UTF-8'); ?>"
+													data-record-version="<?php echo (int) $row_record_version; ?>"
+												>Edit</button>
+											<?php endif; ?>
+											<?php if ($can_delete_attendance_records): ?>
+												<form method="post" action="<?php echo site_url('home/delete_attendance_record'); ?>" class="row-delete-form" onsubmit="return window.confirm('Hapus data absensi ini (masuk + pulang)?');">
+													<input type="hidden" name="username" value="<?php echo htmlspecialchars($row_username, ENT_QUOTES, 'UTF-8'); ?>">
+													<input type="hidden" name="date" value="<?php echo htmlspecialchars($row_date_key, ENT_QUOTES, 'UTF-8'); ?>">
+													<input type="hidden" name="expected_version" value="<?php echo (int) $row_record_version; ?>">
+													<button type="submit" class="delete-btn">Hapus Full</button>
+												</form>
+											<?php endif; ?>
+											<?php if ($can_partial_delete_attendance_records): ?>
+												<?php if ($has_real_time($check_in_raw)): ?>
+													<form method="post" action="<?php echo site_url('home/delete_attendance_record_partial'); ?>" class="row-delete-form" onsubmit="return window.confirm('Hapus absen masuk saja untuk data ini?');">
+														<input type="hidden" name="username" value="<?php echo htmlspecialchars($row_username, ENT_QUOTES, 'UTF-8'); ?>">
+														<input type="hidden" name="date" value="<?php echo htmlspecialchars($row_date_key, ENT_QUOTES, 'UTF-8'); ?>">
+														<input type="hidden" name="expected_version" value="<?php echo (int) $row_record_version; ?>">
+														<input type="hidden" name="delete_part" value="masuk">
+														<button type="submit" class="delete-part-btn">Hapus Masuk</button>
+													</form>
+												<?php endif; ?>
+												<?php if ($has_real_time($check_out_raw)): ?>
+													<form method="post" action="<?php echo site_url('home/delete_attendance_record_partial'); ?>" class="row-delete-form" onsubmit="return window.confirm('Hapus absen pulang saja untuk data ini?');">
+														<input type="hidden" name="username" value="<?php echo htmlspecialchars($row_username, ENT_QUOTES, 'UTF-8'); ?>">
+														<input type="hidden" name="date" value="<?php echo htmlspecialchars($row_date_key, ENT_QUOTES, 'UTF-8'); ?>">
+														<input type="hidden" name="expected_version" value="<?php echo (int) $row_record_version; ?>">
+														<input type="hidden" name="delete_part" value="pulang">
+														<button type="submit" class="delete-part-btn">Hapus Pulang</button>
+													</form>
+												<?php endif; ?>
+											<?php endif; ?>
+											<?php if (!$can_edit_attendance_records && !$can_delete_attendance_records && !$can_partial_delete_attendance_records): ?>
+												<span class="muted">Akses dibatasi</span>
+											<?php endif; ?>
 										</div>
 									</td>
 								</tr>
@@ -978,7 +1095,7 @@ $can_edit_attendance_datetime = isset($can_edit_attendance_datetime) && $can_edi
 						<div class="edit-field">
 							<label for="deductionEditDateInput" class="edit-label">Tanggal Absensi (Edit)</label>
 							<input id="deductionEditDateInput" class="edit-input" type="date" name="edit_date" autocomplete="off">
-							<p class="edit-help">Khusus bos/developer. Format tanggal: YYYY-MM-DD.</p>
+							<p class="edit-help">Khusus bos/developer/adminbaros/admin_cadasari. Format tanggal: YYYY-MM-DD.</p>
 						</div>
 						<div class="edit-field">
 							<label for="deductionCheckInInput" class="edit-label">Jam Masuk (Edit)</label>

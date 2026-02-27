@@ -168,6 +168,50 @@ class Login extends CI_Controller {
 		redirect('login');
 	}
 
+	public function logo()
+	{
+		$this->output->set_header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+		$this->output->set_header('Pragma: no-cache');
+
+		$svg_path = FCPATH.'src/assets/pns_new.svg';
+		if (is_file($svg_path))
+		{
+			$svg_content = @file_get_contents($svg_path);
+			if ($svg_content !== FALSE && trim((string) $svg_content) !== '')
+			{
+				$this->output
+					->set_content_type('image/svg+xml')
+					->set_output($svg_content);
+				return;
+			}
+		}
+
+		$png_candidates = array(
+			FCPATH.'src/assets/pns_new_login.png',
+			FCPATH.'src/assets/pns_new.png',
+			FCPATH.'src/assets/pns_logo_nav.png'
+		);
+		for ($i = 0; $i < count($png_candidates); $i += 1)
+		{
+			$png_path = (string) $png_candidates[$i];
+			if (!is_file($png_path))
+			{
+				continue;
+			}
+			$png_content = @file_get_contents($png_path);
+			if ($png_content === FALSE || $png_content === '')
+			{
+				continue;
+			}
+			$this->output
+				->set_content_type('image/png')
+				->set_output($png_content);
+			return;
+		}
+
+		show_404();
+	}
+
 	private function collab_state_file_path()
 	{
 		return APPPATH.'cache/admin_collab_state.json';

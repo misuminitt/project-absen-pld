@@ -8,7 +8,7 @@ if (!function_exists('absen_shift_profile_book'))
 		return array(
 			'pagi' => array(
 				'shift_name' => 'Shift Pagi - Sore',
-				'shift_time' => '07:00 - 17:00'
+				'shift_time' => '08:00 - 17:00'
 			),
 			'siang' => array(
 				'shift_name' => 'Shift Siang - Malam',
@@ -16,7 +16,7 @@ if (!function_exists('absen_shift_profile_book'))
 			),
 			'multishift' => array(
 				'shift_name' => 'Multi Shift',
-				'shift_time' => '07:00 - 23:59'
+				'shift_time' => '08:00 - 23:59'
 			)
 		);
 	}
@@ -114,6 +114,56 @@ if (!function_exists('absen_resolve_cross_branch_enabled'))
 		}
 
 		return 0;
+	}
+}
+
+if (!function_exists('absen_normalize_employee_id_value'))
+{
+	function absen_normalize_employee_id_value($value)
+	{
+		$text = trim((string) $value);
+		if ($text === '' || $text === '-')
+		{
+			return '';
+		}
+
+		$digits = preg_replace('/\D+/', '', $text);
+		if (!is_string($digits) || $digits === '')
+		{
+			return '';
+		}
+
+		$sequence = (int) $digits;
+		if ($sequence <= 0)
+		{
+			return '';
+		}
+
+		if ($sequence < 100)
+		{
+			return str_pad((string) $sequence, 2, '0', STR_PAD_LEFT);
+		}
+
+		return (string) $sequence;
+	}
+}
+
+if (!function_exists('absen_format_employee_id_sequence'))
+{
+	function absen_format_employee_id_sequence($sequence)
+	{
+		$sequence_value = (int) $sequence;
+		if ($sequence_value <= 0)
+		{
+			return '';
+		}
+
+		if ($sequence_value < 100)
+		{
+			return str_pad((string) $sequence_value, 2, '0', STR_PAD_LEFT);
+		}
+
+		return (string) $sequence_value;
 	}
 }
 
@@ -538,6 +588,96 @@ if (!function_exists('absen_sanitize_account_book'))
 			? $default_book['admin']
 			: array();
 		$allowed_admin_features = array('manage_accounts', 'sync_sheet_accounts', 'view_log_data');
+		$normalize_weekday_list = function ($days) {
+			$list = is_array($days) ? $days : array();
+			$normalized = array();
+			for ($i = 0; $i < count($list); $i += 1)
+			{
+				$weekday_n = (int) $list[$i];
+				if ($weekday_n < 1 || $weekday_n > 7)
+				{
+					continue;
+				}
+				if (!in_array($weekday_n, $normalized, TRUE))
+				{
+					$normalized[] = $weekday_n;
+				}
+			}
+			sort($normalized);
+			return $normalized;
+		};
+		$is_valid_date = function ($date_value) {
+			$date_value = trim((string) $date_value);
+			if ($date_value === '')
+			{
+				return FALSE;
+			}
+
+			$date_time = DateTime::createFromFormat('Y-m-d', $date_value);
+			return ($date_time instanceof DateTime) && $date_time->format('Y-m-d') === $date_value;
+		};
+		$normalize_schedule_ranges = function ($ranges) use ($is_valid_date) {
+			$list = array();
+			if (is_array($ranges))
+			{
+				if (isset($ranges['start_date']) || isset($ranges['end_date']) || isset($ranges['start']) || isset($ranges['end']))
+				{
+					$list[] = $ranges;
+				}
+				else
+				{
+					$list = $ranges;
+				}
+			}
+
+			$normalized = array();
+			$seen = array();
+			for ($i = 0; $i < count($list); $i += 1)
+			{
+				$row = isset($list[$i]) && is_array($list[$i]) ? $list[$i] : array();
+				$start_date = isset($row['start_date'])
+					? trim((string) $row['start_date'])
+					: (isset($row['start']) ? trim((string) $row['start']) : '');
+				$end_date = isset($row['end_date'])
+					? trim((string) $row['end_date'])
+					: (isset($row['end']) ? trim((string) $row['end']) : '');
+				if (!$is_valid_date($start_date) || !$is_valid_date($end_date))
+				{
+					continue;
+				}
+				if (strcmp($start_date, $end_date) > 0)
+				{
+					$temp_date = $start_date;
+					$start_date = $end_date;
+					$end_date = $temp_date;
+				}
+				$range_key = $start_date.'|'.$end_date;
+				if (isset($seen[$range_key]))
+				{
+					continue;
+				}
+				$seen[$range_key] = TRUE;
+				$normalized[] = array(
+					'start_date' => $start_date,
+					'end_date' => $end_date
+				);
+			}
+
+			usort($normalized, function ($a, $b) {
+				$a_start = isset($a['start_date']) ? (string) $a['start_date'] : '';
+				$b_start = isset($b['start_date']) ? (string) $b['start_date'] : '';
+				$start_compare = strcmp($a_start, $b_start);
+				if ($start_compare !== 0)
+				{
+					return $start_compare;
+				}
+				$a_end = isset($a['end_date']) ? (string) $a['end_date'] : '';
+				$b_end = isset($b['end_date']) ? (string) $b['end_date'] : '';
+				return strcmp($a_end, $b_end);
+			});
+
+			return $normalized;
+		};
 
 		$sanitized = array();
 		if (!is_array($account_book))
@@ -635,6 +775,9 @@ if (!function_exists('absen_sanitize_account_book'))
 				}
 				$cross_branch_enabled = absen_resolve_cross_branch_enabled($cross_branch_raw);
 			}
+			$employee_id = $role === 'admin'
+				? ''
+				: absen_normalize_employee_id_value(isset($row['employee_id']) ? $row['employee_id'] : '');
 
 			$phone = absen_normalize_phone_number(isset($row['phone']) ? $row['phone'] : '');
 			$job_title = trim((string) (isset($row['job_title']) ? $row['job_title'] : ''));
@@ -716,6 +859,15 @@ if (!function_exists('absen_sanitize_account_book'))
 			{
 				$weekly_day_off = 1;
 			}
+			$custom_allowed_weekdays = $normalize_weekday_list(
+				isset($row['custom_allowed_weekdays']) ? $row['custom_allowed_weekdays'] : array()
+			);
+			$custom_off_ranges = $normalize_schedule_ranges(
+				isset($row['custom_off_ranges']) ? $row['custom_off_ranges'] : array()
+			);
+			$custom_work_ranges = $normalize_schedule_ranges(
+				isset($row['custom_work_ranges']) ? $row['custom_work_ranges'] : array()
+			);
 
 			if ($role === 'admin')
 			{
@@ -725,6 +877,9 @@ if (!function_exists('absen_sanitize_account_book'))
 				$salary_monthly = 0;
 				$work_days = 22;
 				$weekly_day_off = 1;
+				$custom_allowed_weekdays = array();
+				$custom_off_ranges = array();
+				$custom_work_ranges = array();
 				$sheet_row = 0;
 				$sheet_sync_source = '';
 				$sheet_last_sync_at = '';
@@ -738,7 +893,7 @@ if (!function_exists('absen_sanitize_account_book'))
 				if (
 					strpos($shift_name_lower, 'multi') !== FALSE ||
 					(
-						(strpos($shift_time_lower, '06:30') !== FALSE || strpos($shift_time_lower, '07:00') !== FALSE) &&
+						(strpos($shift_time_lower, '06:30') !== FALSE || strpos($shift_time_lower, '07:00') !== FALSE || strpos($shift_time_lower, '08:00') !== FALSE) &&
 						(strpos($shift_time_lower, '23:59') !== FALSE || strpos($shift_time_lower, '23:00') !== FALSE)
 					)
 				)
@@ -767,6 +922,7 @@ if (!function_exists('absen_sanitize_account_book'))
 				'display_name' => $display_name,
 				'branch' => $branch,
 				'cross_branch_enabled' => $cross_branch_enabled,
+				'employee_id' => $employee_id,
 				'phone' => $phone,
 				'shift_name' => $shift_name,
 				'shift_time' => $shift_time,
@@ -774,6 +930,9 @@ if (!function_exists('absen_sanitize_account_book'))
 				'salary_monthly' => $salary_monthly,
 				'work_days' => $work_days,
 				'weekly_day_off' => $weekly_day_off,
+				'custom_allowed_weekdays' => $custom_allowed_weekdays,
+				'custom_off_ranges' => $custom_off_ranges,
+				'custom_work_ranges' => $custom_work_ranges,
 				'job_title' => $job_title,
 				'address' => $address,
 				'profile_photo' => $profile_photo,
@@ -879,10 +1038,14 @@ if (!function_exists('absen_sanitize_account_book'))
 			$sanitized[$required_username]['salary_monthly'] = 0;
 			$sanitized[$required_username]['work_days'] = 22;
 			$sanitized[$required_username]['weekly_day_off'] = 1;
+			$sanitized[$required_username]['custom_allowed_weekdays'] = array();
+			$sanitized[$required_username]['custom_off_ranges'] = array();
+			$sanitized[$required_username]['custom_work_ranges'] = array();
 			$sanitized[$required_username]['job_title'] = 'Admin';
 			$sanitized[$required_username]['sheet_row'] = 0;
 			$sanitized[$required_username]['sheet_sync_source'] = '';
 			$sanitized[$required_username]['sheet_last_sync_at'] = '';
+			$sanitized[$required_username]['employee_id'] = $required_username === 'admin' ? '00' : '';
 			$current_required_features = isset($sanitized[$required_username]['feature_permissions'])
 				? $sanitized[$required_username]['feature_permissions']
 				: array();
@@ -929,6 +1092,62 @@ if (!function_exists('absen_sanitize_account_book'))
 			if (!isset($sanitized[$required_username]['password_changed_at']))
 			{
 				$sanitized[$required_username]['password_changed_at'] = '';
+			}
+		}
+
+		$usernames = array_keys($sanitized);
+		sort($usernames, SORT_STRING);
+		$used_employee_ids = array();
+		$pending_usernames = array();
+		for ($i = 0; $i < count($usernames); $i += 1)
+		{
+			$username_key = (string) $usernames[$i];
+			$row = isset($sanitized[$username_key]) && is_array($sanitized[$username_key])
+				? $sanitized[$username_key]
+				: array();
+			$role = strtolower(trim((string) (isset($row['role']) ? $row['role'] : 'user')));
+			if ($role !== 'user')
+			{
+				if ($username_key === 'admin')
+				{
+					$used_employee_ids['00'] = TRUE;
+				}
+				continue;
+			}
+
+			$current_employee_id = absen_normalize_employee_id_value(isset($row['employee_id']) ? $row['employee_id'] : '');
+			if ($current_employee_id !== '' && !isset($used_employee_ids[$current_employee_id]))
+			{
+				$sanitized[$username_key]['employee_id'] = $current_employee_id;
+				$used_employee_ids[$current_employee_id] = TRUE;
+				continue;
+			}
+
+			$sanitized[$username_key]['employee_id'] = '';
+			$pending_usernames[] = $username_key;
+		}
+
+		$next_sequence = 1;
+		for ($i = 0; $i < count($pending_usernames); $i += 1)
+		{
+			$username_key = (string) $pending_usernames[$i];
+			$resolved_employee_id = '';
+			while ($next_sequence <= 9999)
+			{
+				$candidate_employee_id = absen_format_employee_id_sequence($next_sequence);
+				$next_sequence += 1;
+				if ($candidate_employee_id === '' || isset($used_employee_ids[$candidate_employee_id]))
+				{
+					continue;
+				}
+				$resolved_employee_id = $candidate_employee_id;
+				break;
+			}
+
+			$sanitized[$username_key]['employee_id'] = $resolved_employee_id;
+			if ($resolved_employee_id !== '')
+			{
+				$used_employee_ids[$resolved_employee_id] = TRUE;
 			}
 		}
 
@@ -1004,6 +1223,56 @@ if (!function_exists('absen_load_account_book'))
 		if (!is_array($sanitized) || empty($sanitized))
 		{
 			return absen_sanitize_account_book(absen_default_account_book());
+		}
+
+		$needs_employee_id_persist = FALSE;
+		foreach ($sanitized as $username_key => $row)
+		{
+			if (!is_array($row))
+			{
+				continue;
+			}
+
+			$role = strtolower(trim((string) (isset($row['role']) ? $row['role'] : 'user')));
+			$target_employee_id = isset($row['employee_id']) ? (string) $row['employee_id'] : '';
+			$source_employee_id = '';
+			if (isset($account_book[$username_key]) && is_array($account_book[$username_key]))
+			{
+				$source_employee_id = isset($account_book[$username_key]['employee_id'])
+					? (string) $account_book[$username_key]['employee_id']
+					: '';
+			}
+
+			if ($role === 'user')
+			{
+				if (absen_normalize_employee_id_value($source_employee_id) !== absen_normalize_employee_id_value($target_employee_id))
+				{
+					$needs_employee_id_persist = TRUE;
+					break;
+				}
+				continue;
+			}
+
+			if (strtolower(trim((string) $username_key)) === 'admin')
+			{
+				if (absen_normalize_employee_id_value($source_employee_id) !== '00')
+				{
+					$needs_employee_id_persist = TRUE;
+					break;
+				}
+				continue;
+			}
+
+			if (trim((string) $source_employee_id) !== '')
+			{
+				$needs_employee_id_persist = TRUE;
+				break;
+			}
+		}
+
+		if ($needs_employee_id_persist && function_exists('absen_save_account_book'))
+		{
+			@absen_save_account_book($sanitized);
 		}
 
 		return $sanitized;

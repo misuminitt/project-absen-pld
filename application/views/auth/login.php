@@ -7,22 +7,98 @@ if ($base_path === '/' || $base_path === '.') {
 	$base_path = '';
 }
 
-$logo_path = 'src/assets/pns_new.png';
-if (is_file(FCPATH.'src/assts/pns_new.png')) {
-	$logo_path = 'src/assts/pns_new.png';
+$logo_url = '';
+$logo_sources = array(
+	array('path' => 'src/assets/pns_new.svg', 'mime' => 'image/svg+xml'),
+	array('path' => 'src/assets/pns_logo_nav.svg', 'mime' => 'image/svg+xml'),
+	array('path' => 'src/assets/pns_new_login.png', 'mime' => 'image/png'),
+	array('path' => 'src/assets/pns_new.png', 'mime' => 'image/png'),
+	array('path' => 'src/assets/pns_logo_nav.png', 'mime' => 'image/png'),
+	array('path' => 'src/assets/pns_dashboard.png', 'mime' => 'image/png'),
+);
+for ($i = 0; $i < count($logo_sources); $i += 1)
+{
+	$source = isset($logo_sources[$i]) && is_array($logo_sources[$i]) ? $logo_sources[$i] : array();
+	$relative_path = isset($source['path']) ? trim((string) $source['path']) : '';
+	$mime_type = isset($source['mime']) ? trim((string) $source['mime']) : '';
+	if ($relative_path === '' || $mime_type === '')
+	{
+		continue;
+	}
+	$absolute_path = FCPATH.$relative_path;
+	if (!is_file($absolute_path))
+	{
+		continue;
+	}
+	if (!is_readable($absolute_path))
+	{
+		@chmod($absolute_path, 0644);
+		clearstatcache(TRUE, $absolute_path);
+	}
+	$file_contents = @file_get_contents($absolute_path);
+	if ($file_contents === FALSE || $file_contents === '')
+	{
+		continue;
+	}
+	$logo_url = 'data:'.$mime_type.';base64,'.base64_encode($file_contents);
+	break;
 }
-elseif (is_file(FCPATH.'src/assets/pns_new.png')) {
-	$logo_path = 'src/assets/pns_new.png';
+if ($logo_url === '')
+{
+	$logo_url = 'data:image/gif;base64,R0lGODlhAQABAAAAACw=';
 }
-
-$logo_url = $base_path.'/'.$logo_path;
+$favicon_path = 'src/assets/sinyal.svg';
+$favicon_url = site_url('home/favicon');
+if (is_file(FCPATH.$favicon_path)) {
+	$favicon_url .= '?v='.rawurlencode((string) @filemtime(FCPATH.$favicon_path));
+}
+$theme_global_css_file = 'src/assets/css/theme-global.css';
+$theme_global_js_file = 'src/assets/js/theme-global-init.js';
+$theme_global_css_path = FCPATH.$theme_global_css_file;
+$theme_global_js_path = FCPATH.$theme_global_js_file;
+$theme_global_css_version = is_file($theme_global_css_path) ? (string) @filemtime($theme_global_css_path) : '1';
+$theme_global_js_version = is_file($theme_global_js_path) ? (string) @filemtime($theme_global_js_path) : '1';
+if ($theme_global_css_version === '')
+{
+	$theme_global_css_version = '1';
+}
+if ($theme_global_js_version === '')
+{
+	$theme_global_js_version = '1';
+}
+?>
+<?php
+$_home_theme_cookie_value = isset($_COOKIE['home_index_theme']) ? strtolower(trim((string) $_COOKIE['home_index_theme'])) : '';
+$_home_theme_session_value = '';
+if (isset($this) && isset($this->session) && method_exists($this->session, 'userdata'))
+{
+	$_home_theme_session_value = strtolower(trim((string) $this->session->userdata('home_index_theme')));
+}
+if ($_home_theme_cookie_value === 'dark' || $_home_theme_cookie_value === 'light')
+{
+	$_home_theme_value = $_home_theme_cookie_value;
+}
+elseif ($_home_theme_session_value === 'dark' || $_home_theme_session_value === 'light')
+{
+	$_home_theme_value = $_home_theme_session_value;
+}
+else
+{
+	$_home_theme_value = '';
+}
+$_home_theme_is_dark = $_home_theme_value === 'dark';
+$_home_theme_html_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
+$_home_theme_html_data = ' data-theme="' . ($_home_theme_is_dark ? 'dark' : 'light') . '"';
+$_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 ?>
 <!DOCTYPE html>
-<html lang="id">
+<html lang="id"<?php echo $_home_theme_html_class; ?><?php echo $_home_theme_html_data; ?>>
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<title><?php echo isset($title) ? $title : 'Login Absen Online'; ?></title>
+	<link rel="icon" href="<?php echo htmlspecialchars($favicon_url, ENT_QUOTES, 'UTF-8'); ?>">
+	<link rel="shortcut icon" href="<?php echo htmlspecialchars($favicon_url, ENT_QUOTES, 'UTF-8'); ?>">
 	<link rel="preconnect" href="https://fonts.googleapis.com">
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 	<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -71,6 +147,17 @@ $logo_url = $base_path.'/'.$logo_path;
 			justify-content: center;
 			padding: clamp(26px, 4vh, 44px) 24px;
 			overflow: hidden;
+		}
+
+		@media (min-width: 992px) {
+			/* Desktop login: place the native theme switch at bottom-right like mobile. */
+			#themeToggleButton.theme-navbar-toggle {
+				position: fixed;
+				right: 16px;
+				bottom: calc(66px + env(safe-area-inset-bottom));
+				z-index: 1201;
+				margin: 0;
+			}
 		}
 
 		.bg-shape {
@@ -160,7 +247,7 @@ $logo_url = $base_path.'/'.$logo_path;
 
 		.logo-badge {
 			position: absolute;
-			top: -230px;
+			top: -220px;
 			left: 50%;
 			transform: translateX(-50%);
 			z-index: 3;
@@ -172,8 +259,8 @@ $logo_url = $base_path.'/'.$logo_path;
 		}
 
 		.logo-image {
-			width: 340px;
-			height: 340px;
+			width: 300px;
+			height: 300px;
 			object-fit: contain;
 			filter: drop-shadow(0 17px 10px rgba(8, 37, 72, 0.7));
 		}
@@ -289,6 +376,60 @@ $logo_url = $base_path.'/'.$logo_path;
 			transform: translateY(1px);
 		}
 
+		/* Fallback dark mode khusus login agar teks tetap kontras walau cache global belum update */
+		html.theme-dark body,
+		body.theme-dark {
+			background:
+				radial-gradient(circle at 12% 18%, rgba(78, 145, 196, 0.35) 0%, transparent 45%),
+				radial-gradient(circle at 85% 14%, rgba(95, 122, 148, 0.32) 0%, transparent 43%),
+				radial-gradient(circle at 76% 86%, rgba(77, 132, 124, 0.26) 0%, transparent 42%),
+				linear-gradient(145deg, #0b2034 0%, #081a2a 52%, #071526 100%) !important;
+			color: #e8f2ff !important;
+		}
+
+		html.theme-dark .login-card,
+		body.theme-dark .login-card {
+			background: linear-gradient(150deg, rgba(20, 42, 64, 0.86) 0%, rgba(12, 28, 45, 0.74) 100%) !important;
+			border-color: rgba(120, 162, 199, 0.35) !important;
+			box-shadow:
+				0 32px 65px rgba(0, 0, 0, 0.42),
+				inset 1px 1px 0 rgba(202, 224, 246, 0.12),
+				inset -1px -1px 0 rgba(18, 40, 62, 0.2) !important;
+		}
+
+		html.theme-dark .login-card h1,
+		body.theme-dark .login-card h1 {
+			color: #edf6ff !important;
+			text-shadow: 0 1px 0 rgba(0, 0, 0, 0.26);
+		}
+
+		html.theme-dark .login-card .subtitle,
+		body.theme-dark .login-card .subtitle {
+			color: #c7d8ea !important;
+		}
+
+		html.theme-dark .login-card label,
+		body.theme-dark .login-card label {
+			color: #d9e7f6 !important;
+		}
+
+		html.theme-dark .login-card .reset-link,
+		body.theme-dark .login-card .reset-link {
+			color: #9fcbff !important;
+		}
+
+		html.theme-dark .login-card .input-field,
+		body.theme-dark .login-card .input-field {
+			background: #0f2436 !important;
+			border-color: #3e5974 !important;
+			color: #e6eef8 !important;
+		}
+
+		html.theme-dark .login-card .input-field::placeholder,
+		body.theme-dark .login-card .input-field::placeholder {
+			color: #9fb5cb !important;
+		}
+
 		@keyframes shakeCard {
 			0%,
 			100% { transform: translateX(0); }
@@ -321,7 +462,7 @@ $logo_url = $base_path.'/'.$logo_path;
 			}
 
 			.logo-badge {
-				top: -178px;
+				top: -174px;
 			}
 
 			h1 {
@@ -343,12 +484,12 @@ $logo_url = $base_path.'/'.$logo_path;
 			}
 
 			.logo-badge {
-				top: -170px;
+				top: -164px;
 			}
 
 			.logo-image {
-				width: 270px;
-				height: 270px;
+				width: 240px;
+				height: 240px;
 			}
 
 			.subtitle {
@@ -379,78 +520,143 @@ $logo_url = $base_path.'/'.$logo_path;
 			}
 		}
 
-		/* mobile-fix-20260219-logo-lock-center */
+		/* mobile-fix-logo-card-spacing */
 		@media (max-width: 760px) {
 			body {
 				padding: 18px 12px;
 				overflow: auto;
-				display: flex;
-				align-items: center;
-				justify-content: center;
+				display: block;
 			}
 
 			.shell {
 				max-width: 460px;
 				width: 100%;
 				min-height: calc(100dvh - 36px);
-				padding-top: 0;
 				display: flex;
+				flex-direction: column;
 				align-items: center;
-				justify-content: center;
-			}
-
-			.login-card {
-				margin-top: 0;
-				width: 100%;
-				padding: 24px 18px 22px;
-				border-radius: 22px;
+				justify-content: flex-start;
+				padding-top: clamp(10px, 2.4vh, 20px);
 			}
 
 			.logo-badge {
-				position: fixed;
-				top: -88px;
-				left: 50%;
-				transform: translateX(-50%);
-				z-index: 4;
+				position: relative;
+				top: calc(clamp(4px, 1.2vh, 12px) - 50px);
+				left: auto;
+				transform: none;
+				z-index: 5;
+				margin-top: 0;
+				/* Negative margin keeps logo visually layered above the card. */
+				margin-bottom: clamp(-52px, -10vw, -34px);
 			}
 
 			.logo-image {
-				width: 300px;
-				height: 300px;
+				width: clamp(220px, 62vw, 270px);
+				height: clamp(220px, 62vw, 270px);
+			}
+
+			.login-card {
+				margin-top: calc(clamp(10px, 2.2vh, 18px) - 50px);
+				width: 100%;
+				padding: 24px 18px 22px;
+				border-radius: 22px;
 			}
 		}
 
 		@media (max-width: 420px) {
 			.shell {
-				min-height: calc(100dvh - 36px);
-			}
-
-			.login-card {
-				padding: 20px 16px;
+				min-height: calc(100dvh - 28px);
 			}
 
 			.logo-badge {
-				position: fixed;
-				top: -88px;
-				left: 50%;
-				transform: translateX(-50%);
-				z-index: 4;
+				top: calc(clamp(2px, 1vh, 8px) - 50px);
+				margin-top: 0;
+				margin-bottom: clamp(-44px, -11vw, -28px);
 			}
 
 			.logo-image {
-				width: 300px;
-				height: 300px;
+				width: clamp(210px, 64vw, 250px);
+				height: clamp(210px, 64vw, 250px);
+			}
+
+			.login-card {
+				margin-top: calc(clamp(8px, 1.8vh, 14px) - 50px);
+				padding: 20px 16px;
+			}
+		}
+
+		/* iOS short-screen tweak (e.g. iPhone 16): move logo + card up 17px */
+		@supports (-webkit-touch-callout: none) {
+			@media (max-width: 760px) and (max-height: 875px) {
+				.logo-badge {
+					top: calc(clamp(4px, 1.2vh, 12px) - 83px);
+				}
+
+				.login-card {
+					margin-top: calc(clamp(10px, 2.2vh, 18px) - 83px);
+				}
+			}
+
+			@media (max-width: 420px) and (max-height: 875px) {
+				.logo-badge {
+					top: calc(clamp(2px, 1vh, 8px) - 83px);
+				}
+
+				.login-card {
+					margin-top: calc(clamp(8px, 1.8vh, 14px) - 83px);
+				}
 			}
 		}
 </style>
+	<script>
+		(function () {
+			var themeValue = "";
+			try {
+				themeValue = String(window.localStorage.getItem("home_index_theme") || "").toLowerCase();
+			} catch (error) {}
+			if (themeValue !== "dark" && themeValue !== "light") {
+				var cookieMatch = document.cookie.match(/(?:^|;\s*)home_index_theme=(dark|light)\b/i);
+				if (cookieMatch && cookieMatch[1]) {
+					themeValue = String(cookieMatch[1]).toLowerCase();
+				}
+			}
+			if (themeValue === "dark" || themeValue === "light") {
+				try {
+					window.localStorage.setItem("home_index_theme", themeValue);
+				} catch (error) {}
+				try {
+					document.cookie = "home_index_theme=" + encodeURIComponent(themeValue) + ";path=/;max-age=31536000;SameSite=Lax";
+				} catch (error) {}
+			}
+			if (themeValue === "dark") {
+				document.documentElement.classList.add("theme-dark");
+				document.documentElement.setAttribute("data-theme", "dark");
+			} else if (themeValue === "light") {
+				document.documentElement.classList.remove("theme-dark");
+				document.documentElement.setAttribute("data-theme", "light");
+			}
+		})();
+	</script>
+	<script src="<?php echo htmlspecialchars(base_url($theme_global_js_file), ENT_QUOTES, 'UTF-8'); ?>?v=<?php echo rawurlencode($theme_global_js_version); ?>"></script>
+		<link rel="stylesheet" href="<?php echo htmlspecialchars(base_url($theme_global_css_file), ENT_QUOTES, 'UTF-8'); ?>?v=<?php echo rawurlencode($theme_global_css_version); ?>">
 </head>
-<body>
+<body<?php echo $_home_theme_body_class; ?> data-theme-mobile-toggle="1" data-theme-native-toggle="1">
 	<div class="bg-shape bg-shape-a"></div>
 	<div class="bg-shape bg-shape-b"></div>
+	<button type="button" class="theme-navbar-toggle" id="themeToggleButton" aria-label="Aktifkan mode malam" aria-pressed="false" title="Ganti ke mode malam">
+		<span class="theme-navbar-toggle-track" aria-hidden="true">
+			<span class="theme-navbar-toggle-icon sun">&#9728;</span>
+			<span class="theme-navbar-toggle-icon moon">&#9790;</span>
+			<span class="theme-navbar-toggle-knob"></span>
+		</span>
+	</button>
 
 	<main class="shell">
 		<div class="logo-badge">
-			<img class="logo-image" src="<?php echo htmlspecialchars($logo_url, ENT_QUOTES, 'UTF-8'); ?>" alt="PNS Absen Logo">
+			<img
+				class="logo-image"
+				src="<?php echo htmlspecialchars($logo_url, ENT_QUOTES, 'UTF-8'); ?>"
+				alt="PNS Absen Logo">
 		</div>
 
 		<section class="login-card<?php echo !empty($login_error) ? ' has-error' : ''; ?>" data-login-card data-error="<?php echo !empty($login_error) ? '1' : '0'; ?>">

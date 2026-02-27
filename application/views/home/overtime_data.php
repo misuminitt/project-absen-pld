@@ -46,12 +46,38 @@ $notice_success = $this->session->flashdata('overtime_notice_success');
 $notice_error = $this->session->flashdata('overtime_notice_error');
 $is_developer_actor = isset($is_developer_actor) && $is_developer_actor === TRUE;
 ?>
+<?php
+$_home_theme_cookie_value = isset($_COOKIE['home_index_theme']) ? strtolower(trim((string) $_COOKIE['home_index_theme'])) : '';
+$_home_theme_session_value = '';
+if (isset($this) && isset($this->session) && method_exists($this->session, 'userdata'))
+{
+	$_home_theme_session_value = strtolower(trim((string) $this->session->userdata('home_index_theme')));
+}
+if ($_home_theme_cookie_value === 'dark' || $_home_theme_cookie_value === 'light')
+{
+	$_home_theme_value = $_home_theme_cookie_value;
+}
+elseif ($_home_theme_session_value === 'dark' || $_home_theme_session_value === 'light')
+{
+	$_home_theme_value = $_home_theme_session_value;
+}
+else
+{
+	$_home_theme_value = '';
+}
+$_home_theme_is_dark = $_home_theme_value === 'dark';
+$_home_theme_html_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
+$_home_theme_html_data = ' data-theme="' . ($_home_theme_is_dark ? 'dark' : 'light') . '"';
+$_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
+?>
 <!DOCTYPE html>
-<html lang="id">
+<html lang="id"<?php echo $_home_theme_html_class; ?><?php echo $_home_theme_html_data; ?>>
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<title><?php echo isset($title) ? htmlspecialchars($title, ENT_QUOTES, 'UTF-8') : 'Data Lembur'; ?></title>
+	<link rel="icon" type="image/svg+xml" href="/src/assets/sinyal.svg">
+	<link rel="shortcut icon" type="image/svg+xml" href="/src/assets/sinyal.svg">
 	<link rel="preconnect" href="https://fonts.googleapis.com">
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 	<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -546,19 +572,75 @@ $is_developer_actor = isset($is_developer_actor) && $is_developer_actor === TRUE
 			}
 		}
 
-		@media (max-width: 520px) {
-			.actions .btn {
-				flex: 1 1 calc(50% - 0.4rem);
-				justify-content: center;
+			@media (max-width: 520px) {
+				.actions .btn {
+					flex: 1 1 calc(50% - 0.4rem);
+					justify-content: center;
+				}
+
+				.actions .btn.primary {
+					flex-basis: 100%;
+				}
 			}
 
-			.actions .btn.primary {
-				flex-basis: 100%;
+			/* dark-fix: remove horizontal glow line under cards */
+			html.theme-dark body {
+				background: #0d1a28 !important;
+				background-image: none !important;
 			}
-		}
-</style>
-</head>
-<body>
+
+			html.theme-dark .page::before,
+			html.theme-dark .page::after {
+				content: none !important;
+				background: none !important;
+				box-shadow: none !important;
+			}
+
+			html.theme-dark .form-card,
+			html.theme-dark .table-card {
+				box-shadow: none !important;
+			}
+	</style>
+	<script>
+		(function () {
+			var themeValue = "";
+			try {
+				themeValue = String(window.localStorage.getItem("home_index_theme") || "").toLowerCase();
+			} catch (error) {}
+			if (themeValue !== "dark" && themeValue !== "light") {
+				var cookieMatch = document.cookie.match(/(?:^|;\s*)home_index_theme=(dark|light)\b/i);
+				if (cookieMatch && cookieMatch[1]) {
+					themeValue = String(cookieMatch[1]).toLowerCase();
+				}
+			}
+			if (themeValue === "dark" || themeValue === "light") {
+				try {
+					window.localStorage.setItem("home_index_theme", themeValue);
+				} catch (error) {}
+				try {
+					document.cookie = "home_index_theme=" + encodeURIComponent(themeValue) + ";path=/;max-age=31536000;SameSite=Lax";
+				} catch (error) {}
+			}
+			if (themeValue === "dark") {
+				document.documentElement.classList.add("theme-dark");
+				document.documentElement.setAttribute("data-theme", "dark");
+			} else if (themeValue === "light") {
+				document.documentElement.classList.remove("theme-dark");
+				document.documentElement.setAttribute("data-theme", "light");
+			}
+		})();
+	</script>
+		<script src="<?php echo htmlspecialchars('/src/assets/js/theme-global-init.js?v=20260225f', ENT_QUOTES, 'UTF-8'); ?>"></script>
+		<link rel="stylesheet" href="<?php echo htmlspecialchars('/src/assets/css/theme-global.css?v=20260225k', ENT_QUOTES, 'UTF-8'); ?>">
+		<style>
+			/* late override: ensure no horizontal bright band in dark mode */
+			html.theme-dark body {
+				background: #0d1a28 !important;
+				background-image: none !important;
+			}
+		</style>
+	</head>
+<body<?php echo $_home_theme_body_class; ?>>
 	<div class="page">
 		<div class="head">
 			<h1 class="title">Data Lembur</h1>
@@ -663,7 +745,7 @@ $is_developer_actor = isset($is_developer_actor) && $is_developer_actor === TRUE
 									: '-';
 								$profile_photo_value = isset($row['profile_photo']) && trim((string) $row['profile_photo']) !== ''
 									? (string) $row['profile_photo']
-									: '/src/assets/fotoku.JPG';
+									: (is_file(FCPATH.'src/assets/fotoku.webp') ? '/src/assets/fotoku.webp' : '/src/assets/fotoku.JPG');
 								$profile_photo_url = $profile_photo_value;
 								if (strpos($profile_photo_url, 'data:') !== 0 && preg_match('/^https?:\/\//i', $profile_photo_url) !== 1)
 								{
@@ -674,8 +756,8 @@ $is_developer_actor = isset($is_developer_actor) && $is_developer_actor === TRUE
 									{
 										$profile_photo_dir = isset($profile_photo_info['dirname']) ? (string) $profile_photo_info['dirname'] : '';
 										$profile_photo_thumb_relative = $profile_photo_dir !== '' && $profile_photo_dir !== '.'
-											? $profile_photo_dir.'/'.$profile_photo_info['filename'].'_thumb.jpg'
-											: $profile_photo_info['filename'].'_thumb.jpg';
+											? $profile_photo_dir.'/'.$profile_photo_info['filename'].'_thumb.webp'
+											: $profile_photo_info['filename'].'_thumb.webp';
 									}
 									if ($profile_photo_thumb_relative !== '' &&
 										is_file(FCPATH.str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $profile_photo_thumb_relative)))

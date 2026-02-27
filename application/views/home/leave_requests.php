@@ -5,6 +5,8 @@ $notice_success = $this->session->flashdata('leave_notice_success');
 $notice_warning = $this->session->flashdata('leave_notice_warning');
 $notice_error = $this->session->flashdata('leave_notice_error');
 $is_developer_actor = isset($is_developer_actor) && $is_developer_actor === TRUE;
+$can_process_leave_requests = isset($can_process_leave_requests) && $can_process_leave_requests === TRUE;
+$can_delete_leave_requests = isset($can_delete_leave_requests) && $can_delete_leave_requests === TRUE;
 $script_name = isset($_SERVER['SCRIPT_NAME']) ? (string) $_SERVER['SCRIPT_NAME'] : '';
 $base_path = str_replace('\\', '/', dirname($script_name));
 if ($base_path === '/' || $base_path === '.')
@@ -12,12 +14,38 @@ if ($base_path === '/' || $base_path === '.')
 	$base_path = '';
 }
 ?>
+<?php
+$_home_theme_cookie_value = isset($_COOKIE['home_index_theme']) ? strtolower(trim((string) $_COOKIE['home_index_theme'])) : '';
+$_home_theme_session_value = '';
+if (isset($this) && isset($this->session) && method_exists($this->session, 'userdata'))
+{
+	$_home_theme_session_value = strtolower(trim((string) $this->session->userdata('home_index_theme')));
+}
+if ($_home_theme_cookie_value === 'dark' || $_home_theme_cookie_value === 'light')
+{
+	$_home_theme_value = $_home_theme_cookie_value;
+}
+elseif ($_home_theme_session_value === 'dark' || $_home_theme_session_value === 'light')
+{
+	$_home_theme_value = $_home_theme_session_value;
+}
+else
+{
+	$_home_theme_value = '';
+}
+$_home_theme_is_dark = $_home_theme_value === 'dark';
+$_home_theme_html_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
+$_home_theme_html_data = ' data-theme="' . ($_home_theme_is_dark ? 'dark' : 'light') . '"';
+$_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
+?>
 <!DOCTYPE html>
-<html lang="id">
+<html lang="id"<?php echo $_home_theme_html_class; ?><?php echo $_home_theme_html_data; ?>>
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<title><?php echo isset($title) ? htmlspecialchars($title, ENT_QUOTES, 'UTF-8') : 'Pengajuan Cuti / Izin'; ?></title>
+	<link rel="icon" type="image/svg+xml" href="/src/assets/sinyal.svg">
+	<link rel="shortcut icon" type="image/svg+xml" href="/src/assets/sinyal.svg">
 	<link rel="preconnect" href="https://fonts.googleapis.com">
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 	<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -510,14 +538,46 @@ if ($base_path === '/' || $base_path === '.')
 			}
 		}
 </style>
+	<script>
+		(function () {
+			var themeValue = "";
+			try {
+				themeValue = String(window.localStorage.getItem("home_index_theme") || "").toLowerCase();
+			} catch (error) {}
+			if (themeValue !== "dark" && themeValue !== "light") {
+				var cookieMatch = document.cookie.match(/(?:^|;\s*)home_index_theme=(dark|light)\b/i);
+				if (cookieMatch && cookieMatch[1]) {
+					themeValue = String(cookieMatch[1]).toLowerCase();
+				}
+			}
+			if (themeValue === "dark" || themeValue === "light") {
+				try {
+					window.localStorage.setItem("home_index_theme", themeValue);
+				} catch (error) {}
+				try {
+					document.cookie = "home_index_theme=" + encodeURIComponent(themeValue) + ";path=/;max-age=31536000;SameSite=Lax";
+				} catch (error) {}
+			}
+			if (themeValue === "dark") {
+				document.documentElement.classList.add("theme-dark");
+				document.documentElement.setAttribute("data-theme", "dark");
+			} else if (themeValue === "light") {
+				document.documentElement.classList.remove("theme-dark");
+				document.documentElement.setAttribute("data-theme", "light");
+			}
+		})();
+	</script>
+	<script src="<?php echo htmlspecialchars('/src/assets/js/theme-global-init.js?v=20260225f', ENT_QUOTES, 'UTF-8'); ?>"></script>
+		<link rel="stylesheet" href="<?php echo htmlspecialchars('/src/assets/css/theme-global.css?v=20260225k', ENT_QUOTES, 'UTF-8'); ?>">
 </head>
-<body>
+<body<?php echo $_home_theme_body_class; ?>>
 	<div class="page">
 		<div class="head">
 			<h1 class="title">Pengajuan Cuti / Izin</h1>
 			<div class="actions">
 				<a href="<?php echo site_url('home'); ?>" class="btn outline">Kembali Dashboard</a>
 				<a href="<?php echo site_url('home/loan_requests'); ?>" class="btn outline">Data Pinjaman</a>
+				<a href="<?php echo site_url('home/day_off_swap_requests'); ?>" class="btn outline">Tukar Hari Libur</a>
 				<a href="<?php echo site_url('home/employee_data'); ?>" class="btn outline">Data Absensi</a>
 				<a href="<?php echo site_url('logout'); ?>" class="btn primary">Logout</a>
 			</div>
@@ -585,7 +645,7 @@ if ($base_path === '/' || $base_path === '.')
 								$employee_id_value = isset($row['employee_id']) && trim((string) $row['employee_id']) !== '' ? (string) $row['employee_id'] : '-';
 								$profile_photo_value = isset($row['profile_photo']) && trim((string) $row['profile_photo']) !== ''
 									? (string) $row['profile_photo']
-									: '/src/assets/fotoku.JPG';
+									: (is_file(FCPATH.'src/assets/fotoku.webp') ? '/src/assets/fotoku.webp' : '/src/assets/fotoku.JPG');
 								$profile_photo_url = $profile_photo_value;
 								if (strpos($profile_photo_url, 'data:') !== 0 && preg_match('/^https?:\/\//i', $profile_photo_url) !== 1)
 								{
@@ -596,8 +656,8 @@ if ($base_path === '/' || $base_path === '.')
 									{
 										$profile_photo_dir = isset($profile_photo_info['dirname']) ? (string) $profile_photo_info['dirname'] : '';
 										$profile_photo_thumb_relative = $profile_photo_dir !== '' && $profile_photo_dir !== '.'
-											? $profile_photo_dir.'/'.$profile_photo_info['filename'].'_thumb.jpg'
-											: $profile_photo_info['filename'].'_thumb.jpg';
+											? $profile_photo_dir.'/'.$profile_photo_info['filename'].'_thumb.webp'
+											: $profile_photo_info['filename'].'_thumb.webp';
 									}
 									if ($profile_photo_thumb_relative !== '' &&
 										is_file(FCPATH.str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $profile_photo_thumb_relative)))
@@ -651,16 +711,16 @@ if ($base_path === '/' || $base_path === '.')
 									<td><span class="status-chip <?php echo htmlspecialchars($status_class, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($status_label, ENT_QUOTES, 'UTF-8'); ?></span></td>
 									<td>
 										<div class="admin-actions">
-											<?php if ($is_waiting && $request_id !== ''): ?>
+											<?php if ($can_process_leave_requests && $is_waiting && $request_id !== ''): ?>
 												<form method="post" action="<?php echo site_url('home/update_leave_request_status'); ?>" class="admin-action-form">
 													<input type="hidden" name="request_id" value="<?php echo htmlspecialchars($request_id, ENT_QUOTES, 'UTF-8'); ?>">
 													<button type="submit" name="status" value="diterima" class="admin-btn approve">Terima</button>
 													<button type="submit" name="status" value="ditolak" class="admin-btn reject">Tolak</button>
 												</form>
 											<?php else: ?>
-												<span class="processed-label">Sudah diproses</span>
+												<span class="processed-label"><?php echo $is_waiting ? 'Akses dibatasi' : 'Sudah diproses'; ?></span>
 											<?php endif; ?>
-											<?php if ($is_developer_actor && $request_id !== ''): ?>
+											<?php if ($can_delete_leave_requests && $request_id !== ''): ?>
 												<form method="post" action="<?php echo site_url('home/delete_leave_request'); ?>" class="admin-action-form" onsubmit="return window.confirm('Hapus data pengajuan ini?');">
 													<input type="hidden" name="request_id" value="<?php echo htmlspecialchars($request_id, ENT_QUOTES, 'UTF-8'); ?>">
 													<button type="submit" class="admin-btn delete">Hapus</button>

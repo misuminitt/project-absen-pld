@@ -36,40 +36,53 @@ if ($base_path === '/' || $base_path === '.')
 	$base_path = '';
 }
 
-$logo_path = 'src/assets/pns_logo_nav.png';
-if (is_file(FCPATH.'src/assets/pns_logo_nav.png'))
+$navbar_logo_path = 'src/assets/pns_logo_nav.svg';
+$favicon_path = 'src/assets/sinyal.svg';
+$logo_url = base_url($navbar_logo_path);
+$logo_version = is_file(FCPATH.$navbar_logo_path) ? (string) @md5_file(FCPATH.$navbar_logo_path) : '';
+if ($logo_version !== '')
 {
-	$logo_path = 'src/assets/pns_logo_nav.png';
+	$logo_url .= '?v='.rawurlencode($logo_version);
 }
-elseif (is_file(FCPATH.'src/assts/pns_logo_nav.png'))
+$favicon_url = site_url('home/favicon');
+$favicon_version = is_file(FCPATH.$favicon_path) ? (string) @md5_file(FCPATH.$favicon_path) : '';
+if ($favicon_version !== '')
 {
-	$logo_path = 'src/assts/pns_logo_nav.png';
+	$favicon_url .= '?v='.rawurlencode($favicon_version);
 }
-elseif (is_file(FCPATH.'src/assets/pns_new.png'))
+?>
+<?php
+$_home_theme_cookie_value = isset($_COOKIE['home_index_theme']) ? strtolower(trim((string) $_COOKIE['home_index_theme'])) : '';
+$_home_theme_session_value = '';
+if (isset($this) && isset($this->session) && method_exists($this->session, 'userdata'))
 {
-	$logo_path = 'src/assets/pns_new.png';
+	$_home_theme_session_value = strtolower(trim((string) $this->session->userdata('home_index_theme')));
 }
-elseif (is_file(FCPATH.'src/assts/pns_new.png'))
+if ($_home_theme_cookie_value === 'dark' || $_home_theme_cookie_value === 'light')
 {
-	$logo_path = 'src/assts/pns_new.png';
+	$_home_theme_value = $_home_theme_cookie_value;
 }
-elseif (is_file(FCPATH.'src/assets/pns_dashboard.png'))
+elseif ($_home_theme_session_value === 'dark' || $_home_theme_session_value === 'light')
 {
-	$logo_path = 'src/assets/pns_dashboard.png';
+	$_home_theme_value = $_home_theme_session_value;
 }
-elseif (is_file(FCPATH.'src/assts/pns_dashboard.png'))
+else
 {
-	$logo_path = 'src/assts/pns_dashboard.png';
+	$_home_theme_value = '';
 }
-
-$logo_url = $base_path.'/'.$logo_path;
+$_home_theme_is_dark = $_home_theme_value === 'dark';
+$_home_theme_html_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
+$_home_theme_html_data = ' data-theme="' . ($_home_theme_is_dark ? 'dark' : 'light') . '"';
+$_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 ?>
 <!DOCTYPE html>
-<html lang="id">
+<html lang="id"<?php echo $_home_theme_html_class; ?><?php echo $_home_theme_html_data; ?>>
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
 	<title><?php echo isset($title) ? htmlspecialchars($title, ENT_QUOTES, 'UTF-8') : 'Log Data Aktivitas'; ?></title>
+	<link rel="icon" type="image/svg+xml" href="/src/assets/sinyal.svg">
+	<link rel="shortcut icon" type="image/svg+xml" href="/src/assets/sinyal.svg">
 	<link rel="preconnect" href="https://fonts.googleapis.com">
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 	<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -132,9 +145,14 @@ $logo_url = $base_path.'/'.$logo_path;
 		}
 
 		.brand-logo {
-			height: 48px;
+			height: 40px;
 			width: auto;
+			display: block;
+			margin-right: 4.2rem;
+			transform: scale(2.6);
+			transform-origin: left center;
 			object-fit: contain;
+			object-position: left center;
 		}
 
 		.brand-text {
@@ -519,6 +537,8 @@ $logo_url = $base_path.'/'.$logo_path;
 
 			.brand-logo {
 				height: 36px;
+				margin-right: 2.8rem;
+				transform: scale(2.15);
 			}
 
 			.brand-text {
@@ -557,8 +577,39 @@ $logo_url = $base_path.'/'.$logo_path;
 			}
 		}
 </style>
+	<script>
+		(function () {
+			var themeValue = "";
+			try {
+				themeValue = String(window.localStorage.getItem("home_index_theme") || "").toLowerCase();
+			} catch (error) {}
+			if (themeValue !== "dark" && themeValue !== "light") {
+				var cookieMatch = document.cookie.match(/(?:^|;\s*)home_index_theme=(dark|light)\b/i);
+				if (cookieMatch && cookieMatch[1]) {
+					themeValue = String(cookieMatch[1]).toLowerCase();
+				}
+			}
+			if (themeValue === "dark" || themeValue === "light") {
+				try {
+					window.localStorage.setItem("home_index_theme", themeValue);
+				} catch (error) {}
+				try {
+					document.cookie = "home_index_theme=" + encodeURIComponent(themeValue) + ";path=/;max-age=31536000;SameSite=Lax";
+				} catch (error) {}
+			}
+			if (themeValue === "dark") {
+				document.documentElement.classList.add("theme-dark");
+				document.documentElement.setAttribute("data-theme", "dark");
+			} else if (themeValue === "light") {
+				document.documentElement.classList.remove("theme-dark");
+				document.documentElement.setAttribute("data-theme", "light");
+			}
+		})();
+	</script>
+	<script src="<?php echo htmlspecialchars('/src/assets/js/theme-global-init.js?v=20260225f', ENT_QUOTES, 'UTF-8'); ?>"></script>
+		<link rel="stylesheet" href="<?php echo htmlspecialchars('/src/assets/css/theme-global.css?v=20260225k', ENT_QUOTES, 'UTF-8'); ?>">
 </head>
-<body>
+<body<?php echo $_home_theme_body_class; ?>>
 	<nav class="topbar">
 		<div class="topbar-container">
 			<div class="topbar-inner">

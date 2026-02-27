@@ -3,6 +3,24 @@
 $summary = isset($summary) && is_array($summary) ? $summary : array();
 $recent_logs = isset($recent_logs) && is_array($recent_logs) ? $recent_logs : array();
 $employee_accounts = isset($employee_accounts) && is_array($employee_accounts) ? $employee_accounts : array();
+for ($employee_index = 0; $employee_index < count($employee_accounts); $employee_index += 1) {
+	$employee_row = isset($employee_accounts[$employee_index]) && is_array($employee_accounts[$employee_index])
+		? $employee_accounts[$employee_index]
+		: array();
+	$cross_branch_raw = isset($employee_row['cross_branch_enabled'])
+		? $employee_row['cross_branch_enabled']
+		: (isset($employee_row['lintas_cabang']) ? $employee_row['lintas_cabang'] : 0);
+	if (function_exists('absen_resolve_cross_branch_enabled')) {
+		$cross_branch_normalized = ((int) absen_resolve_cross_branch_enabled($cross_branch_raw)) === 1 ? 1 : 0;
+	} else {
+		$cross_branch_normalized = ((int) $cross_branch_raw) === 1 ? 1 : 0;
+	}
+	$employee_row['cross_branch_enabled'] = $cross_branch_normalized;
+	$employee_row['lintas_cabang'] = $cross_branch_normalized;
+	$employee_accounts[$employee_index] = $employee_row;
+}
+$day_off_swaps = isset($day_off_swaps) && is_array($day_off_swaps) ? array_values($day_off_swaps) : array();
+$day_off_swap_requests = isset($day_off_swap_requests) && is_array($day_off_swap_requests) ? array_values($day_off_swap_requests) : array();
 $username = isset($username) ? (string) $username : 'Pengguna';
 $account_notice_success = isset($account_notice_success) ? trim((string) $account_notice_success) : '';
 $account_notice_error = isset($account_notice_error) ? trim((string) $account_notice_error) : '';
@@ -42,8 +60,15 @@ if (!isset($weekly_day_off_options[$default_weekly_day_off])) {
 }
 $can_view_log_data = isset($can_view_log_data) && $can_view_log_data === TRUE;
 $can_manage_accounts = isset($can_manage_accounts) && $can_manage_accounts === TRUE;
+$can_process_day_off_swap_requests = isset($can_process_day_off_swap_requests) && $can_process_day_off_swap_requests === TRUE;
 $can_sync_sheet_accounts = isset($can_sync_sheet_accounts) && $can_sync_sheet_accounts === TRUE;
 $can_manage_feature_accounts = isset($can_manage_feature_accounts) && $can_manage_feature_accounts === TRUE;
+$sync_backup_ready = isset($sync_backup_ready) && $sync_backup_ready === TRUE;
+$sync_backup_status_text = isset($sync_backup_status_text) ? trim((string) $sync_backup_status_text) : '';
+$sync_backup_required_directions = array('sheet_to_web_attendance', 'web_to_sheet');
+$sync_backup_required_button_attrs = $sync_backup_ready
+	? ''
+	: ' aria-disabled="true" title="Wajib backup local dulu sebelum sync."';
 $dashboard_navbar_title = isset($dashboard_navbar_title) && trim((string) $dashboard_navbar_title) !== ''
 	? trim((string) $dashboard_navbar_title)
 	: 'Dashboard Admin Absen';
@@ -69,6 +94,14 @@ $admin_feature_accounts = isset($admin_feature_accounts) && is_array($admin_feat
 
 $status_hari_ini = $dashboard_status_label;
 $status_class = 'status-info';
+$summary_hadir_hari_ini = isset($summary['total_hadir_hari_ini']) ? max(0, (int) $summary['total_hadir_hari_ini']) : max(0, (int) (isset($summary['total_hadir_bulan_ini']) ? $summary['total_hadir_bulan_ini'] : 0));
+$summary_izin_hari_ini = isset($summary['total_izin_hari_ini']) ? max(0, (int) $summary['total_izin_hari_ini']) : max(0, (int) (isset($summary['total_izin_bulan_ini']) ? $summary['total_izin_bulan_ini'] : 0));
+$summary_alpha_hari_ini = isset($summary['total_alpha_hari_ini']) ? max(0, (int) $summary['total_alpha_hari_ini']) : max(0, (int) (isset($summary['total_alpha_bulan_ini']) ? $summary['total_alpha_bulan_ini'] : 0));
+$summary_libur_hari_ini = isset($summary['total_libur_hari_ini']) ? max(0, (int) $summary['total_libur_hari_ini']) : 0;
+$summary_pending_alpha_hari_ini = isset($summary['total_belum_masuk_masa_alpha_hari_ini']) ? max(0, (int) $summary['total_belum_masuk_masa_alpha_hari_ini']) : 0;
+$summary_karyawan_hari_ini = isset($summary['total_karyawan_hari_ini']) ? max(0, (int) $summary['total_karyawan_hari_ini']) : 0;
+$summary_breakdown_total_hari_ini = $summary_hadir_hari_ini + $summary_izin_hari_ini + $summary_alpha_hari_ini + $summary_libur_hari_ini + $summary_pending_alpha_hari_ini;
+$summary_breakdown_gap_hari_ini = max(0, $summary_karyawan_hari_ini - $summary_breakdown_total_hari_ini);
 
 $script_name = isset($_SERVER['SCRIPT_NAME']) ? (string) $_SERVER['SCRIPT_NAME'] : '';
 $base_path = str_replace('\\', '/', dirname($script_name));
@@ -76,27 +109,23 @@ if ($base_path === '/' || $base_path === '.') {
 	$base_path = '';
 }
 
-$logo_path = 'src/assets/pns_logo_nav.png';
-if (is_file(FCPATH.'src/assets/pns_logo_nav.png')) {
-	$logo_path = 'src/assets/pns_logo_nav.png';
-}
-elseif (is_file(FCPATH.'src/assts/pns_logo_nav.png')) {
-	$logo_path = 'src/assts/pns_logo_nav.png';
-}
-elseif (is_file(FCPATH.'src/assets/pns_new.png')) {
-	$logo_path = 'src/assets/pns_new.png';
-}
-elseif (is_file(FCPATH.'src/assts/pns_new.png')) {
-	$logo_path = 'src/assts/pns_new.png';
-}
-elseif (is_file(FCPATH.'src/assets/pns_dashboard.png')) {
-	$logo_path = 'src/assets/pns_dashboard.png';
-}
-elseif (is_file(FCPATH.'src/assts/pns_dashboard.png')) {
-	$logo_path = 'src/assts/pns_dashboard.png';
+$navbar_logo_path = 'src/assets/pns_logo_nav.svg';
+$favicon_path = 'src/assets/sinyal.svg';
+$favicon_type = 'image/svg+xml';
+
+$navbar_logo_url = base_url($navbar_logo_path);
+$navbar_logo_version = is_file(FCPATH.$navbar_logo_path) ? (string) @md5_file(FCPATH.$navbar_logo_path) : '';
+if ($navbar_logo_version !== '')
+{
+	$navbar_logo_url .= '?v='.rawurlencode($navbar_logo_version);
 }
 
-$logo_url = $base_path.'/'.$logo_path;
+$favicon_url = site_url('home/favicon');
+$favicon_version = is_file(FCPATH.$favicon_path) ? (string) @md5_file(FCPATH.$favicon_path) : '';
+if ($favicon_version !== '')
+{
+	$favicon_url .= '?v='.rawurlencode($favicon_version);
+}
 $home_index_css_file = 'src/assets/css/home-index.css';
 $home_index_js_file = 'src/assets/js/home-index.js';
 $home_index_collab_js_file = 'src/assets/js/home-index-collab.js';
@@ -132,39 +161,404 @@ $home_index_config_json = json_encode(array(
 	'collabSyncLockUrl' => $collab_sync_lock_url,
 	'collabActor' => $collab_actor,
 	'collabPollMs' => $collab_poll_ms,
-	'collabLockWaitRefreshSeconds' => $collab_lock_wait_refresh_seconds
+	'collabLockWaitRefreshSeconds' => $collab_lock_wait_refresh_seconds,
+	'syncBackupReady' => $sync_backup_ready ? TRUE : FALSE,
+	'syncBackupRequiredDirections' => $sync_backup_required_directions
 ), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
 if ($home_index_config_json === FALSE) {
 	$home_index_config_json = '{}';
 }
 ?>
+<?php
+$_home_theme_cookie_value = isset($_COOKIE['home_index_theme']) ? strtolower(trim((string) $_COOKIE['home_index_theme'])) : '';
+$_home_theme_session_value = '';
+if (isset($this) && isset($this->session) && method_exists($this->session, 'userdata'))
+{
+	$_home_theme_session_value = strtolower(trim((string) $this->session->userdata('home_index_theme')));
+}
+if ($_home_theme_cookie_value === 'dark' || $_home_theme_cookie_value === 'light')
+{
+	$_home_theme_value = $_home_theme_cookie_value;
+}
+elseif ($_home_theme_session_value === 'dark' || $_home_theme_session_value === 'light')
+{
+	$_home_theme_value = $_home_theme_session_value;
+}
+else
+{
+	$_home_theme_value = '';
+}
+$_home_theme_is_dark = $_home_theme_value === 'dark';
+$_home_theme_html_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
+$_home_theme_html_data = ' data-theme="' . ($_home_theme_is_dark ? 'dark' : 'light') . '"';
+$_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
+?>
 <!DOCTYPE html>
-<html lang="id">
-<head>
-	<meta charset="utf-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1">
-	<title><?php echo isset($title) ? htmlspecialchars($title, ENT_QUOTES, 'UTF-8') : 'Dashboard Absen Online'; ?></title>
-	<link rel="preconnect" href="https://fonts.googleapis.com">
-	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-	<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<html lang="id"<?php echo $_home_theme_html_class; ?><?php echo $_home_theme_html_data; ?>>
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title><?php echo isset($title) ? htmlspecialchars($title, ENT_QUOTES, 'UTF-8') : 'Dashboard Absen Online'; ?></title>
+	<link rel="icon" type="<?php echo htmlspecialchars($favicon_type, ENT_QUOTES, 'UTF-8'); ?>" href="/src/assets/sinyal.svg">
+	<link rel="shortcut icon" type="<?php echo htmlspecialchars($favicon_type, ENT_QUOTES, 'UTF-8'); ?>" href="/src/assets/sinyal.svg">
+		<link rel="preconnect" href="https://fonts.googleapis.com">
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+		<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 		<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
-	<link rel="stylesheet" href="<?php echo htmlspecialchars($base_path.'/'.$home_index_css_file, ENT_QUOTES, 'UTF-8'); ?>?v=<?php echo rawurlencode($home_index_css_version); ?>">
+		<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
+		<link rel="stylesheet" href="<?php echo htmlspecialchars($base_path.'/'.$home_index_css_file, ENT_QUOTES, 'UTF-8'); ?>?v=<?php echo rawurlencode($home_index_css_version); ?>">
+			<script>
+				(function () {
+					var themeValue = '';
+					try {
+						themeValue = String(window.localStorage.getItem('home_index_theme') || '').toLowerCase();
+					} catch (error) {}
+					if (themeValue !== 'dark' && themeValue !== 'light') {
+						var cookieMatch = document.cookie.match(/(?:^|;\s*)home_index_theme=(dark|light)\b/i);
+						if (cookieMatch && cookieMatch[1]) {
+							themeValue = String(cookieMatch[1]).toLowerCase();
+						}
+					}
+					if (themeValue === 'dark') {
+						document.documentElement.classList.add('theme-dark');
+						document.documentElement.setAttribute('data-theme', 'dark');
+					} else if (themeValue === 'light') {
+						document.documentElement.classList.remove('theme-dark');
+						document.documentElement.setAttribute('data-theme', 'light');
+					}
+				})();
+			</script>
+		<style>
+			.theme-toggle-btn {
+				border: 0;
+				background: transparent;
+				padding: 0;
+				margin: 0;
+				cursor: pointer;
+				display: inline-flex;
+				align-items: center;
+				justify-content: center;
+			}
+			.theme-toggle-track {
+				position: relative;
+				width: 62px;
+				height: 34px;
+				border-radius: 999px;
+				border: 2px solid rgba(255, 255, 255, 0.48);
+				background: rgba(6, 24, 42, 0.34);
+				box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+				display: inline-flex;
+				align-items: center;
+				justify-content: space-between;
+				padding: 0 9px;
+				transition: background-color 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+			}
+			.theme-toggle-icon {
+				font-size: 15px;
+				line-height: 1;
+				transition: transform 0.25s ease, opacity 0.25s ease, color 0.25s ease;
+			}
+			.theme-toggle-icon.sun {
+				color: #f5bf53;
+				opacity: 1;
+				transform: scale(1);
+			}
+			.theme-toggle-icon.moon {
+				color: #dfebf8;
+				opacity: 0.4;
+				transform: scale(0.88);
+			}
+			.theme-toggle-knob {
+				position: absolute;
+				top: 2px;
+				left: 2px;
+				width: 26px;
+				height: 26px;
+				border-radius: 999px;
+				background: #ffffff;
+				box-shadow: 0 3px 8px rgba(0, 0, 0, 0.28);
+				transition: transform 0.25s ease, background-color 0.25s ease, box-shadow 0.25s ease;
+			}
+			.theme-toggle-btn:focus-visible .theme-toggle-track {
+				outline: none;
+				box-shadow: 0 0 0 3px rgba(160, 210, 255, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+			}
+			html.theme-dark body,
+			body.theme-dark {
+				--brand-dark: #0b2f53;
+				--brand-main: #175a94;
+				--brand-soft: #15283b;
+				--text-main: #e8f0fa;
+				--text-soft: #adc0d4;
+				--line-soft: #2d4258;
+				--surface: #102030;
+				--surface-alt: #0f1b29;
+				--muted: #8ca3bb;
+				background: #0d1a28 !important;
+				background-image: none !important;
+				color: var(--text-main);
+			}
+			html.theme-dark .theme-toggle-track,
+			body.theme-dark .theme-toggle-track {
+				background: rgba(3, 11, 20, 0.82);
+				border-color: rgba(174, 207, 238, 0.6);
+				box-shadow: inset 0 0 10px rgba(115, 176, 228, 0.2);
+			}
+			html.theme-dark .theme-toggle-knob,
+			body.theme-dark .theme-toggle-knob {
+				transform: translateX(28px);
+				background: #dbe9f6;
+				box-shadow: 0 3px 8px rgba(0, 0, 0, 0.45);
+			}
+			html.theme-dark .theme-toggle-icon.sun,
+			body.theme-dark .theme-toggle-icon.sun {
+				opacity: 0.4;
+				transform: scale(0.88);
+			}
+			html.theme-dark .theme-toggle-icon.moon,
+			body.theme-dark .theme-toggle-icon.moon {
+				opacity: 1;
+				color: #ffffff;
+				transform: scale(1);
+			}
+			html.theme-dark .hero-card,
+			body.theme-dark .hero-card {
+				background: linear-gradient(145deg, #13263a 0, #0f1f31 100%);
+				border-color: #2f455a;
+				box-shadow: none !important;
+			}
+			html.theme-dark .clock-box,
+			body.theme-dark .clock-box {
+				border-color: #3a5872;
+				background: #12283a;
+			}
+			html.theme-dark .clock-box-link:hover,
+			html.theme-dark .clock-box-link:focus-visible,
+			body.theme-dark .clock-box-link:hover,
+			body.theme-dark .clock-box-link:focus-visible {
+				border-color: #4f7597;
+				box-shadow: 0 10px 20px rgba(0, 0, 0, 0.28);
+			}
+			html.theme-dark .mini-hint,
+			html.theme-dark .clock-help-text,
+			html.theme-dark .account-help,
+			html.theme-dark .footer-note,
+			body.theme-dark .mini-hint,
+			body.theme-dark .clock-help-text,
+			body.theme-dark .account-help,
+			body.theme-dark .footer-note {
+				color: #9cb1c7;
+			}
+			html.theme-dark .account-card,
+			body.theme-dark .account-card {
+				background: linear-gradient(180deg, #102133 0, #0f1b2a 100%);
+				border-color: #30475d;
+				box-shadow: 0 12px 24px rgba(0, 0, 0, 0.32);
+			}
+			html.theme-dark .account-card h3,
+			body.theme-dark .account-card h3 {
+				color: #dbe8f6;
+			}
+			html.theme-dark .account-card p,
+			body.theme-dark .account-card p {
+				color: #b2c3d5;
+			}
+			html.theme-dark .account-input,
+			html.theme-dark .account-search-input,
+			body.theme-dark .account-input,
+			body.theme-dark .account-search-input {
+				background: #0f2436;
+				border-color: #3b5771;
+				color: #e4edf8;
+			}
+			html.theme-dark .account-input:focus,
+			html.theme-dark .account-search-input:focus,
+			body.theme-dark .account-input:focus,
+			body.theme-dark .account-search-input:focus {
+				border-color: #66a7e4;
+				box-shadow: 0 0 0 3px rgba(78, 141, 204, 0.2);
+			}
+			html.theme-dark .table-wrap,
+			body.theme-dark .table-wrap {
+				box-shadow: none !important;
+			}
+			html.theme-dark .main-shell,
+			body.theme-dark .main-shell {
+				background: #0d1a28 !important;
+				background-image: none !important;
+			}
+			html.theme-dark header.hero,
+			html.theme-dark body.theme-dark header.hero {
+				background: transparent !important;
+				background-image: none !important;
+				border: 0 !important;
+				box-shadow: none !important;
+			}
+			html.theme-dark main.pb-4,
+			html.theme-dark body.theme-dark main.pb-4 {
+				background: transparent !important;
+				background-image: none !important;
+				border: 0 !important;
+				box-shadow: none !important;
+			}
+			html.theme-dark header.hero::before,
+			html.theme-dark header.hero::after,
+			html.theme-dark main.pb-4::before,
+			html.theme-dark main.pb-4::after {
+				content: none !important;
+				background: none !important;
+				box-shadow: none !important;
+			}
+			html.theme-dark .mini-card,
+			html.theme-dark .action-card,
+			html.theme-dark .account-card,
+			body.theme-dark .mini-card,
+			body.theme-dark .action-card,
+			body.theme-dark .account-card {
+				box-shadow: none !important;
+			}
+			html.theme-dark [class*="card"],
+			html.theme-dark [class*="box"],
+			html.theme-dark [class*="panel"],
+			body.theme-dark [class*="card"],
+			body.theme-dark [class*="box"],
+			body.theme-dark [class*="panel"] {
+				box-shadow: none !important;
+			}
+			html.theme-dark .table-custom thead th,
+			body.theme-dark .table-custom thead th {
+				color: #9bb2ca;
+				border-color: #2d4559;
+			}
+			html.theme-dark .table-custom tbody td,
+			body.theme-dark .table-custom tbody td {
+				color: #c8d7e8;
+				border-color: #24384b;
+			}
+			html.theme-dark .metric-modal-card,
+			body.theme-dark .metric-modal-card {
+				background: #0f1f30;
+				border-color: #2d4257;
+			}
+			html.theme-dark .metric-legend,
+			body.theme-dark .metric-legend {
+				color: #aec0d5;
+			}
+			html.theme-dark .metric-legend .label,
+			body.theme-dark .metric-legend .label {
+				color: #d5e2f0;
+			}
+			html.theme-dark .metric-chart-wrap,
+			body.theme-dark .metric-chart-wrap {
+				background: linear-gradient(180deg, #132638 0, #101f2e 100%);
+				border-color: #2f465c;
+			}
+			html.theme-dark .metric-chart-canvas,
+			body.theme-dark .metric-chart-canvas {
+				background: #0f1d2a;
+			}
+			html.theme-dark .metric-range-btn,
+			body.theme-dark .metric-range-btn {
+				background: #12283b;
+				border-color: #3a5570;
+				color: #d5e4f4;
+			}
+			html.theme-dark .metric-range-btn.active,
+			body.theme-dark .metric-range-btn.active {
+				background: linear-gradient(120deg, #2f79c1 0, #1b588f 100%);
+				border-color: #4f8ac4;
+				color: #ffffff;
+			}
+			html.theme-dark .account-notice.success,
+			body.theme-dark .account-notice.success {
+				background: #113026;
+				border-color: #2d7359;
+				color: #c5f3df;
+			}
+			html.theme-dark .account-notice.error,
+			body.theme-dark .account-notice.error {
+				background: #381f25;
+				border-color: #8b4653;
+				color: #ffd8de;
+			}
+			html.theme-dark .manage-modal-card,
+			body.theme-dark .manage-modal-card {
+				background: linear-gradient(180deg, #102030 0, #0f1b29 100%);
+				border-color: #355067;
+			}
+			html.theme-dark .manage-modal-head,
+			body.theme-dark .manage-modal-head {
+				background: rgba(14, 45, 74, 0.95);
+			}
+			@media (max-width: 575.98px) {
+				.theme-toggle-track {
+					width: 56px;
+					height: 32px;
+				}
+				.theme-toggle-knob {
+					width: 24px;
+					height: 24px;
+				}
+				html.theme-dark .theme-toggle-knob,
+				body.theme-dark .theme-toggle-knob {
+					transform: translateX(24px);
+				}
+			}
+		</style>
+		<script>
+		(function () {
+			var themeValue = "";
+			try {
+				themeValue = String(window.localStorage.getItem("home_index_theme") || "").toLowerCase();
+			} catch (error) {}
+			if (themeValue !== "dark" && themeValue !== "light") {
+				var cookieMatch = document.cookie.match(/(?:^|;\s*)home_index_theme=(dark|light)\b/i);
+				if (cookieMatch && cookieMatch[1]) {
+					themeValue = String(cookieMatch[1]).toLowerCase();
+				}
+			}
+			if (themeValue === "dark" || themeValue === "light") {
+				try {
+					window.localStorage.setItem("home_index_theme", themeValue);
+				} catch (error) {}
+				try {
+					document.cookie = "home_index_theme=" + encodeURIComponent(themeValue) + ";path=/;max-age=31536000;SameSite=Lax";
+				} catch (error) {}
+			}
+			if (themeValue === "dark") {
+				document.documentElement.classList.add("theme-dark");
+				document.documentElement.setAttribute("data-theme", "dark");
+			} else if (themeValue === "light") {
+				document.documentElement.classList.remove("theme-dark");
+				document.documentElement.setAttribute("data-theme", "light");
+			}
+		})();
+	</script>
+	<script src="<?php echo htmlspecialchars('/src/assets/js/theme-global-init.js?v=20260225f', ENT_QUOTES, 'UTF-8'); ?>"></script>
+		<link rel="stylesheet" href="<?php echo htmlspecialchars('/src/assets/css/theme-global.css?v=20260225k', ENT_QUOTES, 'UTF-8'); ?>">
 </head>
-<body>
+	<body<?php echo $_home_theme_body_class; ?>>
 	<div class="main-shell">
 		<nav class="topbar">
 			<div class="topbar-container">
 				<div class="topbar-inner">
 					<a href="<?php echo site_url('home'); ?>" class="brand-block">
-						<img class="brand-logo" src="<?php echo htmlspecialchars($logo_url, ENT_QUOTES, 'UTF-8'); ?>" alt="Logo Absen Online">
+						<img class="brand-logo" src="<?php echo htmlspecialchars($navbar_logo_url, ENT_QUOTES, 'UTF-8'); ?>" alt="Logo Absen Online">
 						<span class="brand-text"><?php echo htmlspecialchars($dashboard_navbar_title, ENT_QUOTES, 'UTF-8'); ?></span>
-					</a>
-					<div class="nav-right">
-						<?php if ($can_view_log_data): ?>
-							<a href="<?php echo site_url('home/log_data'); ?>" class="logout">Log Data</a>
-						<?php endif; ?>
-						<a href="<?php echo site_url('logout'); ?>" class="logout" id="adminLogoutLink">Logout</a>
-					</div>
+						</a>
+						<div class="nav-right">
+							<button type="button" class="theme-toggle-btn" id="themeToggleButton" aria-label="Aktifkan mode malam" aria-pressed="false" title="Ganti ke mode malam">
+								<span class="theme-toggle-track" aria-hidden="true">
+									<i class="fa fa-sun-o theme-toggle-icon sun"></i>
+									<i class="fa fa-moon-o theme-toggle-icon moon"></i>
+									<span class="theme-toggle-knob"></span>
+								</span>
+							</button>
+							<?php if ($can_view_log_data): ?>
+								<a href="<?php echo site_url('home/log_data'); ?>" class="logout">Log Data</a>
+							<?php endif; ?>
+							<a href="<?php echo site_url('logout'); ?>" class="logout" id="adminLogoutLink">Logout</a>
+						</div>
 				</div>
 			</div>
 		</nav>
@@ -262,6 +656,13 @@ if ($home_index_config_json === FALSE) {
 							<p class="action-text">Lihat seluruh data pengajuan cuti dan izin yang dikirim oleh karyawan.</p>
 							<a href="<?php echo site_url('home/leave_requests'); ?>" class="action-btn">Buka Pengajuan</a>
 						</article>
+						<?php if ($can_process_day_off_swap_requests): ?>
+							<article class="action-card">
+								<h3 class="action-title">Pengajuan Tukar Hari Libur</h3>
+								<p class="action-text">Proses pengajuan tukar hari libur 1x dari karyawan (terima/tolak, dan hapus untuk Bos/Developer).</p>
+								<a href="<?php echo site_url('home/day_off_swap_requests'); ?>" class="action-btn secondary">Buka Tukar Libur</a>
+							</article>
+						<?php endif; ?>
 						<article class="action-card">
 							<h3 class="action-title">Cek Absensi Karyawan</h3>
 							<p class="action-text">Lihat rekap absensi lengkap karyawan (masuk, pulang, telat, foto, dan jarak dari titik kantor).</p>
@@ -292,20 +693,96 @@ if ($home_index_config_json === FALSE) {
 								<p>Tarik data terbaru dari Google Sheet ke web (Data Absen).</p>
 							<?php endif; ?>
 							<div class="d-flex flex-wrap gap-2">
+								<form method="post" action="<?php echo site_url('home/prepare_sync_local_backup_now'); ?>" class="sync-backup-control-form" data-sync-backup-form="1" data-sync-label="Backup Local Dulu (Wajib)">
+									<button type="submit" class="account-submit">Backup Local Dulu (Wajib)</button>
+								</form>
 								<?php if ($can_sync_sheet_accounts): ?>
 									<form method="post" action="<?php echo site_url('home/sync_sheet_accounts_now'); ?>" class="sync-control-form" data-sync-direction="sheet_to_web_account" data-sync-label="Sync Akun dari Sheet">
 										<button type="submit" class="account-submit">Sync Akun dari Sheet</button>
 									</form>
 								<?php endif; ?>
-								<form method="post" action="<?php echo site_url('home/sync_sheet_attendance_now'); ?>" class="sync-control-form" data-sync-direction="sheet_to_web_attendance" data-sync-label="Sync Data Absen dari Sheet">
-									<button type="submit" class="account-submit">Sync Data Absen dari Sheet</button>
+								<form method="post" action="<?php echo site_url('home/sync_sheet_attendance_now'); ?>" class="sync-control-form" data-sync-direction="sheet_to_web_attendance" data-sync-label="Sync Data Absen dari Sheet" data-requires-backup="1">
+									<button type="submit" class="account-submit"<?php echo $sync_backup_required_button_attrs; ?>>Sync Data Absen dari Sheet</button>
 								</form>
-								<form method="post" action="<?php echo site_url('home/sync_web_attendance_to_sheet_now'); ?>" class="sync-control-form" data-sync-direction="web_to_sheet" data-sync-label="Sync Data Web ke Sheet">
-									<button type="submit" class="account-submit">Sync Data Web ke Sheet</button>
+								<form method="post" action="<?php echo site_url('home/sync_web_attendance_to_sheet_now'); ?>" class="sync-control-form" data-sync-direction="web_to_sheet" data-sync-label="Sync Data Web ke Sheet" data-requires-backup="1">
+									<button type="submit" class="account-submit"<?php echo $sync_backup_required_button_attrs; ?>>Sync Data Web ke Sheet</button>
+								</form>
+								<form
+									method="post"
+									action="<?php echo site_url('home/reset_total_alpha_now'); ?>"
+									class="sync-control-form"
+									data-sync-direction="reset_total_alpha"
+									data-sync-label="Reset Total Alpha"
+									onsubmit="return window.confirm('Reset total alpha bulan berjalan? Aksi ini akan mengosongkan hitungan alpha di dashboard/grafik untuk tanggal yang sudah berjalan bulan ini.');"
+								>
+									<button type="submit" class="account-submit delete">Reset Total Alpha</button>
 								</form>
 							</div>
+							<p class="text-secondary mb-0 mt-2"><?php echo htmlspecialchars($sync_backup_status_text !== '' ? $sync_backup_status_text : 'Belum ada backup lokal aktif. Klik "Backup Local Dulu (Wajib)" sebelum sync.', ENT_QUOTES, 'UTF-8'); ?></p>
 						</article>
 					</div>
+
+					<?php if (!$can_manage_accounts && $can_process_day_off_swap_requests): ?>
+						<div class="account-grid mb-3">
+							<article class="account-card">
+								<h3>Pengajuan Tukar Hari Libur (1x)</h3>
+								<p>Pengajuan dibuat dari dashboard karyawan. Kamu bisa setujui/tolak sesuai cakupan cabang akun login.</p>
+								<?php if (empty($day_off_swap_requests)): ?>
+									<p class="text-secondary mb-0">Belum ada pengajuan tukar hari libur yang menunggu.</p>
+								<?php else: ?>
+									<div class="table-wrap mt-2">
+										<div class="table-responsive">
+											<table class="table table-custom">
+												<thead>
+													<tr>
+														<th>Karyawan</th>
+														<th>Tanggal Masuk (hasil tukar)</th>
+														<th>Tanggal Libur (pengganti)</th>
+														<th>Catatan</th>
+														<th>Aksi</th>
+													</tr>
+												</thead>
+												<tbody>
+													<?php foreach ($day_off_swap_requests as $request_row): ?>
+														<?php
+														$request_id = isset($request_row['request_id']) ? trim((string) $request_row['request_id']) : '';
+														if ($request_id === '') {
+															continue;
+														}
+														$request_username = isset($request_row['username']) ? (string) $request_row['username'] : '-';
+														$request_employee_id = isset($request_row['employee_id']) ? (string) $request_row['employee_id'] : '-';
+														$request_display_name = isset($request_row['display_name']) ? trim((string) $request_row['display_name']) : '';
+														$request_worker_label = $request_employee_id.' - '.$request_username;
+														if ($request_display_name !== '' && strcasecmp($request_display_name, $request_username) !== 0) {
+															$request_worker_label .= ' ('.$request_display_name.')';
+														}
+														$request_note = isset($request_row['note']) ? trim((string) $request_row['note']) : '';
+														?>
+														<tr>
+															<td><?php echo htmlspecialchars($request_worker_label, ENT_QUOTES, 'UTF-8'); ?></td>
+															<td><?php echo htmlspecialchars(isset($request_row['workday_label']) ? (string) $request_row['workday_label'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
+															<td><?php echo htmlspecialchars(isset($request_row['offday_label']) ? (string) $request_row['offday_label'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
+															<td><?php echo htmlspecialchars($request_note !== '' ? $request_note : '-', ENT_QUOTES, 'UTF-8'); ?></td>
+															<td>
+																<form method="post" action="<?php echo site_url('home/update_day_off_swap_request_status'); ?>" onsubmit="return window.confirm('Proses pengajuan tukar hari libur ini?');">
+																	<input type="hidden" name="request_id" value="<?php echo htmlspecialchars($request_id, ENT_QUOTES, 'UTF-8'); ?>">
+																	<input type="text" name="review_note" class="account-input" placeholder="Catatan admin (opsional)" style="min-width:220px; margin-bottom:.35rem;">
+																	<div style="display:flex; gap:.32rem;">
+																		<button type="submit" name="status" value="approved" class="account-submit" style="width:auto; display:inline-flex; padding:.34rem .6rem; border-radius:9px; font-size:.76rem;">Setujui</button>
+																		<button type="submit" name="status" value="rejected" class="account-submit delete" style="width:auto; display:inline-flex; padding:.34rem .6rem; border-radius:9px; font-size:.76rem;">Tolak</button>
+																	</div>
+																</form>
+															</td>
+														</tr>
+													<?php endforeach; ?>
+												</tbody>
+											</table>
+										</div>
+									</div>
+								<?php endif; ?>
+							</article>
+						</div>
+					<?php endif; ?>
 
 					<?php if ($can_manage_accounts): ?>
 						<div class="account-grid mb-3">
@@ -396,9 +873,9 @@ if ($home_index_config_json === FALSE) {
 										<div>
 											<p class="account-label">Shift</p>
 											<select name="new_shift" class="account-input" required>
-												<option value="pagi">Shift Pagi - Sore (07:00 - 17:00)</option>
+												<option value="pagi">Shift Pagi - Sore (08:00 - 17:00)</option>
 												<option value="siang">Shift Siang - Malam (14:00 - 23:00)</option>
-												<option value="multishift">Multi Shift (07:00 - 23:59)</option>
+												<option value="multishift">Multi Shift (08:00 - 23:59)</option>
 											</select>
 										</div>
 									</div>
@@ -456,7 +933,7 @@ if ($home_index_config_json === FALSE) {
 										</div>
 										<div>
 											<p class="account-label">Upload PP (Wajib)</p>
-											<input type="file" name="new_profile_photo" class="account-input" accept=".png,.jpg,.jpeg,.heic" required>
+											<input type="file" name="new_profile_photo" class="account-input" accept=".png,.jpg,.jpeg,.webp,.jfif,.jpe,.heic,.heif" required>
 										</div>
 									</div>
 										<button type="submit" class="account-submit">Simpan Akun Baru</button>
@@ -670,9 +1147,9 @@ if ($home_index_config_json === FALSE) {
 										<div>
 											<p class="account-label">Shift</p>
 											<select name="edit_shift" id="editShiftInput" class="account-input" required>
-												<option value="pagi">Shift Pagi - Sore (07:00 - 17:00)</option>
+												<option value="pagi">Shift Pagi - Sore (08:00 - 17:00)</option>
 												<option value="siang">Shift Siang - Malam (14:00 - 23:00)</option>
-												<option value="multishift">Multi Shift (07:00 - 23:59)</option>
+												<option value="multishift">Multi Shift (08:00 - 23:59)</option>
 											</select>
 										</div>
 									</div>
@@ -718,13 +1195,58 @@ if ($home_index_config_json === FALSE) {
 										</select>
 									</div>
 									<div>
+										<p class="account-label">Hari Kerja Khusus (Opsional)</p>
+										<div class="d-flex flex-wrap gap-2">
+											<?php foreach ($weekly_day_off_options as $weekday_value => $weekday_label): ?>
+												<?php
+												$weekday_n = (int) $weekday_value;
+												if ($weekday_n < 1 || $weekday_n > 7) {
+													continue;
+												}
+												?>
+												<label class="d-inline-flex align-items-center gap-1 px-2 py-1 border rounded-2 bg-white">
+													<input
+														type="checkbox"
+														name="edit_custom_allowed_weekdays[]"
+														id="editCustomAllowedWeekday<?php echo $weekday_n; ?>"
+														value="<?php echo $weekday_n; ?>"
+														data-edit-custom-weekday
+													>
+													<span class="small"><?php echo htmlspecialchars((string) $weekday_label, ENT_QUOTES, 'UTF-8'); ?></span>
+												</label>
+											<?php endforeach; ?>
+										</div>
+										<p class="account-help mb-0">Jika dipilih, karyawan hanya bisa absen di hari yang dicentang.</p>
+									</div>
+									<div class="account-form-row two">
+										<div>
+											<p class="account-label">Libur Khusus (Dari)</p>
+											<input type="date" name="edit_custom_off_start_date" id="editCustomOffStartDateInput" class="account-input">
+										</div>
+										<div>
+											<p class="account-label">Libur Khusus (Sampai)</p>
+											<input type="date" name="edit_custom_off_end_date" id="editCustomOffEndDateInput" class="account-input">
+										</div>
+									</div>
+									<div class="account-form-row two">
+										<div>
+											<p class="account-label">Masuk Khusus (Dari)</p>
+											<input type="date" name="edit_custom_work_start_date" id="editCustomWorkStartDateInput" class="account-input">
+										</div>
+										<div>
+											<p class="account-label">Masuk Khusus (Sampai)</p>
+											<input type="date" name="edit_custom_work_end_date" id="editCustomWorkEndDateInput" class="account-input">
+										</div>
+									</div>
+									<div>
 										<p class="account-label">Alamat</p>
 										<input type="text" name="edit_address" id="editAddressInput" class="account-input" placeholder="Kp. Kesekian Kalinya, Pandenglang, Banten">
 									</div>
 									<div>
 										<p class="account-label">Ganti PP (Opsional)</p>
-										<input type="file" name="edit_profile_photo" id="editProfilePhotoInput" class="account-input" accept=".png,.jpg,.jpeg,.heic">
+										<input type="file" name="edit_profile_photo" id="editProfilePhotoInput" class="account-input" accept=".png,.jpg,.jpeg,.webp,.jfif,.jpe,.heic,.heif">
 									</div>
+										<input type="hidden" name="edit_custom_schedule_present" value="1">
 										<input type="hidden" name="expected_version" id="editExpectedVersionInput" value="1">
 										<button type="submit" class="account-submit">Simpan Perubahan Akun</button>
 									</form>
@@ -902,6 +1424,38 @@ if ($home_index_config_json === FALSE) {
 								<button type="button" class="metric-range-btn" data-metric-range="ALL">Semuanya</button>
 								<span class="metric-range-note">Gunakan scroll mouse untuk zoom dekat/jauh.</span>
 							</div>
+							<div class="metric-member-wrap" id="metricMemberWrap">
+								<p class="metric-member-title" id="metricMemberTitle">Daftar Karyawan</p>
+								<p class="metric-member-note" id="metricMemberNote">Pilih metrik untuk memuat daftar karyawan.</p>
+								<div class="metric-member-toolbar">
+									<input
+										type="search"
+										id="metricMemberSearchInput"
+										class="metric-member-search"
+										placeholder="Cari ID atau nama karyawan..."
+										autocomplete="off"
+									>
+									<span class="metric-member-search-meta" id="metricMemberSearchMeta"></span>
+								</div>
+								<div class="metric-member-table-wrap">
+									<table class="metric-member-table" aria-label="Daftar karyawan pada metrik grafik">
+										<thead>
+											<tr>
+												<th>No</th>
+												<th>ID</th>
+												<th>Nama Karyawan</th>
+												<th>Tanggal</th>
+												<th class="metric-count-col" id="metricMemberCountHead">Jumlah</th>
+											</tr>
+										</thead>
+										<tbody id="metricMemberList">
+											<tr>
+												<td colspan="5" class="metric-member-empty">Memuat daftar karyawan...</td>
+											</tr>
+										</tbody>
+									</table>
+								</div>
+							</div>
 						</div>
 					</div>
 				</div>
@@ -914,8 +1468,826 @@ if ($home_index_config_json === FALSE) {
 	<script>
 		window.__HOME_INDEX_CONFIG = <?php echo $home_index_config_json; ?>;
 	</script>
-	<script defer src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js"></script>
-	<script defer src="<?php echo htmlspecialchars($base_path.'/'.$home_index_js_file, ENT_QUOTES, 'UTF-8'); ?>?v=<?php echo rawurlencode($home_index_js_version); ?>"></script>
-	<script defer src="<?php echo htmlspecialchars($base_path.'/'.$home_index_collab_js_file, ENT_QUOTES, 'UTF-8'); ?>?v=<?php echo rawurlencode($home_index_collab_js_version); ?>"></script>
-</body>
-</html>
+	<script>
+		(function () {
+			var config = window.__HOME_INDEX_CONFIG || {};
+			var accountRows = Array.isArray(config.accountRows) ? config.accountRows : [];
+			if (!accountRows.length) {
+				return;
+			}
+
+			var editUsernameInput = document.getElementById('editUsernameInput');
+			var editCrossBranchInput = document.getElementById('editCrossBranchInput');
+			var customWeekdayCheckboxes = document.querySelectorAll('[data-edit-custom-weekday]');
+			var editCustomOffStartDateInput = document.getElementById('editCustomOffStartDateInput');
+			var editCustomOffEndDateInput = document.getElementById('editCustomOffEndDateInput');
+			var editCustomWorkStartDateInput = document.getElementById('editCustomWorkStartDateInput');
+			var editCustomWorkEndDateInput = document.getElementById('editCustomWorkEndDateInput');
+			if (!editUsernameInput || !editCrossBranchInput) {
+				return;
+			}
+
+			var byKey = {};
+			var rows = [];
+			var normalize = function (value) {
+				return String(value || '').trim().toLowerCase();
+			};
+			var resolveCrossBranchValue = function (value) {
+				if (typeof value === 'boolean') {
+					return value ? 1 : 0;
+				}
+				if (typeof value === 'number') {
+					return value === 1 ? 1 : 0;
+				}
+				var text = normalize(value);
+				if (text === '1' || text === 'ya' || text === 'iya' || text === 'yes' || text === 'true' || text === 'aktif' || text === 'enabled' || text === 'on') {
+					return 1;
+				}
+				return 0;
+			};
+			var normalizeWeekdayList = function (days) {
+				var source = Array.isArray(days) ? days : [];
+				var normalized = [];
+				for (var dayIndex = 0; dayIndex < source.length; dayIndex += 1) {
+					var weekdayValue = parseInt(source[dayIndex], 10);
+					if (!isFinite(weekdayValue) || weekdayValue < 1 || weekdayValue > 7) {
+						continue;
+					}
+					if (normalized.indexOf(weekdayValue) === -1) {
+						normalized.push(weekdayValue);
+					}
+				}
+				normalized.sort(function (a, b) {
+					return a - b;
+				});
+				return normalized;
+			};
+			var normalizeDateRangeList = function (ranges) {
+				var source = Array.isArray(ranges) ? ranges : [];
+				var normalized = [];
+				for (var rangeIndex = 0; rangeIndex < source.length; rangeIndex += 1) {
+					var rangeRow = source[rangeIndex] || {};
+					var startDate = String(rangeRow.start_date || rangeRow.start || '').trim();
+					var endDate = String(rangeRow.end_date || rangeRow.end || '').trim();
+					if (!startDate || !endDate) {
+						continue;
+					}
+					if (startDate > endDate) {
+						var tempDate = startDate;
+						startDate = endDate;
+						endDate = tempDate;
+					}
+					normalized.push({
+						start_date: startDate,
+						end_date: endDate
+					});
+				}
+				return normalized;
+			};
+			var applyCustomScheduleFields = function (row) {
+				var weekdayValues = normalizeWeekdayList(row && row.custom_allowed_weekdays);
+				for (var checkboxIndex = 0; checkboxIndex < customWeekdayCheckboxes.length; checkboxIndex += 1) {
+					var checkbox = customWeekdayCheckboxes[checkboxIndex];
+					var checkboxValue = parseInt(checkbox.value, 10);
+					checkbox.checked = weekdayValues.indexOf(checkboxValue) !== -1;
+				}
+
+				var offRanges = normalizeDateRangeList(row && row.custom_off_ranges);
+				var workRanges = normalizeDateRangeList(row && row.custom_work_ranges);
+				var firstOff = offRanges.length ? offRanges[0] : null;
+				var firstWork = workRanges.length ? workRanges[0] : null;
+
+				if (editCustomOffStartDateInput) {
+					editCustomOffStartDateInput.value = firstOff ? firstOff.start_date : '';
+				}
+				if (editCustomOffEndDateInput) {
+					editCustomOffEndDateInput.value = firstOff ? firstOff.end_date : '';
+				}
+				if (editCustomWorkStartDateInput) {
+					editCustomWorkStartDateInput.value = firstWork ? firstWork.start_date : '';
+				}
+				if (editCustomWorkEndDateInput) {
+					editCustomWorkEndDateInput.value = firstWork ? firstWork.end_date : '';
+				}
+			};
+
+			for (var i = 0; i < accountRows.length; i += 1) {
+				var row = accountRows[i] || {};
+				var username = normalize(row.username);
+				var employeeId = normalize(row.employee_id);
+				if (username !== '') {
+					byKey[username] = row;
+				}
+				if (employeeId !== '' && employeeId !== '-') {
+					byKey[employeeId] = row;
+					byKey[employeeId + ' - ' + username] = row;
+				}
+				rows.push(row);
+			}
+
+			var resolveAccount = function (rawValue, allowFuzzy) {
+				var key = normalize(rawValue);
+				if (key === '') {
+					return null;
+				}
+				if (Object.prototype.hasOwnProperty.call(byKey, key)) {
+					return byKey[key];
+				}
+				if (key.indexOf(' - ') !== -1) {
+					var parts = key.split(' - ');
+					var usernamePart = normalize(parts[parts.length - 1]);
+					if (usernamePart !== '' && Object.prototype.hasOwnProperty.call(byKey, usernamePart)) {
+						return byKey[usernamePart];
+					}
+				}
+				if (!allowFuzzy) {
+					return null;
+				}
+
+				var matches = [];
+				for (var idx = 0; idx < rows.length; idx += 1) {
+					var current = rows[idx] || {};
+					var currentUsername = normalize(current.username);
+					var currentEmployeeId = normalize(current.employee_id);
+					var composite = currentEmployeeId !== '' && currentEmployeeId !== '-' ? currentEmployeeId + ' - ' + currentUsername : currentUsername;
+					if (
+						(currentUsername !== '' && currentUsername.indexOf(key) !== -1) ||
+						(currentEmployeeId !== '' && currentEmployeeId !== '-' && currentEmployeeId.indexOf(key) !== -1) ||
+						(composite.indexOf(key) !== -1)
+					) {
+						matches.push(current);
+					}
+				}
+
+				return matches.length === 1 ? matches[0] : null;
+			};
+
+			var applyCrossBranchBySelectedUser = function () {
+				var row = resolveAccount(editUsernameInput.value, true);
+				if (!row) {
+					if (normalize(editUsernameInput.value) === '') {
+						editCrossBranchInput.value = '0';
+						applyCustomScheduleFields(null);
+					}
+					return;
+				}
+				var crossBranchRaw = Object.prototype.hasOwnProperty.call(row, 'cross_branch_enabled')
+					? row.cross_branch_enabled
+					: row.lintas_cabang;
+				editCrossBranchInput.value = resolveCrossBranchValue(crossBranchRaw) === 1 ? '1' : '0';
+				applyCustomScheduleFields(row);
+			};
+
+			var scheduleApply = function () {
+				window.setTimeout(applyCrossBranchBySelectedUser, 0);
+			};
+
+			editUsernameInput.addEventListener('input', scheduleApply);
+			editUsernameInput.addEventListener('change', scheduleApply);
+			editUsernameInput.addEventListener('blur', scheduleApply);
+
+			var modalOpenButtons = document.querySelectorAll('[data-manage-modal-open="employeeManageModal"]');
+			for (var buttonIndex = 0; buttonIndex < modalOpenButtons.length; buttonIndex += 1) {
+				modalOpenButtons[buttonIndex].addEventListener('click', function () {
+					window.setTimeout(applyCrossBranchBySelectedUser, 40);
+				});
+			}
+
+			scheduleApply();
+		})();
+	</script>
+	<script>
+		(function () {
+			if (window.__metricMemberWidgetInit) {
+				return;
+			}
+			window.__metricMemberWidgetInit = true;
+
+			var cfg = window.__HOME_INDEX_CONFIG || {};
+			var chartEndpoint = String(cfg.chartEndpoint || '').trim();
+			var modal = document.getElementById('metricModal');
+			var modalTitle = document.getElementById('metricModalTitle');
+			var memberWrap = document.getElementById('metricMemberWrap');
+			var memberTitle = document.getElementById('metricMemberTitle');
+			var memberNote = document.getElementById('metricMemberNote');
+			var memberList = document.getElementById('metricMemberList');
+			var memberSearchInput = document.getElementById('metricMemberSearchInput');
+			var memberSearchMeta = document.getElementById('metricMemberSearchMeta');
+			var memberTableWrap = modal.querySelector('.metric-member-table-wrap');
+			var rangeButtons = document.querySelectorAll('.metric-range-btn[data-metric-range]');
+			var metricCards = document.querySelectorAll('[data-metric-card]');
+			if (!chartEndpoint || !modal || !memberWrap || !memberTitle || !memberNote || !memberList) {
+				return;
+			}
+
+			var metricLabels = {
+				hadir: 'Total Hadir',
+				terlambat: 'Total Terlambat',
+				izin_cuti: 'Total Izin/Cuti',
+				alpha: 'Total Alpha'
+			};
+			var currentMetricKey = 'hadir';
+			var pollingId = null;
+			var requestSeq = 0;
+			var pending = false;
+			var memberRows = [];
+			var memberCountByKey = {};
+			var currentRangeKey = '1B';
+
+			var parseMetricFromTitle = function () {
+				var text = String((modalTitle && modalTitle.textContent) || '').toLowerCase();
+				if (text.indexOf('terlambat') !== -1) { return 'terlambat'; }
+				if (text.indexOf('izin') !== -1 || text.indexOf('cuti') !== -1) { return 'izin_cuti'; }
+				if (text.indexOf('alpha') !== -1) { return 'alpha'; }
+				return 'hadir';
+			};
+
+			var activeRange = function () {
+				for (var i = 0; i < rangeButtons.length; i += 1) {
+					if (rangeButtons[i].classList.contains('active')) {
+						return String(rangeButtons[i].getAttribute('data-metric-range') || '1B').toUpperCase();
+					}
+				}
+				return '1B';
+			};
+
+			var normalizeSearchText = function (value) {
+				return String(value || '').toLowerCase().trim();
+			};
+
+			var buildRowCountKey = function (row) {
+				var idPart = String((row && row.employee_id) || '').trim().toLowerCase();
+				var userPart = String((row && row.username) || '').trim().toLowerCase();
+				var namePart = String((row && row.name) || '').trim().toLowerCase();
+				if (userPart !== '') {
+					return 'u:' + userPart;
+				}
+				if (idPart !== '' && idPart !== '-') {
+					return 'i:' + idPart;
+				}
+				return 'n:' + namePart;
+			};
+
+			var buildMemberCountMap = function (rows) {
+				var counter = {};
+				var i;
+				for (i = 0; i < rows.length; i += 1) {
+					var row = rows[i] || {};
+					var key = buildRowCountKey(row) + '|d:' + normalizeSearchText(row.date || row.date_label || '-');
+					if (!counter[key]) {
+						counter[key] = 0;
+					}
+					counter[key] += 1;
+				}
+				return counter;
+			};
+
+			var buildMemberRows = function (details, names, unknownCount) {
+				var rows = [];
+				var i;
+				if (Array.isArray(details) && details.length > 0) {
+					for (i = 0; i < details.length; i += 1) {
+						var detail = details[i] || {};
+						var detailName = String(detail.name || '').trim();
+						if (detailName === '') {
+							continue;
+						}
+						var detailId = String(detail.employee_id || '-').trim();
+						if (detailId === '') {
+							detailId = '-';
+						}
+						rows.push({
+							username: String(detail.username || '').trim(),
+							employee_id: detailId,
+							name: detailName,
+							date: String(detail.date || detail.date_label || '-').trim() || '-',
+							date_label: String(detail.date_label || detail.date || '-').trim() || '-'
+						});
+					}
+				} else if (Array.isArray(names)) {
+					for (i = 0; i < names.length; i += 1) {
+						var fallbackName = String(names[i] || '').trim();
+						if (fallbackName === '') {
+							continue;
+						}
+						rows.push({
+							username: '',
+							employee_id: '-',
+							name: fallbackName,
+							date: '-',
+							date_label: '-'
+						});
+					}
+				}
+
+				var unknownTotal = Number(unknownCount || 0);
+				if (isFinite(unknownTotal) && unknownTotal > 0) {
+					for (i = 0; i < unknownTotal; i += 1) {
+						rows.push({
+							username: '',
+							employee_id: '-',
+							name: 'Data tanpa nama',
+							date: '-',
+							date_label: '-'
+						});
+					}
+				}
+
+				return rows;
+			};
+
+			var toggleCountColumnByRange = function (rangeKey) {
+				var rangeUpper = String(rangeKey || '').toUpperCase();
+				var hide = (rangeUpper === '1H');
+				if (memberTableWrap) {
+					memberTableWrap.classList.toggle('hide-count-col', hide);
+				}
+			};
+
+			var renderTableRows = function () {
+				var filterText = normalizeSearchText(memberSearchInput ? memberSearchInput.value : '');
+				memberList.innerHTML = '';
+
+				var filteredRows = [];
+				for (var i = 0; i < memberRows.length; i += 1) {
+					var row = memberRows[i];
+					var searchKey = normalizeSearchText((row.employee_id || '') + ' ' + (row.name || ''));
+					if (filterText !== '' && searchKey.indexOf(filterText) === -1) {
+						continue;
+					}
+					filteredRows.push(row);
+				}
+
+				if (memberSearchMeta) {
+					memberSearchMeta.textContent = filteredRows.length + ' dari ' + memberRows.length + ' data';
+				}
+
+				if (filteredRows.length === 0) {
+					var emptyRow = document.createElement('tr');
+					var emptyCell = document.createElement('td');
+					emptyCell.colSpan = String(currentRangeKey).toUpperCase() === '1H' ? 4 : 5;
+					emptyCell.className = 'metric-member-empty';
+					emptyCell.textContent = memberRows.length > 0
+						? 'Tidak ada data yang cocok dengan pencarian.'
+						: 'Tidak ada data karyawan pada metrik ini.';
+					emptyRow.appendChild(emptyCell);
+					memberList.appendChild(emptyRow);
+					return;
+				}
+
+				for (var rowIndex = 0; rowIndex < filteredRows.length; rowIndex += 1) {
+					var rowData = filteredRows[rowIndex];
+					var tr = document.createElement('tr');
+
+					var tdNo = document.createElement('td');
+					tdNo.textContent = String(rowIndex + 1);
+					tr.appendChild(tdNo);
+
+					var tdId = document.createElement('td');
+					tdId.textContent = String(rowData.employee_id || '-');
+					tr.appendChild(tdId);
+
+					var tdName = document.createElement('td');
+					tdName.textContent = String(rowData.name || '-');
+					tr.appendChild(tdName);
+
+					var tdDate = document.createElement('td');
+					tdDate.textContent = String(rowData.date_label || '-');
+					tr.appendChild(tdDate);
+
+					var tdCount = document.createElement('td');
+					tdCount.className = 'metric-count-col';
+					var countKey = buildRowCountKey(rowData) + '|d:' + normalizeSearchText(rowData.date || rowData.date_label || '-');
+					var countValue = Number(memberCountByKey[countKey] || 0);
+					if (!isFinite(countValue) || countValue <= 0) {
+						countValue = 1;
+					}
+					tdCount.textContent = String(countValue) + 'x';
+					tr.appendChild(tdCount);
+
+					memberList.appendChild(tr);
+				}
+			};
+
+			var render = function (title, note, details, names, unknownCount, rangeKey) {
+				memberTitle.textContent = title;
+				memberNote.textContent = note;
+				memberWrap.style.display = 'grid';
+				currentRangeKey = String(rangeKey || activeRange() || '1B').toUpperCase();
+				memberRows = buildMemberRows(details, names, unknownCount);
+				memberCountByKey = buildMemberCountMap(memberRows);
+				toggleCountColumnByRange(currentRangeKey);
+				if (memberSearchInput) {
+					memberSearchInput.value = '';
+				}
+				renderTableRows();
+			};
+
+			var renderLoading = function () {
+				var metricLabel = metricLabels[currentMetricKey] || 'Total Hadir';
+				render('Daftar Karyawan - ' + metricLabel, 'Memuat daftar karyawan...', [], [], 0, currentRangeKey);
+			};
+
+			var renderError = function () {
+				var metricLabel = metricLabels[currentMetricKey] || 'Total Hadir';
+				render('Daftar Karyawan - ' + metricLabel, 'Gagal memuat daftar karyawan.', [], [], 0, currentRangeKey);
+			};
+
+			var fetchMembers = function () {
+				if (!modal.classList.contains('show') || pending) {
+					return;
+				}
+				currentMetricKey = parseMetricFromTitle();
+				var range = activeRange();
+				currentRangeKey = range;
+				var requestId = requestSeq + 1;
+				requestSeq = requestId;
+				pending = true;
+				renderLoading();
+
+				var url = chartEndpoint
+					+ '?metric=' + encodeURIComponent(currentMetricKey)
+					+ '&range=' + encodeURIComponent(range)
+					+ '&_members=' + String(Date.now());
+
+				fetch(url, {
+					credentials: 'same-origin',
+					headers: { 'X-Requested-With': 'XMLHttpRequest' }
+				})
+					.then(function (resp) {
+						if (!resp.ok) { throw new Error('HTTP ' + String(resp.status)); }
+						return resp.json();
+					})
+					.then(function (json) {
+						if (requestId !== requestSeq) { return; }
+						if (!json || json.success !== true) { throw new Error('Invalid payload'); }
+						var names = Array.isArray(json.employee_names) ? json.employee_names : [];
+						var detailsRaw = Array.isArray(json.employee_details) ? json.employee_details : [];
+						var details = [];
+						for (var detailIndex = 0; detailIndex < detailsRaw.length; detailIndex += 1) {
+							var row = detailsRaw[detailIndex];
+							if (!row || typeof row !== 'object') {
+								continue;
+							}
+							var rowName = String(row.name || '').trim();
+							if (!rowName) {
+								continue;
+							}
+							details.push({
+								username: String(row.username || '').trim(),
+								name: rowName,
+								employee_id: String(row.employee_id || '-').trim() || '-',
+								date: String(row.date || '').trim(),
+								date_label: String(row.date_label || '').trim()
+							});
+						}
+						var unknownCount = Number(json.employee_unknown_count || 0);
+						if (!isFinite(unknownCount) || unknownCount < 0) { unknownCount = 0; }
+						var total = Number(json.employee_count || 0);
+						if (!isFinite(total) || total < 0) {
+							total = 0;
+						}
+						if (total <= 0) {
+							total = (details.length > 0 ? details.length : names.length) + unknownCount;
+						}
+						var uniqueCount = Number(json.employee_unique_count || 0);
+						if (!isFinite(uniqueCount) || uniqueCount < 0) { uniqueCount = 0; }
+						if (uniqueCount <= 0) {
+							uniqueCount = names.length;
+						}
+						var rangeLabel = String(json.range_label || range);
+						var metricLabel = String(json.metric_label || (metricLabels[currentMetricKey] || 'Total Hadir'));
+						var note = total > 0
+							? (rangeLabel + ' - total ' + String(total) + ' data')
+							: (rangeLabel + ' - tidak ada data karyawan pada metrik ini.');
+						if (total > 0 && uniqueCount > 0) {
+							note += ' (' + String(uniqueCount) + ' karyawan unik)';
+						}
+						if (total > 0) {
+							note += '.';
+						}
+						render('Daftar Karyawan - ' + metricLabel, note, details, names, unknownCount, range);
+					})
+					.catch(function () {
+						if (requestId !== requestSeq) { return; }
+						renderError();
+					})
+					.then(function () {
+						if (requestId === requestSeq) {
+							pending = false;
+						}
+					});
+			};
+
+			var startPolling = function () {
+				if (pollingId !== null) {
+					window.clearInterval(pollingId);
+				}
+				pollingId = window.setInterval(function () {
+					if (modal.classList.contains('show')) {
+						fetchMembers();
+					}
+				}, 20000);
+			};
+
+			var stopPolling = function () {
+				if (pollingId !== null) {
+					window.clearInterval(pollingId);
+					pollingId = null;
+				}
+			};
+
+			for (var i = 0; i < metricCards.length; i += 1) {
+				(function (card) {
+					card.addEventListener('click', function () {
+						var key = String(card.getAttribute('data-metric-card') || '').trim();
+						if (key) { currentMetricKey = key; }
+						window.setTimeout(fetchMembers, 160);
+					});
+				})(metricCards[i]);
+			}
+
+			for (var j = 0; j < rangeButtons.length; j += 1) {
+				rangeButtons[j].addEventListener('click', function () {
+					window.setTimeout(fetchMembers, 160);
+				});
+			}
+
+			if (memberSearchInput) {
+				memberSearchInput.addEventListener('input', renderTableRows);
+			}
+
+			var observer = new MutationObserver(function () {
+				if (modal.classList.contains('show')) {
+					fetchMembers();
+					startPolling();
+				} else {
+					stopPolling();
+				}
+			});
+			observer.observe(modal, { attributes: true, attributeFilter: ['class'] });
+
+			var chartCanvas = document.getElementById('metricChartCanvas');
+			if (chartCanvas) {
+				chartCanvas.addEventListener('wheel', function (event) {
+					if (!modal.classList.contains('show')) {
+						return;
+					}
+					if (event.ctrlKey || event.metaKey) {
+						return;
+					}
+					var modalBody = modal.querySelector('.metric-modal-body');
+					if (!modalBody) {
+						return;
+					}
+					event.preventDefault();
+					event.stopPropagation();
+					modalBody.scrollTop += event.deltaY;
+				}, { passive: false, capture: true });
+			}
+
+			var metricRangeNote = modal.querySelector('.metric-range-note');
+			if (metricRangeNote) {
+				metricRangeNote.textContent = 'Scroll untuk turun/naik daftar. Gunakan Ctrl + scroll untuk zoom grafik.';
+			}
+		})();
+	</script>
+			<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js"></script>
+			<script>
+				(function () {
+					var patchChartFactory = function () {
+						if (!window.LightweightCharts || typeof window.LightweightCharts.createChart !== 'function') {
+							return false;
+						}
+						if (window.__homeChartThemePatchApplied === true) {
+							return true;
+						}
+						var originalCreateChart = window.LightweightCharts.createChart;
+						var resolveDarkModeState = function () {
+							var root = document.documentElement;
+							var body = document.body;
+							var rootTheme = root ? String(root.getAttribute('data-theme') || '').toLowerCase() : '';
+							return !!(
+								(root && root.classList.contains('theme-dark')) ||
+								(body && body.classList.contains('theme-dark')) ||
+								rootTheme === 'dark'
+							);
+						};
+							var resolveThemePatch = function (isDarkMode) {
+								if (isDarkMode) {
+									return {
+										layout: {
+											background: { type: 'solid', color: '#0f1d2a' },
+											textColor: '#d7e5f4'
+										},
+									grid: {
+										vertLines: { color: '#274158' },
+										horzLines: { color: '#274158' }
+									},
+									crosshair: {
+										vertLine: {
+											color: 'rgba(121, 161, 201, 0.45)',
+											width: 1,
+											style: 2,
+											labelBackgroundColor: '#244d72'
+										},
+										horzLine: {
+											color: 'rgba(121, 161, 201, 0.35)',
+											width: 1,
+											style: 2,
+											labelBackgroundColor: '#244d72'
+										}
+									},
+									rightPriceScale: { borderColor: '#385a78' },
+									timeScale: { borderColor: '#385a78' }
+								};
+							}
+
+								return {
+									layout: {
+										background: { type: 'solid', color: '#f9fcff' },
+										textColor: '#4a627b'
+									},
+								grid: {
+									vertLines: { color: '#e8f1fa' },
+									horzLines: { color: '#e8f1fa' }
+								},
+								crosshair: {
+									vertLine: {
+										color: 'rgba(20, 79, 134, 0.45)',
+										width: 1,
+										style: 2,
+										labelBackgroundColor: '#0f5c93'
+									},
+									horzLine: {
+										color: 'rgba(20, 79, 134, 0.35)',
+										width: 1,
+										style: 2,
+										labelBackgroundColor: '#0f5c93'
+									}
+								},
+								rightPriceScale: { borderColor: '#c6d8ea' },
+								timeScale: { borderColor: '#c6d8ea' }
+							};
+						};
+							var applyThemeToChart = function (chartInstance) {
+								if (!chartInstance || typeof chartInstance.applyOptions !== 'function') {
+									return;
+								}
+								var isDarkMode = resolveDarkModeState();
+								var themePatch = resolveThemePatch(isDarkMode);
+								try {
+									chartInstance.applyOptions({
+										layout: themePatch.layout,
+										grid: themePatch.grid,
+										crosshair: themePatch.crosshair,
+										rightPriceScale: themePatch.rightPriceScale,
+										timeScale: themePatch.timeScale
+									});
+								} catch (error) {}
+								var chartHost = document.getElementById('metricChartCanvas');
+								if (chartHost && chartHost.style) {
+									chartHost.style.backgroundColor = isDarkMode ? '#0f1d2a' : '#f9fcff';
+								}
+							};
+						if (!Array.isArray(window.__homeChartThemeInstances)) {
+							window.__homeChartThemeInstances = [];
+						}
+						if (window.__homeChartThemeListenerBound !== true) {
+							window.addEventListener('home-theme-changed', function () {
+								var instances = Array.isArray(window.__homeChartThemeInstances)
+									? window.__homeChartThemeInstances
+									: [];
+								for (var i = 0; i < instances.length; i += 1) {
+									applyThemeToChart(instances[i]);
+								}
+							});
+							window.__homeChartThemeListenerBound = true;
+						}
+						window.LightweightCharts.createChart = function (container, options) {
+							var resolved = options && typeof options === 'object' ? options : {};
+							var layout = resolved.layout && typeof resolved.layout === 'object' ? resolved.layout : {};
+							var grid = resolved.grid && typeof resolved.grid === 'object' ? resolved.grid : {};
+							var crosshair = resolved.crosshair && typeof resolved.crosshair === 'object' ? resolved.crosshair : {};
+							var vertLines = grid.vertLines && typeof grid.vertLines === 'object' ? grid.vertLines : {};
+							var horzLines = grid.horzLines && typeof grid.horzLines === 'object' ? grid.horzLines : {};
+							var vertLine = crosshair.vertLine && typeof crosshair.vertLine === 'object' ? crosshair.vertLine : {};
+							var horzLine = crosshair.horzLine && typeof crosshair.horzLine === 'object' ? crosshair.horzLine : {};
+							var rightScale = resolved.rightPriceScale && typeof resolved.rightPriceScale === 'object' ? resolved.rightPriceScale : {};
+							var timeScale = resolved.timeScale && typeof resolved.timeScale === 'object' ? resolved.timeScale : {};
+							var themePatch = resolveThemePatch(resolveDarkModeState());
+							resolved = Object.assign({}, resolved, {
+								layout: Object.assign({}, layout, themePatch.layout),
+								grid: Object.assign({}, grid, {
+									vertLines: Object.assign({}, vertLines, themePatch.grid.vertLines),
+									horzLines: Object.assign({}, horzLines, themePatch.grid.horzLines)
+								}),
+								crosshair: Object.assign({}, crosshair, {
+									vertLine: Object.assign({}, vertLine, themePatch.crosshair.vertLine),
+									horzLine: Object.assign({}, horzLine, themePatch.crosshair.horzLine)
+								}),
+								rightPriceScale: Object.assign({}, rightScale, themePatch.rightPriceScale),
+								timeScale: Object.assign({}, timeScale, themePatch.timeScale)
+							});
+							var chartInstance = originalCreateChart.call(window.LightweightCharts, container, resolved);
+							if (chartInstance) {
+								window.__homeChartThemeInstances.push(chartInstance);
+								applyThemeToChart(chartInstance);
+							}
+							return chartInstance;
+						};
+						window.__homeChartThemePatchApplied = true;
+						return true;
+					};
+
+					if (patchChartFactory()) {
+						return;
+					}
+					var tries = 0;
+					var timer = window.setInterval(function () {
+						tries += 1;
+						if (patchChartFactory() || tries >= 120) {
+							window.clearInterval(timer);
+						}
+					}, 50);
+				})();
+			</script>
+			<script defer src="<?php echo htmlspecialchars($base_path.'/'.$home_index_js_file, ENT_QUOTES, 'UTF-8'); ?>?v=<?php echo rawurlencode($home_index_js_version); ?>"></script>
+		<script defer src="<?php echo htmlspecialchars($base_path.'/'.$home_index_collab_js_file, ENT_QUOTES, 'UTF-8'); ?>?v=<?php echo rawurlencode($home_index_collab_js_version); ?>"></script>
+		<script>
+			(function () {
+				var storageKey = 'home_index_theme';
+				var root = document.documentElement;
+				var body = document.body;
+				var toggle = document.getElementById('themeToggleButton');
+				if (!root || !body || !toggle) {
+					return;
+				}
+
+					var writeTheme = function (theme) {
+						if (theme !== 'dark' && theme !== 'light') {
+							return;
+						}
+						var manager = window.__homeThemeManager;
+						if (manager && typeof manager.persistTheme === 'function') {
+							manager.persistTheme(theme);
+							return;
+						}
+						try {
+							window.localStorage.setItem(storageKey, theme);
+						} catch (error) {}
+						try {
+							document.cookie = storageKey + '=' + encodeURIComponent(theme) + ';path=/;max-age=31536000;SameSite=Lax';
+						} catch (error) {}
+					};
+					var readTheme = function () {
+						var saved = '';
+						try {
+							saved = String(window.localStorage.getItem(storageKey) || '').toLowerCase();
+						} catch (error) {}
+						if (saved === 'dark' || saved === 'light') {
+							return saved;
+						}
+						var cookieMatch = document.cookie.match(/(?:^|;\s*)home_index_theme=(dark|light)\b/i);
+						if (cookieMatch && cookieMatch[1]) {
+							return String(cookieMatch[1]).toLowerCase();
+						}
+						return '';
+					};
+					var applyTheme = function (theme, persist) {
+						var isDark = theme === 'dark';
+						root.classList.toggle('theme-dark', isDark);
+						body.classList.toggle('theme-dark', isDark);
+						root.setAttribute('data-theme', isDark ? 'dark' : 'light');
+						toggle.setAttribute('aria-pressed', isDark ? 'true' : 'false');
+						toggle.setAttribute('aria-label', isDark ? 'Aktifkan mode siang' : 'Aktifkan mode malam');
+						toggle.title = isDark ? 'Ganti ke mode siang' : 'Ganti ke mode malam';
+					if (persist === true) {
+						writeTheme(isDark ? 'dark' : 'light');
+					}
+					try {
+						window.dispatchEvent(new CustomEvent('home-theme-changed', {
+							detail: {
+								isDark: isDark,
+								theme: isDark ? 'dark' : 'light'
+							}
+						}));
+					} catch (error) {}
+				};
+
+					var saved = readTheme();
+					if (saved === 'dark' || saved === 'light') {
+						applyTheme(saved, false);
+					} else {
+						var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+						applyTheme(prefersDark ? 'dark' : 'light', true);
+					}
+
+				toggle.addEventListener('click', function () {
+					var activeDark = body.classList.contains('theme-dark') || root.classList.contains('theme-dark');
+					applyTheme(activeDark ? 'light' : 'dark', true);
+				});
+			})();
+		</script>
+	</body>
+	</html>

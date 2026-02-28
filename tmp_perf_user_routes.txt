@@ -1,9 +1,0 @@
-route=/home code=200 total=2.640209 start=2.639707 size=34329 url=https://absenpanha.com/home
-route=/home/cara_pakai code=200 total=3.237176 start=3.232816 size=34329 url=https://absenpanha.com/home
-route=/home/log_data code=200 total=3.864950 start=3.860150 size=34329 url=https://absenpanha.com/home
-route=/home/leave_requests code=200 total=3.238076 start=3.231879 size=34329 url=https://absenpanha.com/home
-route=/home/loan_requests code=200 total=3.339655 start=3.338807 size=34329 url=https://absenpanha.com/home
-route=/home/day_off_swap_requests code=200 total=3.197259 start=3.190352 size=34329 url=https://absenpanha.com/home
-route=/home/overtime_data code=200 total=3.292984 start=3.286212 size=34329 url=https://absenpanha.com/home
-route=/home/employee_data code=200 total=3.259872 start=3.255255 size=34329 url=https://absenpanha.com/home
-route=/home/employee_data_monthly code=200 total=3.248760 start=3.245289 size=34329 url=https://absenpanha.com/home

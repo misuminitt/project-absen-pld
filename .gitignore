@@ -8,7 +8,6 @@ application/logs/*
 
 !application/*/.htaccess
 
-composer.lock
 tests/mocks/database/ci_test.sqlite
 
 user_guide_src/build/*
@@ -32,12 +31,24 @@ user_guide_src/cilexer/pycilexer.egg-info/*
 /tests/results/
 Backup Database Localstorage Server Absen/
 uploads/PP bak/
-.claude
+.claude/
 .vscode/
 
 output/
-*.xlsx
-*.json
+/*.xlsx
+/perf_*.json
+/src/secrets/*
+!/src/secrets/.gitkeep
 
 .env
+.env.*
 .env.local
+!.env.example
+
+# Security/Data artifacts (never commit)
+cookies.txt
+tmp_*
+.tmp_*
+Absen_Panha_cleaned.csv
+uploads/profile_photo/*
+uploads/attendance_photo/*

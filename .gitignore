@@ -32,7 +32,7 @@ user_guide_src/cilexer/pycilexer.egg-info/*
 /tests/results/
 Backup Database Localstorage Server Absen/
 uploads/PP bak/
-src/secrets
+src/secrets/
 .claude
 
 .env

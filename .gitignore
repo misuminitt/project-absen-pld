@@ -33,6 +33,7 @@ user_guide_src/cilexer/pycilexer.egg-info/*
 Backup Database Localstorage Server Absen/
 uploads/PP bak/
 src/secrets/
+.xlsx
 .claude
 
 .env

@@ -7,6 +7,7 @@ class Absen_sheet_sync {
 	protected $access_token = '';
 	protected $access_token_expire_at = 0;
 	protected $sheet_context = NULL;
+	protected $loan_sheet_context = NULL;
 
 	public function __construct($params = array())
 	{
@@ -34,6 +35,10 @@ class Absen_sheet_sync {
 			'credential_json_raw' => '',
 			'sync_interval_seconds' => 60,
 			'request_timeout_seconds' => 15,
+			'batch_update_chunk_size' => 500,
+			'batch_update_chunk_delay_ms' => 120,
+			'http_retry_max' => 1,
+			'http_retry_delay_ms' => 700,
 			'default_user_password' => '123',
 			'writeback_on_web_change' => FALSE,
 			'fixed_account_sheet_rows' => array(),
@@ -3629,6 +3634,1108 @@ class Absen_sheet_sync {
 		);
 	}
 
+	public function sync_loans_web_to_sheet($options = array())
+	{
+		if (!$this->is_enabled())
+		{
+			return array(
+				'success' => FALSE,
+				'skipped' => TRUE,
+				'message' => 'Sync spreadsheet dinonaktifkan.'
+			);
+		}
+
+		$input_rows = isset($options['rows']) && is_array($options['rows'])
+			? array_values($options['rows'])
+			: array();
+		if (empty($input_rows))
+		{
+			return array(
+				'success' => TRUE,
+				'skipped' => TRUE,
+				'message' => 'Tidak ada data pinjaman web yang perlu dikirim ke sheet.',
+				'written_rows' => 0,
+				'skipped_rows' => 0,
+				'synced' => array(),
+				'skipped_items' => array()
+			);
+		}
+
+		$context_result = $this->resolve_loan_sheet_context();
+		if (!(isset($context_result['success']) && $context_result['success'] === TRUE))
+		{
+			return $context_result;
+		}
+		$context = isset($context_result['data']) && is_array($context_result['data'])
+			? $context_result['data']
+			: array();
+
+		$column_indexes = isset($context['column_indexes']) && is_array($context['column_indexes'])
+			? $context['column_indexes']
+			: array();
+		$dibayar_indexes = isset($context['dibayar_indexes']) && is_array($context['dibayar_indexes'])
+			? $context['dibayar_indexes']
+			: array();
+		$column_letters = isset($context['column_letters']) && is_array($context['column_letters'])
+			? $context['column_letters']
+			: array();
+		$sheet_title = isset($context['sheet_title']) ? trim((string) $context['sheet_title']) : '';
+		$data_start_row = isset($context['data_start_row']) ? (int) $context['data_start_row'] : 2;
+		$date_format = isset($context['date_format']) ? trim((string) $context['date_format']) : 'id_text';
+
+		if ($sheet_title === '' || !isset($column_indexes['date']) || !isset($column_indexes['name']) || !isset($column_indexes['purpose']) || !isset($column_indexes['kasbon']) || !isset($column_indexes['total']))
+		{
+			return array(
+				'success' => FALSE,
+				'skipped' => FALSE,
+				'message' => 'Kolom wajib kasbon (tanggal/nama/keperluan/kasbon/total) tidak ditemukan di sheet.'
+			);
+		}
+
+		$max_scan_rows = isset($options['max_scan_rows']) ? (int) $options['max_scan_rows'] : 2800;
+		if ($max_scan_rows < 200)
+		{
+			$max_scan_rows = 200;
+		}
+		if ($max_scan_rows > 12000)
+		{
+			$max_scan_rows = 12000;
+		}
+
+		$range_end_row = $data_start_row + $max_scan_rows - 1;
+		$read_result = $this->sheet_values_get($sheet_title, 'A'.$data_start_row.':AG'.$range_end_row);
+		if (!(isset($read_result['success']) && $read_result['success'] === TRUE))
+		{
+			return $read_result;
+		}
+		$sheet_rows = isset($read_result['data']['values']) && is_array($read_result['data']['values'])
+			? $read_result['data']['values']
+			: array();
+
+		$date_index = (int) $column_indexes['date'];
+		$name_index = (int) $column_indexes['name'];
+		$purpose_index = (int) $column_indexes['purpose'];
+		$kasbon_index = (int) $column_indexes['kasbon'];
+
+		$existing_signatures = array();
+		$existing_date_name_keys = array();
+		$empty_rows = array();
+		$max_filled_row = $data_start_row - 1;
+		for ($i = 0; $i < count($sheet_rows); $i += 1)
+		{
+			$row = isset($sheet_rows[$i]) && is_array($sheet_rows[$i]) ? $sheet_rows[$i] : array();
+			$row_number = $data_start_row + $i;
+
+			$date_cell = $this->cell_value_by_index($row, $date_index);
+			$name_cell = $this->cell_value_by_index($row, $name_index);
+			$purpose_cell = $this->cell_value_by_index($row, $purpose_index);
+			$kasbon_amount = $this->parse_money_to_int($this->cell_value_by_index($row, $kasbon_index));
+			$has_key_data = $date_cell !== '' || $name_cell !== '' || $purpose_cell !== '' || $kasbon_amount > 0;
+			if (!$has_key_data)
+			{
+				$empty_rows[] = $row_number;
+				continue;
+			}
+
+			$max_filled_row = max($max_filled_row, $row_number);
+			$date_iso = $this->parse_loan_sheet_date_to_iso($date_cell);
+			$signature = sha1(
+				$this->normalize_loan_sheet_date_signature($date_iso, $date_cell).'|'.
+				$this->normalize_loan_sheet_name_signature($name_cell).'|'.
+				$this->normalize_loan_sheet_text_signature($purpose_cell).'|'.
+				(string) $kasbon_amount
+			);
+			$existing_signatures[$signature] = TRUE;
+			$date_name_key = $this->build_loan_sheet_date_name_key($date_iso, $date_cell, $name_cell);
+			if ($date_name_key !== '')
+			{
+				$existing_date_name_keys[$date_name_key] = TRUE;
+			}
+		}
+
+		$name_whitelist_map = $this->build_loan_sheet_name_whitelist_map(
+			isset($options['name_whitelist']) && is_array($options['name_whitelist'])
+				? $options['name_whitelist']
+				: array()
+		);
+
+		$next_row_number = max($data_start_row, $max_filled_row + 1);
+		$queued_signatures = array();
+		$queued_date_name_keys = array();
+		$batch_updates = array();
+		$synced = array();
+		$skipped_items = array();
+		for ($i = 0; $i < count($input_rows); $i += 1)
+		{
+			$row = isset($input_rows[$i]) && is_array($input_rows[$i]) ? $input_rows[$i] : array();
+			$loan_id = isset($row['id']) && trim((string) $row['id']) !== ''
+				? trim((string) $row['id'])
+				: 'row_'.$i;
+
+			$amount = $this->parse_money_to_int(isset($row['amount']) ? $row['amount'] : '');
+			if ($amount <= 0)
+			{
+				$skipped_items[] = array(
+					'id' => $loan_id,
+					'reason' => 'nominal_tidak_valid'
+				);
+				continue;
+			}
+
+			$date_iso = '';
+			$request_date = isset($row['request_date']) ? trim((string) $row['request_date']) : '';
+			if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $request_date) === 1)
+			{
+				$date_iso = $request_date;
+			}
+			if ($date_iso === '')
+			{
+				$date_iso = $this->parse_loan_sheet_date_to_iso(isset($row['request_date_label']) ? (string) $row['request_date_label'] : '');
+			}
+			if ($date_iso === '')
+			{
+				$date_iso = date('Y-m-d');
+			}
+			$date_label = $this->format_loan_sheet_date($date_iso, $date_format);
+			if ($date_label === '')
+			{
+				$date_label = date('j F Y');
+			}
+
+			$source_name = isset($row['sheet_name']) ? (string) $row['sheet_name'] : '';
+			if (trim($source_name) === '')
+			{
+				$source_name = isset($row['name']) ? (string) $row['name'] : '';
+			}
+			if (trim($source_name) === '')
+			{
+				$source_name = isset($row['display_name']) ? (string) $row['display_name'] : '';
+			}
+			if (trim($source_name) === '')
+			{
+				$source_name = isset($row['username']) ? (string) $row['username'] : '';
+			}
+
+			$sheet_name = $this->resolve_loan_sheet_name_from_whitelist($source_name, $name_whitelist_map);
+			if ($sheet_name === '')
+			{
+				$skipped_items[] = array(
+					'id' => $loan_id,
+					'reason' => 'nama_tidak_ditemukan',
+					'name' => trim((string) $source_name)
+				);
+				continue;
+			}
+			$date_name_key = $this->build_loan_sheet_date_name_key($date_iso, $date_label, $sheet_name);
+			if (
+				$date_name_key !== ''
+				&& (isset($existing_date_name_keys[$date_name_key]) || isset($queued_date_name_keys[$date_name_key]))
+			)
+			{
+				$skipped_items[] = array(
+					'id' => $loan_id,
+					'reason' => 'duplikat_tanggal_nama'
+				);
+				continue;
+			}
+
+			$purpose_raw = isset($row['reason']) ? (string) $row['reason'] : '';
+			if (trim($purpose_raw) === '')
+			{
+				$purpose_raw = isset($row['purpose']) ? (string) $row['purpose'] : '';
+			}
+			$purpose = $this->uppercase_text($this->normalize_loan_sheet_text_signature($purpose_raw));
+			if ($purpose === '')
+			{
+				$skipped_items[] = array(
+					'id' => $loan_id,
+					'reason' => 'keperluan_kosong'
+				);
+				continue;
+			}
+
+			$signature = sha1(
+				$this->normalize_loan_sheet_date_signature($date_iso, $date_label).'|'.
+				$this->normalize_loan_sheet_name_signature($sheet_name).'|'.
+				$this->normalize_loan_sheet_text_signature($purpose).'|'.
+				(string) $amount
+			);
+			if (isset($existing_signatures[$signature]) || isset($queued_signatures[$signature]))
+			{
+				$skipped_items[] = array(
+					'id' => $loan_id,
+					'reason' => 'duplikat_signature'
+				);
+				continue;
+			}
+
+			if (!empty($empty_rows))
+			{
+				$target_row = (int) array_shift($empty_rows);
+			}
+			else
+			{
+				$target_row = $next_row_number;
+				$next_row_number += 1;
+			}
+			if ($target_row < $data_start_row)
+			{
+				$target_row = $data_start_row;
+			}
+
+			$total_formula = '='.$column_letters['kasbon'].$target_row;
+			for ($dibayar_no = 1; $dibayar_no <= 12; $dibayar_no += 1)
+			{
+				$dibayar_index = isset($dibayar_indexes[$dibayar_no]) ? (int) $dibayar_indexes[$dibayar_no] : -1;
+				if ($dibayar_index < 0)
+				{
+					continue;
+				}
+				$total_formula .= '-'.$this->column_letter_from_index($dibayar_index).$target_row;
+			}
+
+			$batch_updates[] = array(
+				'range' => $this->quote_sheet_title($sheet_title).'!'.$column_letters['date'].$target_row,
+				'majorDimension' => 'ROWS',
+				'values' => array(array($date_label))
+			);
+			$batch_updates[] = array(
+				'range' => $this->quote_sheet_title($sheet_title).'!'.$column_letters['name'].$target_row,
+				'majorDimension' => 'ROWS',
+				'values' => array(array($sheet_name))
+			);
+			$batch_updates[] = array(
+				'range' => $this->quote_sheet_title($sheet_title).'!'.$column_letters['purpose'].$target_row,
+				'majorDimension' => 'ROWS',
+				'values' => array(array($purpose))
+			);
+			$batch_updates[] = array(
+				'range' => $this->quote_sheet_title($sheet_title).'!'.$column_letters['kasbon'].$target_row,
+				'majorDimension' => 'ROWS',
+				'values' => array(array((string) $amount))
+			);
+			$batch_updates[] = array(
+				'range' => $this->quote_sheet_title($sheet_title).'!'.$column_letters['total'].$target_row,
+				'majorDimension' => 'ROWS',
+				'values' => array(array($total_formula))
+			);
+
+			$queued_signatures[$signature] = TRUE;
+			if ($date_name_key !== '')
+			{
+				$queued_date_name_keys[$date_name_key] = TRUE;
+			}
+			$synced[] = array(
+				'id' => $loan_id,
+				'row_number' => $target_row,
+				'signature' => $signature
+			);
+		}
+
+		if (empty($batch_updates))
+		{
+			return array(
+				'success' => TRUE,
+				'skipped' => TRUE,
+				'message' => 'Tidak ada data pinjaman baru yang dikirim ke sheet.',
+				'written_rows' => 0,
+				'skipped_rows' => count($skipped_items),
+				'synced' => array(),
+				'skipped_items' => $skipped_items
+			);
+		}
+
+		$batch_result = $this->sheet_values_batch_update($batch_updates);
+		if (!(isset($batch_result['success']) && $batch_result['success'] === TRUE))
+		{
+			return $batch_result;
+		}
+
+		return array(
+			'success' => TRUE,
+			'skipped' => FALSE,
+			'message' => 'Sync pinjaman web ke sheet kasbon selesai.',
+			'written_rows' => count($synced),
+			'skipped_rows' => count($skipped_items),
+			'synced' => $synced,
+			'skipped_items' => $skipped_items
+		);
+	}
+
+	public function read_loans_from_sheet($options = array())
+	{
+		if (!$this->is_enabled())
+		{
+			return array(
+				'success' => FALSE,
+				'skipped' => TRUE,
+				'message' => 'Sync spreadsheet dinonaktifkan.'
+			);
+		}
+
+		$context_result = $this->resolve_loan_sheet_context();
+		if (!(isset($context_result['success']) && $context_result['success'] === TRUE))
+		{
+			return $context_result;
+		}
+		$context = isset($context_result['data']) && is_array($context_result['data'])
+			? $context_result['data']
+			: array();
+
+		$column_indexes = isset($context['column_indexes']) && is_array($context['column_indexes'])
+			? $context['column_indexes']
+			: array();
+		$sheet_title = isset($context['sheet_title']) ? trim((string) $context['sheet_title']) : '';
+		$data_start_row = isset($context['data_start_row']) ? (int) $context['data_start_row'] : 2;
+
+		if ($sheet_title === '' || !isset($column_indexes['date']) || !isset($column_indexes['name']) || !isset($column_indexes['purpose']) || !isset($column_indexes['kasbon']))
+		{
+			return array(
+				'success' => FALSE,
+				'skipped' => FALSE,
+				'message' => 'Kolom wajib kasbon (tanggal/nama/keperluan/kasbon) tidak ditemukan di sheet.'
+			);
+		}
+
+		$max_scan_rows = isset($options['max_scan_rows']) ? (int) $options['max_scan_rows'] : 6000;
+		if ($max_scan_rows < 200)
+		{
+			$max_scan_rows = 200;
+		}
+		if ($max_scan_rows > 20000)
+		{
+			$max_scan_rows = 20000;
+		}
+		$range_end_row = $data_start_row + $max_scan_rows - 1;
+		$read_result = $this->sheet_values_get($sheet_title, 'A'.$data_start_row.':AG'.$range_end_row);
+		if (!(isset($read_result['success']) && $read_result['success'] === TRUE))
+		{
+			return $read_result;
+		}
+		$sheet_rows = isset($read_result['data']['values']) && is_array($read_result['data']['values'])
+			? $read_result['data']['values']
+			: array();
+
+		$date_index = (int) $column_indexes['date'];
+		$name_index = (int) $column_indexes['name'];
+		$purpose_index = (int) $column_indexes['purpose'];
+		$kasbon_index = (int) $column_indexes['kasbon'];
+
+		$rows = array();
+		for ($i = 0; $i < count($sheet_rows); $i += 1)
+		{
+			$row = isset($sheet_rows[$i]) && is_array($sheet_rows[$i]) ? $sheet_rows[$i] : array();
+			$row_number = $data_start_row + $i;
+			$date_text = $this->cell_value_by_index($row, $date_index);
+			$name_text = $this->cell_value_by_index($row, $name_index);
+			$purpose_text = $this->cell_value_by_index($row, $purpose_index);
+			$amount = $this->parse_money_to_int($this->cell_value_by_index($row, $kasbon_index));
+			if ($date_text === '' && $name_text === '' && $purpose_text === '' && $amount <= 0)
+			{
+				continue;
+			}
+			if ($amount <= 0)
+			{
+				continue;
+			}
+
+			$date_iso = $this->parse_loan_sheet_date_to_iso($date_text);
+			$normalized_purpose = $this->uppercase_text($this->normalize_loan_sheet_text_signature($purpose_text));
+			$rows[] = array(
+				'row_number' => $row_number,
+				'date_text' => $date_text,
+				'date_iso' => $date_iso,
+				'name' => trim((string) $name_text),
+				'purpose' => $normalized_purpose,
+				'amount' => $amount,
+				'signature' => sha1(
+					$this->normalize_loan_sheet_date_signature($date_iso, $date_text).'|'.
+					$this->normalize_loan_sheet_name_signature($name_text).'|'.
+					$this->normalize_loan_sheet_text_signature($normalized_purpose).'|'.
+					(string) $amount
+				)
+			);
+		}
+
+		return array(
+			'success' => TRUE,
+			'skipped' => FALSE,
+			'message' => 'Data pinjaman berhasil dibaca dari sheet kasbon.',
+			'rows' => $rows,
+			'row_count' => count($rows)
+		);
+	}
+
+	protected function resolve_loan_sheet_context()
+	{
+		if (is_array($this->loan_sheet_context))
+		{
+			return array(
+				'success' => TRUE,
+				'skipped' => FALSE,
+				'message' => 'OK',
+				'data' => $this->loan_sheet_context
+			);
+		}
+
+		$spreadsheet_id = trim((string) (isset($this->config['spreadsheet_id']) ? $this->config['spreadsheet_id'] : ''));
+		if ($spreadsheet_id === '')
+		{
+			return array(
+				'success' => FALSE,
+				'skipped' => FALSE,
+				'message' => 'Spreadsheet ID kasbon belum diatur.'
+			);
+		}
+
+		$config_sheet_title = trim((string) (isset($this->config['sheet_title']) ? $this->config['sheet_title'] : ''));
+		$config_sheet_gid = isset($this->config['sheet_gid']) ? (int) $this->config['sheet_gid'] : 0;
+		$sheet_title = '';
+		if ($config_sheet_gid > 0)
+		{
+			$title_result = $this->resolve_sheet_title_from_gid($spreadsheet_id, $config_sheet_gid);
+			if (!(isset($title_result['success']) && $title_result['success'] === TRUE))
+			{
+				$detail_message = isset($title_result['message']) ? trim((string) $title_result['message']) : '';
+				$message = 'Tab kasbon dengan gid '.$config_sheet_gid.' tidak ditemukan di spreadsheet target.';
+				if ($detail_message !== '')
+				{
+					$message .= ' Detail: '.$detail_message;
+				}
+				return array(
+					'success' => FALSE,
+					'skipped' => FALSE,
+					'message' => $message
+				);
+			}
+			$sheet_title = isset($title_result['sheet_title']) ? trim((string) $title_result['sheet_title']) : '';
+			if ($sheet_title === '')
+			{
+				return array(
+					'success' => FALSE,
+					'skipped' => FALSE,
+					'message' => 'Nama tab kasbon dari gid '.$config_sheet_gid.' tidak valid.'
+				);
+			}
+			if ($config_sheet_title !== '' && strcasecmp($config_sheet_title, $sheet_title) !== 0)
+			{
+				return array(
+					'success' => FALSE,
+					'skipped' => FALSE,
+					'message' => 'Konfigurasi tab kasbon tidak sinkron. expected="'.$config_sheet_title.'", actual="'.$sheet_title.'".'
+				);
+			}
+		}
+		else
+		{
+			$sheet_title = $config_sheet_title;
+		}
+		if ($sheet_title === '')
+		{
+			return array(
+				'success' => FALSE,
+				'skipped' => FALSE,
+				'message' => 'Nama sheet kasbon tidak ditemukan.'
+			);
+		}
+
+		$header_result = $this->sheet_values_get($sheet_title, 'A1:AG25');
+		if (!(isset($header_result['success']) && $header_result['success'] === TRUE))
+		{
+			return $header_result;
+		}
+		$header_rows = isset($header_result['data']['values']) && is_array($header_result['data']['values'])
+			? $header_result['data']['values']
+			: array();
+
+		$best_header_row = 1;
+		$best_score = -1;
+		$best_columns = array();
+		$best_dibayar_columns = array();
+
+		for ($row_index = 0; $row_index < count($header_rows); $row_index += 1)
+		{
+			$row = isset($header_rows[$row_index]) && is_array($header_rows[$row_index]) ? $header_rows[$row_index] : array();
+			$columns = array(
+				'date' => -1,
+				'name' => -1,
+				'purpose' => -1,
+				'kasbon' => -1,
+				'total' => -1
+			);
+			$dibayar_columns = array();
+			for ($col_index = 0; $col_index < count($row); $col_index += 1)
+			{
+				$cell_raw = trim((string) $row[$col_index]);
+				if ($cell_raw === '')
+				{
+					continue;
+				}
+				$cell_token = $this->normalize_attendance_header($cell_raw);
+				if ($cell_token === '')
+				{
+					continue;
+				}
+
+				if ($columns['date'] < 0 && ($cell_token === 'tanggal' || $cell_token === 'tgl'))
+				{
+					$columns['date'] = $col_index;
+				}
+				elseif ($columns['name'] < 0 && ($cell_token === 'nama' || strpos($cell_token, 'nama') === 0))
+				{
+					$columns['name'] = $col_index;
+				}
+				elseif ($columns['purpose'] < 0 && (strpos($cell_token, 'keperluan') !== FALSE || strpos($cell_token, 'alasan') !== FALSE))
+				{
+					$columns['purpose'] = $col_index;
+				}
+				elseif ($columns['kasbon'] < 0 && (strpos($cell_token, 'kasbon') !== FALSE || strpos($cell_token, 'nominal') !== FALSE || strpos($cell_token, 'pinjaman') !== FALSE))
+				{
+					$columns['kasbon'] = $col_index;
+				}
+				elseif ($columns['total'] < 0 && strpos($cell_token, 'total') !== FALSE)
+				{
+					$columns['total'] = $col_index;
+				}
+
+				$dibayar_match = array();
+				if (preg_match('/^dibayar([0-9]{1,2})$/', $cell_token, $dibayar_match))
+				{
+					$dibayar_no = (int) $dibayar_match[1];
+					if ($dibayar_no >= 1 && $dibayar_no <= 12 && !isset($dibayar_columns[$dibayar_no]))
+					{
+						$dibayar_columns[$dibayar_no] = $col_index;
+					}
+				}
+				elseif (preg_match('/dibayar\s*([0-9]{1,2})/i', $cell_raw, $dibayar_match))
+				{
+					$dibayar_no = (int) $dibayar_match[1];
+					if ($dibayar_no >= 1 && $dibayar_no <= 12 && !isset($dibayar_columns[$dibayar_no]))
+					{
+						$dibayar_columns[$dibayar_no] = $col_index;
+					}
+				}
+			}
+
+			$score = 0;
+			foreach ($columns as $column_index)
+			{
+				if ((int) $column_index >= 0)
+				{
+					$score += 2;
+				}
+			}
+			$score += count($dibayar_columns);
+
+			if ($score > $best_score)
+			{
+				$best_score = $score;
+				$best_header_row = $row_index + 1;
+				$best_columns = $columns;
+				$best_dibayar_columns = $dibayar_columns;
+			}
+		}
+
+		$fallback_columns = array(
+			'date' => 0,
+			'name' => 1,
+			'purpose' => 2,
+			'kasbon' => 4,
+			'total' => 10
+		);
+		foreach ($fallback_columns as $column_key => $fallback_index)
+		{
+			$current_index = isset($best_columns[$column_key]) ? (int) $best_columns[$column_key] : -1;
+			if ($current_index < 0)
+			{
+				$best_columns[$column_key] = (int) $fallback_index;
+			}
+		}
+
+		$dibayar_fallback_indexes = array(
+			1 => 6,
+			2 => 8,
+			3 => 13,
+			4 => 15,
+			5 => 17,
+			6 => 19,
+			7 => 21,
+			8 => 23,
+			9 => 25,
+			10 => 27,
+			11 => 29,
+			12 => 31
+		);
+		for ($dibayar_no = 1; $dibayar_no <= 12; $dibayar_no += 1)
+		{
+			if (!isset($best_dibayar_columns[$dibayar_no]) || (int) $best_dibayar_columns[$dibayar_no] < 0)
+			{
+				$best_dibayar_columns[$dibayar_no] = isset($dibayar_fallback_indexes[$dibayar_no])
+					? (int) $dibayar_fallback_indexes[$dibayar_no]
+					: -1;
+			}
+		}
+
+		$data_start_row = $best_header_row + 1;
+		if ($data_start_row < 2)
+		{
+			$data_start_row = 2;
+		}
+
+		$column_letters = array();
+		foreach ($best_columns as $column_key => $column_index)
+		{
+			$column_letters[$column_key] = $this->column_letter_from_index((int) $column_index);
+		}
+		$date_format = $this->detect_loan_sheet_date_format(
+			$sheet_title,
+			isset($best_columns['date']) ? (int) $best_columns['date'] : 0,
+			$data_start_row
+		);
+
+		$this->loan_sheet_context = array(
+			'spreadsheet_id' => $spreadsheet_id,
+			'sheet_title' => $sheet_title,
+			'header_row_number' => (int) $best_header_row,
+			'data_start_row' => (int) $data_start_row,
+			'column_indexes' => $best_columns,
+			'column_letters' => $column_letters,
+			'dibayar_indexes' => $best_dibayar_columns,
+			'date_format' => $date_format
+		);
+
+		return array(
+			'success' => TRUE,
+			'skipped' => FALSE,
+			'message' => 'OK',
+			'data' => $this->loan_sheet_context
+		);
+	}
+
+	protected function detect_loan_sheet_date_format($sheet_title, $date_column_index, $data_start_row)
+	{
+		$column_index = (int) $date_column_index;
+		if ($column_index < 0)
+		{
+			return 'id_text';
+		}
+		$start_row = (int) $data_start_row;
+		if ($start_row < 2)
+		{
+			$start_row = 2;
+		}
+		$column_letter = $this->column_letter_from_index($column_index);
+		$read_result = $this->sheet_values_get($sheet_title, $column_letter.$start_row.':'.$column_letter.($start_row + 80));
+		if (!(isset($read_result['success']) && $read_result['success'] === TRUE))
+		{
+			return 'id_text';
+		}
+		$rows = isset($read_result['data']['values']) && is_array($read_result['data']['values'])
+			? $read_result['data']['values']
+			: array();
+		for ($i = 0; $i < count($rows); $i += 1)
+		{
+			$cell_value = isset($rows[$i][0]) ? trim((string) $rows[$i][0]) : '';
+			if ($cell_value === '')
+			{
+				continue;
+			}
+			if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $cell_value) === 1)
+			{
+				return 'iso';
+			}
+			if (preg_match('/^\d{1,2}\/\d{1,2}\/\d{4}$/', $cell_value) === 1)
+			{
+				return 'dmy_slash';
+			}
+			if (preg_match('/^\d{1,2}-\d{1,2}-\d{4}$/', $cell_value) === 1)
+			{
+				return 'dmy_dash';
+			}
+			if (preg_match('/^\d{1,2}\s+[[:alpha:]]+\s+\d{4}$/u', $cell_value) === 1)
+			{
+				return 'id_text';
+			}
+		}
+
+		return 'id_text';
+	}
+
+	protected function parse_loan_sheet_date_to_iso($value)
+	{
+		$text = trim((string) $value);
+		if ($text === '')
+		{
+			return '';
+		}
+
+		if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $text) === 1)
+		{
+			$timestamp = strtotime($text.' 00:00:00');
+			if ($timestamp !== FALSE && date('Y-m-d', $timestamp) === $text)
+			{
+				return $text;
+			}
+		}
+
+		$dmy_match = array();
+		if (preg_match('/^(\d{1,2})[\/\.-](\d{1,2})[\/\.-](\d{2,4})$/', $text, $dmy_match) === 1)
+		{
+			$day = (int) $dmy_match[1];
+			$month = (int) $dmy_match[2];
+			$year = (int) $dmy_match[3];
+			if ($year < 100)
+			{
+				$year += 2000;
+			}
+			if ($day >= 1 && $day <= 31 && $month >= 1 && $month <= 12 && $year >= 1900 && $year <= 2100)
+			{
+				$candidate = sprintf('%04d-%02d-%02d', $year, $month, $day);
+				$timestamp = strtotime($candidate.' 00:00:00');
+				if ($timestamp !== FALSE && date('Y-m-d', $timestamp) === $candidate)
+				{
+					return $candidate;
+				}
+			}
+		}
+
+		$text_clean = preg_replace('/\s+/', ' ', strtolower(trim($text)));
+		if ($text_clean === NULL)
+		{
+			$text_clean = strtolower(trim($text));
+		}
+		$text_clean = trim((string) str_replace(',', ' ', $text_clean));
+		$word_match = array();
+		if (preg_match('/^(?:[[:alpha:]]+\s+)*(\d{1,2})\s+([[:alpha:]]+)\s+(\d{4})$/u', $text_clean, $word_match) === 1)
+		{
+			$day = (int) $word_match[1];
+			$month_token = strtolower(trim((string) $word_match[2]));
+			$year = (int) $word_match[3];
+
+			if (function_exists('iconv'))
+			{
+				$converted = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $month_token);
+				if ($converted !== FALSE && trim((string) $converted) !== '')
+				{
+					$month_token = strtolower(trim((string) $converted));
+				}
+			}
+			$month_token = preg_replace('/[^a-z]/', '', $month_token);
+			if ($month_token === NULL)
+			{
+				$month_token = '';
+			}
+
+			$month_lookup = array(
+				'januari' => 1,
+				'january' => 1,
+				'jan' => 1,
+				'februari' => 2,
+				'pebruari' => 2,
+				'february' => 2,
+				'feb' => 2,
+				'maret' => 3,
+				'march' => 3,
+				'mar' => 3,
+				'april' => 4,
+				'apr' => 4,
+				'mei' => 5,
+				'may' => 5,
+				'juni' => 6,
+				'june' => 6,
+				'jun' => 6,
+				'juli' => 7,
+				'july' => 7,
+				'jul' => 7,
+				'agustus' => 8,
+				'august' => 8,
+				'agt' => 8,
+				'agu' => 8,
+				'aug' => 8,
+				'september' => 9,
+				'sept' => 9,
+				'sep' => 9,
+				'oktober' => 10,
+				'october' => 10,
+				'okt' => 10,
+				'oct' => 10,
+				'november' => 11,
+				'nov' => 11,
+				'desember' => 12,
+				'december' => 12,
+				'des' => 12,
+				'dec' => 12
+			);
+			$month = isset($month_lookup[$month_token]) ? (int) $month_lookup[$month_token] : 0;
+			if ($month >= 1 && $month <= 12 && $day >= 1 && $day <= 31 && $year >= 1900 && $year <= 2100)
+			{
+				$candidate = sprintf('%04d-%02d-%02d', $year, $month, $day);
+				$timestamp = strtotime($candidate.' 00:00:00');
+				if ($timestamp !== FALSE && date('Y-m-d', $timestamp) === $candidate)
+				{
+					return $candidate;
+				}
+			}
+		}
+
+		return '';
+	}
+
+	protected function format_loan_sheet_date($date_iso, $format_hint = 'id_text')
+	{
+		$date_value = trim((string) $date_iso);
+		if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date_value) !== 1)
+		{
+			return '';
+		}
+		$timestamp = strtotime($date_value.' 00:00:00');
+		if ($timestamp === FALSE)
+		{
+			return '';
+		}
+
+		$hint = strtolower(trim((string) $format_hint));
+		if ($hint === 'iso')
+		{
+			return date('Y-m-d', $timestamp);
+		}
+		if ($hint === 'dmy_slash')
+		{
+			return date('d/m/Y', $timestamp);
+		}
+		if ($hint === 'dmy_dash')
+		{
+			return date('d-m-Y', $timestamp);
+		}
+
+		$month_map = array(
+			1 => 'Januari',
+			2 => 'Februari',
+			3 => 'Maret',
+			4 => 'April',
+			5 => 'Mei',
+			6 => 'Juni',
+			7 => 'Juli',
+			8 => 'Agustus',
+			9 => 'September',
+			10 => 'Oktober',
+			11 => 'November',
+			12 => 'Desember'
+		);
+		$month_index = (int) date('n', $timestamp);
+		$month_label = isset($month_map[$month_index]) ? (string) $month_map[$month_index] : date('F', $timestamp);
+		return (int) date('j', $timestamp).' '.$month_label.' '.date('Y', $timestamp);
+	}
+
+	protected function normalize_loan_sheet_date_signature($date_iso, $raw_value = '')
+	{
+		$date_key = trim((string) $date_iso);
+		if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date_key) === 1)
+		{
+			return $date_key;
+		}
+
+		$fallback = strtolower(trim((string) $raw_value));
+		$fallback = preg_replace('/\s+/', ' ', $fallback);
+		if ($fallback === NULL)
+		{
+			$fallback = '';
+		}
+		return trim((string) $fallback);
+	}
+
+	protected function build_loan_sheet_date_name_key($date_iso, $date_raw, $name)
+	{
+		$date_key = $this->normalize_loan_sheet_date_signature($date_iso, $date_raw);
+		if ($date_key === '')
+		{
+			return '';
+		}
+
+		$name_key = $this->normalize_loan_sheet_name_signature($name);
+		if ($name_key === '')
+		{
+			return '';
+		}
+
+		return sha1($date_key.'|'.$name_key);
+	}
+
+	protected function normalize_loan_sheet_name_signature($value)
+	{
+		return $this->uppercase_text($this->normalize_loan_sheet_text_signature($value));
+	}
+
+	protected function normalize_loan_sheet_text_signature($value)
+	{
+		$text = trim((string) $value);
+		if ($text === '')
+		{
+			return '';
+		}
+
+		$text = preg_replace('/\s+/', ' ', $text);
+		if ($text === NULL)
+		{
+			return '';
+		}
+		return trim((string) $text);
+	}
+
+	protected function normalize_loan_sheet_name_compact_key($value)
+	{
+		$text = strtolower(trim((string) $value));
+		if ($text === '')
+		{
+			return '';
+		}
+		if (function_exists('iconv'))
+		{
+			$converted = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $text);
+			if ($converted !== FALSE && trim((string) $converted) !== '')
+			{
+				$text = strtolower(trim((string) $converted));
+			}
+		}
+		$text = preg_replace('/[^a-z0-9]+/', '', $text);
+		if ($text === NULL)
+		{
+			return '';
+		}
+		return trim((string) $text);
+	}
+
+	protected function build_loan_sheet_name_whitelist_map($names)
+	{
+		$source = is_array($names) ? array_values($names) : array();
+		$map = array(
+			'exact' => array(),
+			'compact' => array(),
+			'token' => array()
+		);
+
+		for ($i = 0; $i < count($source); $i += 1)
+		{
+			$name = trim((string) $source[$i]);
+			if ($name === '')
+			{
+				continue;
+			}
+			$canonical = $this->uppercase_text($name);
+			$exact_key = $this->normalize_name_key($canonical);
+			if ($exact_key !== '' && !isset($map['exact'][$exact_key]))
+			{
+				$map['exact'][$exact_key] = $canonical;
+			}
+			$compact_key = $this->normalize_loan_sheet_name_compact_key($canonical);
+			if ($compact_key !== '' && !isset($map['compact'][$compact_key]))
+			{
+				$map['compact'][$compact_key] = $canonical;
+			}
+			$name_parts = preg_split('/\s+/', $exact_key);
+			$first_token = (is_array($name_parts) && isset($name_parts[0])) ? trim((string) $name_parts[0]) : '';
+			if ($first_token !== '')
+			{
+				if (!isset($map['token'][$first_token]))
+				{
+					$map['token'][$first_token] = $canonical;
+				}
+				elseif ($map['token'][$first_token] !== $canonical)
+				{
+					$map['token'][$first_token] = '';
+				}
+			}
+		}
+
+		return $map;
+	}
+
+	protected function resolve_loan_sheet_name_from_whitelist($value, $whitelist_map)
+	{
+		$raw = trim((string) $value);
+		if ($raw === '')
+		{
+			return '';
+		}
+		$exact_key = $this->normalize_name_key($raw);
+		$compact_key = $this->normalize_loan_sheet_name_compact_key($raw);
+		$map = is_array($whitelist_map) ? $whitelist_map : array();
+		$exact_map = isset($map['exact']) && is_array($map['exact']) ? $map['exact'] : array();
+		$compact_map = isset($map['compact']) && is_array($map['compact']) ? $map['compact'] : array();
+		$token_map = isset($map['token']) && is_array($map['token']) ? $map['token'] : array();
+
+		if ($exact_key !== '' && isset($exact_map[$exact_key]) && trim((string) $exact_map[$exact_key]) !== '')
+		{
+			return trim((string) $exact_map[$exact_key]);
+		}
+		if ($compact_key !== '' && isset($compact_map[$compact_key]) && trim((string) $compact_map[$compact_key]) !== '')
+		{
+			return trim((string) $compact_map[$compact_key]);
+		}
+		if ($exact_key !== '' && strpos($exact_key, ' ') === FALSE && isset($token_map[$exact_key]) && trim((string) $token_map[$exact_key]) !== '')
+		{
+			return trim((string) $token_map[$exact_key]);
+		}
+
+		if ($exact_key !== '')
+		{
+			$matched = '';
+			foreach ($exact_map as $candidate_key => $canonical_name)
+			{
+				$candidate = trim((string) $candidate_key);
+				if ($candidate === '')
+				{
+					continue;
+				}
+				if (strpos($candidate, $exact_key) !== 0)
+				{
+					continue;
+				}
+				if ($matched === '')
+				{
+					$matched = trim((string) $canonical_name);
+					continue;
+				}
+				if ($matched !== trim((string) $canonical_name))
+				{
+					$matched = '';
+					break;
+				}
+			}
+			if ($matched !== '')
+			{
+				return $matched;
+			}
+		}
+
+		return '';
+	}
+
+	protected function cell_value_by_index($row, $index)
+	{
+		$col_index = (int) $index;
+		if (!is_array($row) || $col_index < 0 || !isset($row[$col_index]))
+		{
+			return '';
+		}
+
+		return trim((string) $row[$col_index]);
+	}
+
+	protected function uppercase_text($value)
+	{
+		$text = trim((string) $value);
+		if ($text === '')
+		{
+			return '';
+		}
+		if (function_exists('mb_strtoupper'))
+		{
+			return (string) mb_strtoupper($text, 'UTF-8');
+		}
+		return strtoupper($text);
+	}
+
 	public function push_account_to_sheet($username_key, $account_row, $action = 'upsert')
 	{
 		if (!$this->is_enabled())
@@ -4233,7 +5340,70 @@ class Absen_sheet_sync {
 		);
 	}
 
-	protected function sheet_values_batch_update($data_rows)
+	protected function sheet_values_batch_update($data_rows, $options = array())
+	{
+		$rows = is_array($data_rows) ? array_values($data_rows) : array();
+		if (empty($rows))
+		{
+			return array(
+				'success' => TRUE,
+				'skipped' => TRUE,
+				'message' => 'Batch update kosong.'
+			);
+		}
+
+		$options = is_array($options) ? $options : array();
+		$chunk_size = isset($options['chunk_size']) ? (int) $options['chunk_size'] : (int) (isset($this->config['batch_update_chunk_size']) ? $this->config['batch_update_chunk_size'] : 250);
+		$chunk_delay_ms = isset($options['chunk_delay_ms']) ? (int) $options['chunk_delay_ms'] : (int) (isset($this->config['batch_update_chunk_delay_ms']) ? $this->config['batch_update_chunk_delay_ms'] : 120);
+		if ($chunk_size < 0)
+		{
+			$chunk_size = 0;
+		}
+		if ($chunk_delay_ms < 0)
+		{
+			$chunk_delay_ms = 0;
+		}
+
+		if ($chunk_size > 0 && count($rows) > $chunk_size)
+		{
+			$chunks = array_chunk($rows, $chunk_size);
+			$total_chunks = count($chunks);
+			$last_response_data = array();
+
+			for ($chunk_index = 0; $chunk_index < $total_chunks; $chunk_index += 1)
+			{
+				$chunk_rows = isset($chunks[$chunk_index]) && is_array($chunks[$chunk_index])
+					? $chunks[$chunk_index]
+					: array();
+				$chunk_result = $this->sheet_values_batch_update_single($chunk_rows);
+				if (!(isset($chunk_result['success']) && $chunk_result['success'] === TRUE))
+				{
+					$message = isset($chunk_result['message']) ? (string) $chunk_result['message'] : 'Batch update chunk gagal.';
+					$chunk_result['message'] = 'Batch update chunk '.($chunk_index + 1).'/'.$total_chunks.' gagal: '.$message;
+					return $chunk_result;
+				}
+				if (isset($chunk_result['data']) && is_array($chunk_result['data']))
+				{
+					$last_response_data = $chunk_result['data'];
+				}
+				if ($chunk_delay_ms > 0 && $chunk_index < ($total_chunks - 1))
+				{
+					usleep($chunk_delay_ms * 1000);
+				}
+			}
+
+			return array(
+				'success' => TRUE,
+				'skipped' => FALSE,
+				'message' => 'Batch update selesai.',
+				'data' => $last_response_data
+			);
+		}
+
+		return $this->sheet_values_batch_update_single($rows);
+	}
+
+	protected function sheet_values_batch_update_single($data_rows)
 	{
 		$token_result = $this->request_access_token();
 		if (!$token_result['success'])
@@ -4372,10 +5542,34 @@ class Absen_sheet_sync {
 			{
 				$content = $read_result;
 			}
+			else
+			{
+				return array(
+					'success' => FALSE,
+					'skipped' => FALSE,
+					'message' => 'File kredensial service account ada tapi tidak bisa dibaca. Path: '.$path
+				);
+			}
 		}
 
 		if ($content === '')
 		{
+			if ($json_raw === '' && $path === '')
+			{
+				return array(
+					'success' => FALSE,
+					'skipped' => FALSE,
+					'message' => 'Kredensial Google belum diatur (path/json kosong).'
+				);
+			}
+			if ($json_raw === '' && $path !== '' && !is_file($path))
+			{
+				return array(
+					'success' => FALSE,
+					'skipped' => FALSE,
+					'message' => 'File kredensial service account Google tidak ditemukan. Path: '.$path
+				);
+			}
 			return array(
 				'success' => FALSE,
 				'skipped' => FALSE,
@@ -4516,37 +5710,155 @@ class Absen_sheet_sync {
 		{
 			$timeout = 15;
 		}
+		$retry_max = isset($this->config['http_retry_max']) ? (int) $this->config['http_retry_max'] : 1;
+		if ($retry_max < 0)
+		{
+			$retry_max = 0;
+		}
+		if ($retry_max > 3)
+		{
+			$retry_max = 3;
+		}
+		$retry_delay_ms = isset($this->config['http_retry_delay_ms']) ? (int) $this->config['http_retry_delay_ms'] : 700;
+		if ($retry_delay_ms < 0)
+		{
+			$retry_delay_ms = 0;
+		}
+		if ($retry_delay_ms > 10000)
+		{
+			$retry_delay_ms = 10000;
+		}
+		$attempt_total = $retry_max + 1;
 
 		if (function_exists('curl_init'))
 		{
-			$ch = curl_init();
-			curl_setopt($ch, CURLOPT_URL, $url);
-			curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
-			curl_setopt($ch, CURLOPT_RETURNTRANSFER, TRUE);
-			curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
-			curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, $timeout);
-			if (is_array($headers) && !empty($headers))
+			for ($attempt = 1; $attempt <= $attempt_total; $attempt += 1)
 			{
-				curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+				$ch = curl_init();
+				curl_setopt($ch, CURLOPT_URL, $url);
+				curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
+				curl_setopt($ch, CURLOPT_RETURNTRANSFER, TRUE);
+				curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);
+				curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, $timeout);
+				if (is_array($headers) && !empty($headers))
+				{
+					curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+				}
+				if ($body !== NULL)
+				{
+					curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+				}
+
+				$response_body = curl_exec($ch);
+				$curl_error = curl_error($ch);
+				$status_code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+				curl_close($ch);
+
+				if ($response_body === FALSE)
+				{
+					$error_message = 'HTTP cURL gagal: '.$curl_error;
+					$can_retry = $attempt < $attempt_total && $this->is_retryable_http_failure($status_code, $curl_error);
+					if ($can_retry)
+					{
+						if ($retry_delay_ms > 0)
+						{
+							usleep($retry_delay_ms * 1000);
+						}
+						continue;
+					}
+
+					return array(
+						'success' => FALSE,
+						'status_code' => $status_code,
+						'body' => '',
+						'message' => $error_message
+					);
+				}
+
+				if ($status_code < 200 || $status_code >= 300)
+				{
+					$error_message = 'HTTP gagal (status '.$status_code.').';
+					$decoded_error = json_decode((string) $response_body, TRUE);
+					if (is_array($decoded_error) && isset($decoded_error['error']['message']))
+					{
+						$error_message = (string) $decoded_error['error']['message'];
+					}
+
+					$can_retry = $attempt < $attempt_total && $this->is_retryable_http_failure($status_code, $error_message);
+					if ($can_retry)
+					{
+						if ($retry_delay_ms > 0)
+						{
+							usleep($retry_delay_ms * 1000);
+						}
+						continue;
+					}
+
+					return array(
+						'success' => FALSE,
+						'status_code' => $status_code,
+						'body' => (string) $response_body,
+						'message' => $error_message
+					);
+				}
+
+				return array(
+					'success' => TRUE,
+					'status_code' => $status_code,
+					'body' => (string) $response_body,
+					'message' => 'OK'
+				);
 			}
-			if ($body !== NULL)
+		}
+
+		$header_text = '';
+		if (is_array($headers))
+		{
+			for ($i = 0; $i < count($headers); $i += 1)
 			{
-				curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+				$header_text .= $headers[$i]."\r\n";
 			}
-
-			$response_body = curl_exec($ch);
-			$curl_error = curl_error($ch);
-			$status_code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-			curl_close($ch);
-
+		}
+		for ($attempt = 1; $attempt <= $attempt_total; $attempt += 1)
+		{
+			$context = stream_context_create(array(
+				'http' => array(
+					'method' => $method,
+					'header' => $header_text,
+					'content' => $body !== NULL ? (string) $body : '',
+					'timeout' => $timeout,
+					'ignore_errors' => TRUE
+				)
+			));
+			$response_body = @file_get_contents($url, FALSE, $context);
 			if ($response_body === FALSE)
 			{
+				$stream_error = 'HTTP request gagal (stream).';
+				$can_retry = $attempt < $attempt_total && $this->is_retryable_http_failure(0, $stream_error);
+				if ($can_retry)
+				{
+					if ($retry_delay_ms > 0)
+					{
+						usleep($retry_delay_ms * 1000);
+					}
+					continue;
+				}
 				return array(
 					'success' => FALSE,
-					'status_code' => $status_code,
+					'status_code' => 0,
 					'body' => '',
-					'message' => 'HTTP cURL gagal: '.$curl_error
+					'message' => $stream_error
 				);
+			}
+
+			$status_code = 0;
+			if (isset($http_response_header) && is_array($http_response_header) && !empty($http_response_header))
+			{
+				$first_line = (string) $http_response_header[0];
+				if (preg_match('/\s(\d{3})\s/', $first_line, $matches))
+				{
+					$status_code = (int) $matches[1];
+				}
 			}
 
 			if ($status_code < 200 || $status_code >= 300)
@@ -4557,6 +5869,17 @@ class Absen_sheet_sync {
 				{
 					$error_message = (string) $decoded_error['error']['message'];
 				}
+
+				$can_retry = $attempt < $attempt_total && $this->is_retryable_http_failure($status_code, $error_message);
+				if ($can_retry)
+				{
+					if ($retry_delay_ms > 0)
+					{
+						usleep($retry_delay_ms * 1000);
+					}
+					continue;
+				}
+
 				return array(
 					'success' => FALSE,
 					'status_code' => $status_code,
@@ -4573,66 +5896,47 @@ class Absen_sheet_sync {
 			);
 		}
 
-		$header_text = '';
-		if (is_array($headers))
-		{
-			for ($i = 0; $i < count($headers); $i += 1)
-			{
-				$header_text .= $headers[$i]."\r\n";
-			}
-		}
-		$context = stream_context_create(array(
-			'http' => array(
-				'method' => $method,
-				'header' => $header_text,
-				'content' => $body !== NULL ? (string) $body : '',
-				'timeout' => $timeout,
-				'ignore_errors' => TRUE
-			)
-		));
-		$response_body = @file_get_contents($url, FALSE, $context);
-		if ($response_body === FALSE)
-		{
-			return array(
-				'success' => FALSE,
-				'status_code' => 0,
-				'body' => '',
-				'message' => 'HTTP request gagal (stream).'
-			);
-		}
-
-		$status_code = 0;
-		if (isset($http_response_header) && is_array($http_response_header) && !empty($http_response_header))
-		{
-			$first_line = (string) $http_response_header[0];
-			if (preg_match('/\s(\d{3})\s/', $first_line, $matches))
-			{
-				$status_code = (int) $matches[1];
-			}
-		}
-
-		if ($status_code < 200 || $status_code >= 300)
-		{
-			$error_message = 'HTTP gagal (status '.$status_code.').';
-			$decoded_error = json_decode((string) $response_body, TRUE);
-			if (is_array($decoded_error) && isset($decoded_error['error']['message']))
-			{
-				$error_message = (string) $decoded_error['error']['message'];
-			}
-			return array(
-				'success' => FALSE,
-				'status_code' => $status_code,
-				'body' => (string) $response_body,
-				'message' => $error_message
-			);
-		}
-
 		return array(
-			'success' => TRUE,
-			'status_code' => $status_code,
-			'body' => (string) $response_body,
-			'message' => 'OK'
+			'success' => FALSE,
+			'status_code' => 0,
+			'body' => '',
+			'message' => 'HTTP request gagal.'
 		);
+	}
+
+	protected function is_retryable_http_failure($status_code, $message = '')
+	{
+		$status = (int) $status_code;
+		if (in_array($status, array(429, 500, 502, 503, 504), TRUE))
+		{
+			return TRUE;
+		}
+
+		$text = strtolower(trim((string) $message));
+		if ($text === '')
+		{
+			return FALSE;
+		}
+
+		$retry_keywords = array(
+			'timeout',
+			'timed out',
+			'could not resolve host',
+			'failed to connect',
+			'connection reset',
+			'temporary failure',
+			'temporarily unavailable',
+			'server closed connection'
+		);
+		for ($i = 0; $i < count($retry_keywords); $i += 1)
+		{
+			if (strpos($text, $retry_keywords[$i]) !== FALSE)
+			{
+				return TRUE;
+			}
+		}
+
+		return FALSE;
 	}
 	protected function map_header_field_indexes($header_values)
 	{

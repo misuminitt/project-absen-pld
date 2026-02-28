@@ -61,6 +61,97 @@ if ($attendance_push_interval_seconds < 0)
 	$attendance_push_interval_seconds = 0;
 }
 
+$request_timeout_raw = trim((string) getenv('ABSEN_SHEET_REQUEST_TIMEOUT_SECONDS'));
+$request_timeout_seconds = $request_timeout_raw !== '' ? (int) $request_timeout_raw : 45;
+if ($request_timeout_seconds < 5)
+{
+	$request_timeout_seconds = 5;
+}
+if ($request_timeout_seconds > 180)
+{
+	$request_timeout_seconds = 180;
+}
+
+$batch_update_chunk_size_raw = trim((string) getenv('ABSEN_SHEET_BATCH_UPDATE_CHUNK_SIZE'));
+$batch_update_chunk_size = $batch_update_chunk_size_raw !== '' ? (int) $batch_update_chunk_size_raw : 500;
+if ($batch_update_chunk_size < 0)
+{
+	$batch_update_chunk_size = 0;
+}
+if ($batch_update_chunk_size > 0 && $batch_update_chunk_size < 50)
+{
+	$batch_update_chunk_size = 50;
+}
+if ($batch_update_chunk_size > 1000)
+{
+	$batch_update_chunk_size = 1000;
+}
+
+$batch_update_chunk_delay_raw = trim((string) getenv('ABSEN_SHEET_BATCH_UPDATE_CHUNK_DELAY_MS'));
+$batch_update_chunk_delay_ms = $batch_update_chunk_delay_raw !== '' ? (int) $batch_update_chunk_delay_raw : 120;
+if ($batch_update_chunk_delay_ms < 0)
+{
+	$batch_update_chunk_delay_ms = 0;
+}
+if ($batch_update_chunk_delay_ms > 3000)
+{
+	$batch_update_chunk_delay_ms = 3000;
+}
+
+$http_retry_max_raw = trim((string) getenv('ABSEN_SHEET_HTTP_RETRY_MAX'));
+$http_retry_max = $http_retry_max_raw !== '' ? (int) $http_retry_max_raw : 1;
+if ($http_retry_max < 0)
+{
+	$http_retry_max = 0;
+}
+if ($http_retry_max > 3)
+{
+	$http_retry_max = 3;
+}
+
+$http_retry_delay_raw = trim((string) getenv('ABSEN_SHEET_HTTP_RETRY_DELAY_MS'));
+$http_retry_delay_ms = $http_retry_delay_raw !== '' ? (int) $http_retry_delay_raw : 700;
+if ($http_retry_delay_ms < 0)
+{
+	$http_retry_delay_ms = 0;
+}
+if ($http_retry_delay_ms > 10000)
+{
+	$http_retry_delay_ms = 10000;
+}
+
+$loan_sheet_enabled_env = strtolower(trim((string) getenv('ABSEN_LOAN_SHEET_ENABLED')));
+$loan_sheet_enabled = TRUE;
+if ($loan_sheet_enabled_env === '0' || $loan_sheet_enabled_env === 'false' || $loan_sheet_enabled_env === 'off')
+{
+	$loan_sheet_enabled = FALSE;
+}
+
+$loan_spreadsheet_id = trim((string) getenv('ABSEN_LOAN_SHEET_ID'));
+if ($loan_spreadsheet_id === '')
+{
+	$loan_spreadsheet_id = '1FYY_5FjhZCrYN7huU34fwTkwzL5sWLjeTtzfwaI4fcI';
+}
+
+$loan_sheet_gid_raw = trim((string) getenv('ABSEN_LOAN_SHEET_GID'));
+$loan_sheet_gid = $loan_sheet_gid_raw !== '' ? (int) $loan_sheet_gid_raw : 1429162529;
+
+$loan_sheet_title = trim((string) getenv('ABSEN_LOAN_SHEET_TITLE'));
+if ($loan_sheet_title === '')
+{
+	$loan_sheet_title = 'KASBON';
+}
+
+$loan_credential_json_path = trim((string) getenv('ABSEN_LOAN_GOOGLE_CREDENTIALS'));
+if ($loan_credential_json_path === '')
+{
+	$loan_credential_json_path = FCPATH.'src/secrets/panha-sheet-kasbon-da17149bbbeb.json';
+	if (!is_file($loan_credential_json_path))
+	{
+		$loan_credential_json_path = 'C:/Users/ASUS TUF GAMING/Downloads/panha_chan/panha-sheet-kasbon-da17149bbbeb.json';
+	}
+}
+
 $config['absen_sheet_sync'] = array(
 	'enabled' => $sheet_sync_enabled,
 	'spreadsheet_id' => $spreadsheet_id,
@@ -69,7 +160,11 @@ $config['absen_sheet_sync'] = array(
 	'credential_json_path' => $credential_json_path,
 	'credential_json_raw' => trim((string) getenv('ABSEN_GOOGLE_CREDENTIALS_JSON')),
 	'sync_interval_seconds' => 60,
-	'request_timeout_seconds' => 15,
+	'request_timeout_seconds' => $request_timeout_seconds,
+	'batch_update_chunk_size' => $batch_update_chunk_size,
+	'batch_update_chunk_delay_ms' => $batch_update_chunk_delay_ms,
+	'http_retry_max' => $http_retry_max,
+	'http_retry_delay_ms' => $http_retry_delay_ms,
 	'default_user_password' => '123',
 	'writeback_on_web_change' => FALSE,
 	'prune_missing_sheet_users' => TRUE,
@@ -82,6 +177,12 @@ $config['absen_sheet_sync'] = array(
 	'attendance_sheet_title' => $attendance_sheet_title,
 	'attendance_sync_interval_seconds' => $attendance_pull_interval_seconds,
 	'attendance_push_interval_seconds' => $attendance_push_interval_seconds,
+	'loan_sheet_enabled' => $loan_sheet_enabled,
+	'loan_spreadsheet_id' => $loan_spreadsheet_id,
+	'loan_sheet_gid' => $loan_sheet_gid,
+	'loan_sheet_title' => $loan_sheet_title,
+	'loan_credential_json_path' => $loan_credential_json_path,
+	'loan_credential_json_raw' => trim((string) getenv('ABSEN_LOAN_GOOGLE_CREDENTIALS_JSON')),
 	'state_file' => APPPATH.'cache/sheet_sync_state.json',
 	'log_prefix' => '[SheetSync] ',
 	'field_labels' => array(

@@ -172,7 +172,7 @@ for ($office_fallback_i = 0; $office_fallback_i < count($office_fallback_points)
 		'lng' => $office_fallback_lng
 	);
 }
-$navbar_logo_file = 'src/assets/pns_logo_nav.svg';
+$navbar_logo_file = 'src/assets/pns_logo_nav.png';
 $favicon_file = 'src/assets/sinyal.svg';
 $favicon_type = 'image/svg+xml';
 
@@ -491,7 +491,7 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 								<td colspan="5">Belum ada riwayat pinjaman.</td>
 							</tr>
 						<?php else: ?>
-							<?php foreach ($recent_loans as $loan): ?>
+							<?php foreach ($recent_loans as $loan_index => $loan): ?>
 								<?php
 								$loan_status = isset($loan['status']) ? strtolower(trim((string) $loan['status'])) : '';
 								$loan_status_class = 'menunggu';
@@ -504,7 +504,7 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 									$loan_status_class = 'ditolak';
 								}
 								?>
-								<tr>
+								<tr class="loan-history-row" data-loan-index="<?php echo (int) $loan_index; ?>" tabindex="0" role="button" aria-label="Lihat rincian pinjaman">
 									<td><?php echo htmlspecialchars(isset($loan['tanggal']) ? (string) $loan['tanggal'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
 									<td><?php echo htmlspecialchars(isset($loan['nominal']) ? (string) $loan['nominal'] : 'Rp 0', ENT_QUOTES, 'UTF-8'); ?></td>
 									<td><?php echo htmlspecialchars(isset($loan['tenor']) ? (string) $loan['tenor'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
@@ -708,6 +708,67 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 		</section>
 	</div>
 
+	<div id="loanHistoryDetailModal" class="request-modal" aria-hidden="true">
+		<div class="modal-overlay" data-loan-history-close></div>
+		<section class="request-panel loan-history-detail-panel" role="dialog" aria-modal="true" aria-labelledby="loanHistoryDetailTitle">
+			<div class="request-head">
+				<h2 id="loanHistoryDetailTitle" class="request-title">Detail Riwayat Pinjaman</h2>
+				<button type="button" class="modal-close" id="closeLoanHistoryDetailModal" aria-label="Tutup popup detail pinjaman">&times;</button>
+			</div>
+			<div class="request-body loan-history-detail-body">
+				<div class="loan-history-detail-section">
+					<h3 class="loan-history-detail-heading">Rincian Pinjaman</h3>
+					<div class="loan-history-detail-grid">
+						<div class="loan-history-detail-item">
+							<span>Nominal Pinjaman</span>
+							<strong id="loanHistoryDetailPrincipal">Rp 0</strong>
+						</div>
+						<div class="loan-history-detail-item">
+							<span>Tenor</span>
+							<strong id="loanHistoryDetailTenor">-</strong>
+						</div>
+						<div class="loan-history-detail-item">
+							<span>Bunga per bulan</span>
+							<strong id="loanHistoryDetailRate">0,00%</strong>
+						</div>
+						<div class="loan-history-detail-item">
+							<span>Bunga per Bulan (Rupiah)</span>
+							<strong id="loanHistoryDetailMonthlyInterest">Rp 0</strong>
+						</div>
+						<div class="loan-history-detail-item">
+							<span>Total Bunga</span>
+							<strong id="loanHistoryDetailTotalInterest">Rp 0</strong>
+						</div>
+						<div class="loan-history-detail-item">
+							<span>Total Bayar</span>
+							<strong id="loanHistoryDetailTotalPayment">Rp 0</strong>
+						</div>
+					</div>
+				</div>
+				<div class="loan-history-detail-section">
+					<h3 class="loan-history-detail-heading">Rincian Pembayaran</h3>
+					<div class="table-wrap loan-history-detail-table-wrap">
+						<table class="loan-history-detail-table">
+							<thead>
+								<tr>
+									<th>Tenor</th>
+									<th>Tagihan</th>
+									<th>Jatuh Tempo</th>
+									<th>Status</th>
+								</tr>
+							</thead>
+							<tbody id="loanHistoryDetailInstallments">
+								<tr>
+									<td colspan="4">Belum ada rincian pembayaran.</td>
+								</tr>
+							</tbody>
+						</table>
+					</div>
+				</div>
+			</div>
+		</section>
+	</div>
+
 	<div id="swapDayOffModal" class="request-modal" aria-hidden="true">
 		<div class="modal-overlay" data-swap-close></div>
 		<section class="request-panel" role="dialog" aria-modal="true" aria-labelledby="swapDayOffTitle">
@@ -741,6 +802,7 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 	<div id="toastMessage" class="toast" role="status" aria-live="polite"></div>
 
 	<script>
+		window.__USER_DASHBOARD_RECENT_LOANS = <?php echo json_encode($recent_loans, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
 		window.__USER_DASHBOARD_CONFIG = <?php echo $user_dashboard_config_json; ?>;
 		(function (cfg) {
 			if (!cfg || typeof cfg !== 'object') {
@@ -1019,6 +1081,570 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 	observer.observe(tbody, { childList: true });
 	scheduleNormalize(0);
 	patchLiveDataFetch();
+	}());
+	</script>
+	<script>
+	(function () {
+		var tbody = document.getElementById('loanHistoryTableBody');
+		var modal = document.getElementById('loanHistoryDetailModal');
+		if (!tbody || !modal) {
+			return;
+		}
+
+		var closeButton = document.getElementById('closeLoanHistoryDetailModal');
+		var overlayClose = modal.querySelector('[data-loan-history-close]');
+		var principalEl = document.getElementById('loanHistoryDetailPrincipal');
+		var tenorEl = document.getElementById('loanHistoryDetailTenor');
+		var rateEl = document.getElementById('loanHistoryDetailRate');
+		var monthlyInterestEl = document.getElementById('loanHistoryDetailMonthlyInterest');
+		var totalInterestEl = document.getElementById('loanHistoryDetailTotalInterest');
+		var totalPaymentEl = document.getElementById('loanHistoryDetailTotalPayment');
+		var installmentsBody = document.getElementById('loanHistoryDetailInstallments');
+
+		var bindTimer = null;
+		var observer = null;
+		var liveLoans = normalizeLoanRows(window.__USER_DASHBOARD_RECENT_LOANS);
+		window.__USER_DASHBOARD_RECENT_LOANS = liveLoans;
+
+		function text(value) {
+			return String(value || '').replace(/\s+/g, ' ').trim();
+		}
+
+		function parseIntSafe(value) {
+			var parsed = parseInt(String(value || '0'), 10);
+			return isFinite(parsed) ? parsed : 0;
+		}
+
+		function parseMoneyInt(value) {
+			if (typeof value === 'number' && isFinite(value)) {
+				return Math.max(0, Math.round(value));
+			}
+			var digits = String(value || '').replace(/\D+/g, '');
+			var parsed = parseInt(digits, 10);
+			if (!isFinite(parsed) || parsed < 0) {
+				return 0;
+			}
+			return parsed;
+		}
+
+		function parseFloatSafe(value, fallbackValue) {
+			var parsed = parseFloat(String(value || '').replace(',', '.'));
+			if (!isFinite(parsed)) {
+				return typeof fallbackValue === 'number' ? fallbackValue : 0;
+			}
+			return parsed;
+		}
+
+		function formatRupiah(value) {
+			var number = parseMoneyInt(value);
+			return 'Rp ' + number.toLocaleString('id-ID');
+		}
+
+		function formatRate(value) {
+			var number = parseFloatSafe(value, 0);
+			if (number < 0) {
+				number = 0;
+			}
+			return number.toFixed(2).replace('.', ',') + '%';
+		}
+
+		function parseDateAny(rawValue) {
+			var value = text(rawValue);
+			if (value === '') {
+				return null;
+			}
+			var isoMatch = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+			if (isoMatch) {
+				var isoYear = parseIntSafe(isoMatch[1]);
+				var isoMonth = parseIntSafe(isoMatch[2]);
+				var isoDay = parseIntSafe(isoMatch[3]);
+				if (isoYear > 0 && isoMonth >= 1 && isoMonth <= 12 && isoDay >= 1 && isoDay <= 31) {
+					return new Date(isoYear, isoMonth - 1, isoDay);
+				}
+			}
+			var dmyMatch = value.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+			if (dmyMatch) {
+				var day = parseIntSafe(dmyMatch[1]);
+				var month = parseIntSafe(dmyMatch[2]);
+				var year = parseIntSafe(dmyMatch[3]);
+				if (year > 0 && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+					return new Date(year, month - 1, day);
+				}
+			}
+			return null;
+		}
+
+		function formatDateSlash(dateValue) {
+			if (!(dateValue instanceof Date) || isNaN(dateValue.getTime())) {
+				return '-';
+			}
+			var day = String(dateValue.getDate()).padStart(2, '0');
+			var month = String(dateValue.getMonth() + 1).padStart(2, '0');
+			var year = String(dateValue.getFullYear());
+			return day + '/' + month + '/' + year;
+		}
+
+		function toIsoDate(dateValue) {
+			if (!(dateValue instanceof Date) || isNaN(dateValue.getTime())) {
+				return '';
+			}
+			var day = String(dateValue.getDate()).padStart(2, '0');
+			var month = String(dateValue.getMonth() + 1).padStart(2, '0');
+			var year = String(dateValue.getFullYear());
+			return year + '-' + month + '-' + day;
+		}
+
+		function addMonthsSafe(dateValue, monthOffset) {
+			if (!(dateValue instanceof Date) || isNaN(dateValue.getTime())) {
+				return null;
+			}
+			var source = new Date(dateValue.getTime());
+			var day = source.getDate();
+			source.setDate(1);
+			source.setMonth(source.getMonth() + monthOffset);
+			var maxDay = new Date(source.getFullYear(), source.getMonth() + 1, 0).getDate();
+			source.setDate(Math.min(day, maxDay));
+			return source;
+		}
+
+		function resolveTenorMonths(payload) {
+			var tenorMonths = parseIntSafe(payload.tenor_months);
+			if (tenorMonths > 0) {
+				return tenorMonths;
+			}
+			var tenorMatch = String(payload.tenor || '').match(/(\d+)/);
+			if (tenorMatch && tenorMatch[1]) {
+				tenorMonths = parseIntSafe(tenorMatch[1]);
+			}
+			return tenorMonths > 0 ? tenorMonths : 0;
+		}
+
+		function resolveRequestDateIso(payload) {
+			var directDate = parseDateAny(payload.request_date);
+			if (directDate instanceof Date && !isNaN(directDate.getTime())) {
+				return toIsoDate(directDate);
+			}
+			var labelDate = parseDateAny(payload.request_date_label || payload.tanggal);
+			if (labelDate instanceof Date && !isNaN(labelDate.getTime())) {
+				return toIsoDate(labelDate);
+			}
+			return '';
+		}
+
+		function buildInstallments(payload, principal, tenorMonths, totalPayment, monthlyInstallment, requestDateIso) {
+			var installmentsRaw = Array.isArray(payload.installments) ? payload.installments : [];
+			var normalized = [];
+
+			for (var i = 0; i < installmentsRaw.length; i += 1) {
+				var row = installmentsRaw[i] && typeof installmentsRaw[i] === 'object' ? installmentsRaw[i] : {};
+				var monthValue = parseIntSafe(row.month);
+				if (monthValue <= 0) {
+					monthValue = i + 1;
+				}
+				var amountValue = parseMoneyInt(row.amount);
+				if (amountValue <= 0 && monthlyInstallment > 0) {
+					amountValue = monthlyInstallment;
+				}
+				var dueDate = parseDateAny(row.due_date || row.due_date_label);
+				if (!(dueDate instanceof Date) || isNaN(dueDate.getTime())) {
+					var requestDate = parseDateAny(requestDateIso);
+					if (requestDate instanceof Date && !isNaN(requestDate.getTime())) {
+						dueDate = addMonthsSafe(requestDate, monthValue);
+					}
+				}
+				normalized.push({
+					month: monthValue,
+					amount: Math.max(0, amountValue),
+					due_date: dueDate instanceof Date && !isNaN(dueDate.getTime()) ? toIsoDate(dueDate) : '',
+					due_date_label: dueDate instanceof Date && !isNaN(dueDate.getTime()) ? formatDateSlash(dueDate) : '-',
+					status: text(row.status || row.payment_status || row.paid_status || '')
+				});
+			}
+
+			if (!normalized.length && tenorMonths > 0) {
+				var baseInstallment = totalPayment > 0 ? Math.floor(totalPayment / tenorMonths) : (monthlyInstallment > 0 ? monthlyInstallment : 0);
+				var remainder = totalPayment > 0 ? (totalPayment - (baseInstallment * tenorMonths)) : 0;
+				var requestDateAuto = parseDateAny(requestDateIso);
+				for (var monthIndex = 1; monthIndex <= tenorMonths; monthIndex += 1) {
+					var billValue = baseInstallment;
+					if (monthIndex === tenorMonths && remainder > 0) {
+						billValue += remainder;
+					}
+					if (billValue <= 0 && monthlyInstallment > 0) {
+						billValue = monthlyInstallment;
+					}
+					var dueDateAuto = requestDateAuto instanceof Date && !isNaN(requestDateAuto.getTime())
+						? addMonthsSafe(requestDateAuto, monthIndex)
+						: null;
+					normalized.push({
+						month: monthIndex,
+						amount: Math.max(0, billValue),
+						due_date: dueDateAuto instanceof Date && !isNaN(dueDateAuto.getTime()) ? toIsoDate(dueDateAuto) : '',
+						due_date_label: dueDateAuto instanceof Date && !isNaN(dueDateAuto.getTime()) ? formatDateSlash(dueDateAuto) : '-',
+						status: ''
+					});
+				}
+			}
+
+			return normalized;
+		}
+
+		function normalizeLoanRow(row) {
+			var payload = row && typeof row === 'object' ? row : {};
+			var tenorMonths = resolveTenorMonths(payload);
+			var principal = parseMoneyInt(payload.nominal_value || payload.amount || payload.principal);
+			if (principal <= 0) {
+				principal = parseMoneyInt(payload.nominal);
+			}
+			var isFirstLoan = payload.is_first_loan === true || payload.is_first_loan === 1 || String(payload.is_first_loan).toLowerCase() === 'true';
+			var monthlyRatePercent = parseFloatSafe(payload.monthly_rate_percent, isFirstLoan ? 0 : 2.95);
+			if (monthlyRatePercent < 0) {
+				monthlyRatePercent = 0;
+			}
+			var monthlyInterestAmount = parseMoneyInt(payload.monthly_interest_amount);
+			if (monthlyInterestAmount <= 0 && principal > 0 && tenorMonths > 0) {
+				monthlyInterestAmount = Math.round(principal * monthlyRatePercent / 100);
+			}
+			var totalInterestAmount = parseMoneyInt(payload.total_interest_amount || payload.interest_amount);
+			if (totalInterestAmount <= 0 && monthlyInterestAmount > 0 && tenorMonths > 0) {
+				totalInterestAmount = monthlyInterestAmount * tenorMonths;
+			}
+			var totalPayment = parseMoneyInt(payload.total_payment);
+			if (totalPayment <= 0) {
+				totalPayment = principal + totalInterestAmount;
+			}
+			if (totalPayment <= 0) {
+				totalPayment = principal;
+			}
+			var monthlyInstallment = parseMoneyInt(payload.monthly_installment || payload.monthly_installment_estimate || payload.cicilan_bulanan);
+			if (monthlyInstallment <= 0 && tenorMonths > 0 && totalPayment > 0) {
+				monthlyInstallment = Math.round(totalPayment / tenorMonths);
+			}
+			var requestDateIso = resolveRequestDateIso(payload);
+			var installments = buildInstallments(payload, principal, tenorMonths, totalPayment, monthlyInstallment, requestDateIso);
+			if (tenorMonths <= 0 && installments.length > 0) {
+				tenorMonths = installments.length;
+			}
+			if (monthlyInstallment <= 0 && installments.length > 0) {
+				monthlyInstallment = parseMoneyInt(installments[0].amount);
+			}
+
+			return {
+				tanggal: text(payload.tanggal) !== '' ? text(payload.tanggal) : '-',
+				nominal: text(payload.nominal) !== '' ? text(payload.nominal) : formatRupiah(principal),
+				tenor: text(payload.tenor) !== '' ? text(payload.tenor) : (tenorMonths > 0 ? String(tenorMonths) + ' bulan' : '-'),
+				cicilan_bulanan: text(payload.cicilan_bulanan) !== '' ? text(payload.cicilan_bulanan) : formatRupiah(monthlyInstallment),
+				status: text(payload.status) !== '' ? text(payload.status) : 'Menunggu',
+				request_date: requestDateIso,
+				nominal_value: principal,
+				tenor_months: tenorMonths,
+				monthly_rate_percent: monthlyRatePercent,
+				monthly_interest_amount: monthlyInterestAmount,
+				total_interest_amount: totalInterestAmount,
+				total_payment: totalPayment,
+				monthly_installment: monthlyInstallment,
+				installments: installments
+			};
+		}
+
+		function isLunasStatus(value) {
+			var statusText = text(value).toLowerCase();
+			if (statusText === '') {
+				return false;
+			}
+			if (statusText.indexOf('belum') !== -1 && statusText.indexOf('lunas') !== -1) {
+				return false;
+			}
+			return statusText.indexOf('lunas') !== -1;
+		}
+
+		function normalizeLoanRows(rows) {
+			if (!Array.isArray(rows)) {
+				return [];
+			}
+			var normalized = [];
+			for (var i = 0; i < rows.length; i += 1) {
+				normalized.push(normalizeLoanRow(rows[i]));
+			}
+			return normalized;
+		}
+
+		function buildFallbackLoanFromRow(row) {
+			var cells = row && row.cells ? row.cells : [];
+			return normalizeLoanRow({
+				tanggal: cells[0] ? cells[0].textContent : '-',
+				nominal: cells[1] ? cells[1].textContent : 'Rp 0',
+				tenor: cells[2] ? cells[2].textContent : '-',
+				cicilan_bulanan: cells[3] ? cells[3].textContent : 'Rp 0',
+				status: cells[4] ? cells[4].textContent : 'Menunggu'
+			});
+		}
+
+		function renderInstallments(loan) {
+			if (!installmentsBody) {
+				return;
+			}
+			installmentsBody.innerHTML = '';
+			var installments = Array.isArray(loan.installments) ? loan.installments : [];
+			if (!installments.length) {
+				var emptyRow = document.createElement('tr');
+				var emptyCell = document.createElement('td');
+				emptyCell.colSpan = 4;
+				emptyCell.textContent = 'Belum ada rincian pembayaran.';
+				emptyRow.appendChild(emptyCell);
+				installmentsBody.appendChild(emptyRow);
+				return;
+			}
+
+			for (var i = 0; i < installments.length; i += 1) {
+				var installment = installments[i] && typeof installments[i] === 'object' ? installments[i] : {};
+				var row = document.createElement('tr');
+				var monthValue = parseIntSafe(installment.month);
+				if (monthValue <= 0) {
+					monthValue = i + 1;
+				}
+				var tenorValue = parseIntSafe(loan.tenor_months);
+				var tenorLabel = tenorValue > 0 ? (monthValue + '/' + tenorValue) : String(monthValue);
+				var amountValue = parseMoneyInt(installment.amount);
+				var dueDateLabel = text(installment.due_date_label);
+				if (dueDateLabel === '' || dueDateLabel === '-') {
+					dueDateLabel = text(installment.due_date);
+					if (dueDateLabel !== '') {
+						var parsedDue = parseDateAny(dueDateLabel);
+						dueDateLabel = parsedDue instanceof Date && !isNaN(parsedDue.getTime()) ? formatDateSlash(parsedDue) : '-';
+					} else {
+						dueDateLabel = '-';
+					}
+				}
+
+				var tenorCell = document.createElement('td');
+				tenorCell.textContent = tenorLabel;
+				row.appendChild(tenorCell);
+
+				var amountCell = document.createElement('td');
+				amountCell.textContent = formatRupiah(amountValue);
+				row.appendChild(amountCell);
+
+				var dueDateCell = document.createElement('td');
+				dueDateCell.textContent = dueDateLabel;
+				row.appendChild(dueDateCell);
+
+				var statusCell = document.createElement('td');
+				var statusPill = document.createElement('span');
+				var installmentStatusText = text(installment.status);
+				var paymentDone = isLunasStatus(installmentStatusText) || isLunasStatus(loan.status);
+				statusPill.className = 'loan-payment-status ' + (paymentDone ? 'lunas' : 'belum-lunas');
+				statusPill.textContent = paymentDone ? 'Lunas' : 'Belum Lunas';
+				statusCell.appendChild(statusPill);
+				row.appendChild(statusCell);
+
+				installmentsBody.appendChild(row);
+			}
+		}
+
+		function renderLoanDetail(loan) {
+			if (principalEl) {
+				principalEl.textContent = formatRupiah(loan.nominal_value);
+			}
+			if (tenorEl) {
+				tenorEl.textContent = loan.tenor_months > 0 ? String(loan.tenor_months) + ' bulan' : '-';
+			}
+			if (rateEl) {
+				rateEl.textContent = formatRate(loan.monthly_rate_percent);
+			}
+			if (monthlyInterestEl) {
+				monthlyInterestEl.textContent = formatRupiah(loan.monthly_interest_amount);
+			}
+			if (totalInterestEl) {
+				totalInterestEl.textContent = formatRupiah(loan.total_interest_amount);
+			}
+			if (totalPaymentEl) {
+				totalPaymentEl.textContent = formatRupiah(loan.total_payment);
+			}
+			renderInstallments(loan);
+		}
+
+		function isOpen(elementId) {
+			var el = document.getElementById(elementId);
+			return !!(el && el.classList && el.classList.contains('show'));
+		}
+
+		function updateBodyOverflow() {
+			var hasModalOpen = modal.classList.contains('show')
+				|| isOpen('attendanceModal')
+				|| isOpen('requestModal')
+				|| isOpen('loanModal')
+				|| isOpen('swapDayOffModal');
+			document.body.style.overflow = hasModalOpen ? 'hidden' : '';
+		}
+
+		function openDetail(loan) {
+			renderLoanDetail(loan);
+			modal.classList.add('show');
+			modal.setAttribute('aria-hidden', 'false');
+			updateBodyOverflow();
+		}
+
+		function closeDetail() {
+			modal.classList.remove('show');
+			modal.setAttribute('aria-hidden', 'true');
+			updateBodyOverflow();
+		}
+
+		function extractLoanFromRow(row) {
+			var index = parseIntSafe(row.getAttribute('data-loan-index'));
+			if (index >= 0 && index < liveLoans.length) {
+				return liveLoans[index];
+			}
+			return buildFallbackLoanFromRow(row);
+		}
+
+		function activateRow(row) {
+			if (!row) {
+				return;
+			}
+			var loan = extractLoanFromRow(row);
+			openDetail(loan);
+		}
+
+		function scheduleBindRows(delayMs) {
+			if (bindTimer !== null) {
+				return;
+			}
+			var wait = typeof delayMs === 'number' && delayMs >= 0 ? delayMs : 30;
+			bindTimer = window.setTimeout(function () {
+				bindTimer = null;
+				applyRowsAccessibility();
+			}, wait);
+		}
+
+		function applyRowsAccessibility() {
+			var rows = tbody.querySelectorAll('tr');
+			var loanIndex = 0;
+			for (var i = 0; i < rows.length; i += 1) {
+				var row = rows[i];
+				if (row.cells.length === 1) {
+					var colspan = parseIntSafe(row.cells[0].getAttribute('colspan') || '1');
+					if (colspan > 1) {
+						row.classList.remove('loan-history-row');
+						row.removeAttribute('data-loan-index');
+						row.removeAttribute('tabindex');
+						row.removeAttribute('role');
+						row.removeAttribute('aria-label');
+						continue;
+					}
+				}
+				row.classList.add('loan-history-row');
+				row.setAttribute('data-loan-index', String(loanIndex));
+				row.setAttribute('tabindex', '0');
+				row.setAttribute('role', 'button');
+				row.setAttribute('aria-label', 'Lihat rincian pinjaman');
+				loanIndex += 1;
+			}
+		}
+
+		function isLiveDataRequest(url) {
+			var value = String(url || '').toLowerCase();
+			if (value === '') {
+				return false;
+			}
+			return value.indexOf('/home/user_dashboard_live_data') !== -1
+				|| value.indexOf('/index.php/home/user_dashboard_live_data') !== -1
+				|| value.indexOf('home/user_dashboard_live_data') === 0
+				|| value.indexOf('index.php/home/user_dashboard_live_data') === 0
+				|| value.indexOf('user_dashboard_live_data') !== -1;
+		}
+
+		function patchLiveDataFetch() {
+			if (window.__USER_DASHBOARD_LOAN_FETCH_PATCHED === true) {
+				return;
+			}
+			if (typeof window.fetch !== 'function') {
+				return;
+			}
+
+			var nativeFetch = window.fetch.bind(window);
+			window.__USER_DASHBOARD_LOAN_FETCH_PATCHED = true;
+			window.fetch = function (input, init) {
+				var requestUrl = '';
+				if (typeof input === 'string') {
+					requestUrl = input;
+				}
+				else if (input && typeof input.url === 'string') {
+					requestUrl = input.url;
+				}
+
+				var result = nativeFetch(input, init);
+				if (!isLiveDataRequest(requestUrl)) {
+					return result;
+				}
+
+				return result.then(function (response) {
+					if (!response || typeof response.clone !== 'function') {
+						return response;
+					}
+					var contentType = '';
+					if (response.headers && typeof response.headers.get === 'function') {
+						contentType = String(response.headers.get('content-type') || '').toLowerCase();
+					}
+					if (contentType.indexOf('application/json') === -1) {
+						return response;
+					}
+
+					response.clone().json().then(function (payload) {
+						if (!payload || payload.success !== true || !Array.isArray(payload.recent_loans)) {
+							return;
+						}
+						liveLoans = normalizeLoanRows(payload.recent_loans);
+						window.__USER_DASHBOARD_RECENT_LOANS = liveLoans;
+						scheduleBindRows(20);
+					}).catch(function () {});
+					return response;
+				});
+			};
+		}
+
+		tbody.addEventListener('click', function (event) {
+			var row = event.target && event.target.closest ? event.target.closest('tr.loan-history-row[data-loan-index]') : null;
+			if (!row) {
+				return;
+			}
+			activateRow(row);
+		});
+
+		tbody.addEventListener('keydown', function (event) {
+			var key = String(event.key || '').toLowerCase();
+			if (key !== 'enter' && key !== ' ') {
+				return;
+			}
+			var row = event.target && event.target.closest ? event.target.closest('tr.loan-history-row[data-loan-index]') : null;
+			if (!row) {
+				return;
+			}
+			event.preventDefault();
+			activateRow(row);
+		});
+
+		if (closeButton) {
+			closeButton.addEventListener('click', closeDetail);
+		}
+		if (overlayClose) {
+			overlayClose.addEventListener('click', closeDetail);
+		}
+
+		document.addEventListener('keydown', function (event) {
+			if (event.key === 'Escape' && modal.classList.contains('show')) {
+				closeDetail();
+			}
+		});
+
+		observer = new MutationObserver(function () {
+			scheduleBindRows(25);
+		});
+		observer.observe(tbody, { childList: true });
+
+		applyRowsAccessibility();
+		patchLiveDataFetch();
 	}());
 	</script>
 	<script>

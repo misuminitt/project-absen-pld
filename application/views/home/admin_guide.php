@@ -12,7 +12,7 @@ if ($base_path === '/' || $base_path === '.')
 	$base_path = '';
 }
 
-$navbar_logo_path = 'src/assets/pns_logo_nav.svg';
+$navbar_logo_path = 'src/assets/pns_logo_nav.png';
 $favicon_path = 'src/assets/sinyal.svg';
 $logo_url = base_url($navbar_logo_path);
 $logo_version = is_file(FCPATH.$navbar_logo_path) ? (string) @md5_file(FCPATH.$navbar_logo_path) : '';
@@ -123,7 +123,7 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 			gap: 0.9rem;
 		}
 
-		.brand-block {
+		.brand {
 			display: inline-flex;
 			align-items: center;
 			gap: 0.56rem;
@@ -131,14 +131,14 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 		}
 
 		.brand-logo {
-			height: 40px;
+			height: 56px;
 			width: auto;
 			display: block;
-			margin-right: 4.2rem;
-			transform: scale(2.6);
-			transform-origin: left center;
+			margin-right: 0;
+			transform: none;
 			object-fit: contain;
 			object-position: left center;
+			flex: 0 0 auto;
 		}
 
 		.brand-text {
@@ -523,14 +523,14 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 				gap: 0.48rem;
 			}
 
-			.brand-block {
+			.brand {
 				min-width: 0;
 			}
 
 			.brand-logo {
-				height: 36px;
-				margin-right: 2.8rem;
-				transform: scale(2.15);
+				height: 48px;
+				margin-right: 0;
+				transform: none;
 			}
 
 			.brand-text {
@@ -605,7 +605,7 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 	<nav class="topbar">
 		<div class="topbar-container">
 			<div class="topbar-inner">
-				<a href="<?php echo site_url('home'); ?>" class="brand-block">
+				<a href="<?php echo site_url('home'); ?>" class="brand">
 					<img class="brand-logo" src="<?php echo htmlspecialchars($logo_url, ENT_QUOTES, 'UTF-8'); ?>" alt="Logo Absen Online">
 					<span class="brand-text"><?php echo htmlspecialchars($dashboard_navbar_title, ENT_QUOTES, 'UTF-8'); ?></span>
 				</a>

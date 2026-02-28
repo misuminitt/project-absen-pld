@@ -427,7 +427,8 @@ class Home extends CI_Controller {
 			'collab_actor' => $this->current_actor_username(),
 			'collab_lock_wait_refresh_seconds' => self::COLLAB_SYNC_LOCK_WAIT_REFRESH_SECONDS,
 			'sync_backup_ready' => isset($sync_backup_status['ready']) && $sync_backup_status['ready'] === TRUE,
-			'sync_backup_status_text' => isset($sync_backup_status['status_text']) ? (string) $sync_backup_status['status_text'] : ''
+			'sync_backup_status_text' => isset($sync_backup_status['status_text']) ? (string) $sync_backup_status['status_text'] : '',
+			'loan_sync_last_report' => $this->read_loan_sheet_sync_report()
 		);
 		$this->load->view('home/index', $data);
 	}
@@ -1328,6 +1329,671 @@ class Home extends CI_Controller {
 		redirect('home');
 	}
 
+	public function sync_web_loan_to_sheet_now()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			redirect('login');
+			return;
+		}
+
+		if ((string) $this->session->userdata('absen_role') === 'user')
+		{
+			redirect('home');
+			return;
+		}
+
+		$actor = strtolower(trim((string) $this->session->userdata('absen_username')));
+		if ($actor === '')
+		{
+			$actor = 'admin';
+		}
+		if (!$this->assert_expected_revision_or_redirect('home#manajemen-karyawan', 'account_notice_error'))
+		{
+			$this->write_loan_sheet_sync_report(
+				'sync_web_to_loan_sheet',
+				'blocked',
+				'Sync dibatalkan karena konflik versi data (expected_revision).',
+				array('actor' => $actor)
+			);
+			return;
+		}
+
+		if (!$this->assert_sync_local_backup_ready_or_redirect('home#manajemen-karyawan', 'account_notice_error', $actor))
+		{
+			$this->write_loan_sheet_sync_report(
+				'sync_web_to_loan_sheet',
+				'blocked',
+				'Sync dibatalkan karena backup local belum aktif.',
+				array('actor' => $actor)
+			);
+			return;
+		}
+
+		$lock_result = $this->collab_try_acquire_sync_lock($actor, 'sync_web_loan_to_sheet');
+		if (!isset($lock_result['success']) || $lock_result['success'] !== TRUE)
+		{
+			$lock_wait = isset($lock_result['remaining_seconds']) ? (int) $lock_result['remaining_seconds'] : 0;
+			$lock_owner = isset($lock_result['owner']) ? trim((string) $lock_result['owner']) : 'admin lain';
+			$lock_message = 'Sync lock sedang aktif oleh '.$lock_owner.'. Tunggu '.max(1, $lock_wait).' detik lalu coba lagi.';
+			$this->session->set_flashdata(
+				'account_notice_error',
+				$lock_message
+			);
+			$this->write_loan_sheet_sync_report(
+				'sync_web_to_loan_sheet',
+				'blocked',
+				$lock_message,
+				array('actor' => $actor, 'lock_owner' => $lock_owner, 'lock_wait_seconds' => max(1, $lock_wait))
+			);
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		$lock_token = isset($lock_result['token']) ? trim((string) $lock_result['token']) : '';
+		$this->sync_local_backup_consume($actor);
+		try
+		{
+			$sheet_sync_factory = $this->build_loan_sheet_sync_instance();
+			if (!isset($sheet_sync_factory['success']) || $sheet_sync_factory['success'] !== TRUE)
+			{
+				$message = isset($sheet_sync_factory['message']) && trim((string) $sheet_sync_factory['message']) !== ''
+					? (string) $sheet_sync_factory['message']
+					: 'Konfigurasi sync sheet kasbon belum lengkap.';
+				$this->session->set_flashdata('account_notice_error', $message);
+				$this->write_loan_sheet_sync_report(
+					'sync_web_to_loan_sheet',
+					'error',
+					$message,
+					array('actor' => $actor)
+				);
+				redirect('home#manajemen-karyawan');
+				return;
+			}
+
+			$loan_sheet_sync = isset($sheet_sync_factory['sync']) && is_object($sheet_sync_factory['sync'])
+				? $sheet_sync_factory['sync']
+				: NULL;
+			if (!$loan_sheet_sync || !method_exists($loan_sheet_sync, 'sync_loans_web_to_sheet'))
+			{
+				$message = 'Library sync kasbon belum mendukung fitur web -> pinjaman.';
+				$this->session->set_flashdata('account_notice_error', $message);
+				$this->write_loan_sheet_sync_report(
+					'sync_web_to_loan_sheet',
+					'error',
+					$message,
+					array('actor' => $actor)
+				);
+				redirect('home#manajemen-karyawan');
+				return;
+			}
+
+			$loan_records = $this->load_loan_requests();
+			$profiles = $this->employee_profile_book(TRUE);
+			$scope_lookup = $this->scoped_employee_lookup();
+			$name_whitelist = $this->build_loan_sheet_name_whitelist($profiles, $scope_lookup);
+
+			$payload_rows = array();
+			$payload_filter_stats = array(
+				'total_records' => count($loan_records),
+				'skipped_status_not_accepted' => 0,
+				'skipped_sheet_origin' => 0,
+				'skipped_already_synced' => 0,
+				'skipped_username_empty' => 0,
+				'skipped_out_of_scope' => 0,
+				'skipped_amount_invalid' => 0
+			);
+			for ($i = 0; $i < count($loan_records); $i += 1)
+			{
+				$row = isset($loan_records[$i]) && is_array($loan_records[$i]) ? $loan_records[$i] : array();
+				$status = isset($row['status']) ? (string) $row['status'] : '';
+				if (!$this->is_loan_request_status_accepted($status))
+				{
+					$payload_filter_stats['skipped_status_not_accepted'] += 1;
+					continue;
+				}
+				if ($this->is_loan_record_originated_from_sheet($row))
+				{
+					$payload_filter_stats['skipped_sheet_origin'] += 1;
+					continue;
+				}
+				if ($this->is_loan_record_marked_sheet_synced($row))
+				{
+					$payload_filter_stats['skipped_already_synced'] += 1;
+					continue;
+				}
+
+				$username_key = $this->normalize_username_key(isset($row['username']) ? (string) $row['username'] : '');
+				if ($username_key === '')
+				{
+					$payload_filter_stats['skipped_username_empty'] += 1;
+					continue;
+				}
+				if (!isset($scope_lookup[$username_key]))
+				{
+					$payload_filter_stats['skipped_out_of_scope'] += 1;
+					continue;
+				}
+				$amount = $this->resolve_loan_sheet_kasbon_amount($row);
+				if ($amount <= 0)
+				{
+					$payload_filter_stats['skipped_amount_invalid'] += 1;
+					continue;
+				}
+
+				$reason = $this->normalize_loan_reason_text(isset($row['reason']) ? (string) $row['reason'] : '');
+				if ($reason === '')
+				{
+					$reason = 'KEPERLUAN PINJAMAN';
+				}
+
+				$request_date = $this->resolve_loan_record_date_iso($row);
+				if ($request_date === '')
+				{
+					$request_date = date('Y-m-d');
+				}
+				$display_name = isset($profiles[$username_key]['display_name']) && trim((string) $profiles[$username_key]['display_name']) !== ''
+					? (string) $profiles[$username_key]['display_name']
+					: $username_key;
+
+				$payload_rows[] = array(
+					'id' => isset($row['id']) ? (string) $row['id'] : 'loan_'.$i,
+					'username' => $username_key,
+					'name' => $display_name,
+					'display_name' => $display_name,
+					'request_date' => $request_date,
+					'request_date_label' => isset($row['request_date_label']) ? (string) $row['request_date_label'] : '',
+					'reason' => $reason,
+					'amount' => $amount
+				);
+			}
+			$payload_filter_stats['prepared'] = count($payload_rows);
+
+			usort($payload_rows, function ($left, $right) {
+				$left_date = isset($left['request_date']) ? (string) $left['request_date'] : '';
+				$right_date = isset($right['request_date']) ? (string) $right['request_date'] : '';
+				if ($left_date !== $right_date)
+				{
+					return strcmp($left_date, $right_date);
+				}
+				$left_id = isset($left['id']) ? (string) $left['id'] : '';
+				$right_id = isset($right['id']) ? (string) $right['id'] : '';
+				return strcmp($left_id, $right_id);
+			});
+
+			$sync_result = $loan_sheet_sync->sync_loans_web_to_sheet(array(
+				'rows' => $payload_rows,
+				'name_whitelist' => $name_whitelist
+			));
+			if (!(isset($sync_result['success']) && $sync_result['success'] === TRUE))
+			{
+				$message = isset($sync_result['message']) && trim((string) $sync_result['message']) !== ''
+					? (string) $sync_result['message']
+					: 'Sync data web ke pinjaman gagal.';
+				$this->session->set_flashdata('account_notice_error', $message);
+				$this->write_loan_sheet_sync_report(
+					'sync_web_to_loan_sheet',
+					'error',
+					$message,
+					array(
+						'actor' => $actor,
+						'spreadsheet_id' => isset($sheet_sync_factory['spreadsheet_id']) ? (string) $sheet_sync_factory['spreadsheet_id'] : '',
+						'sheet_gid' => isset($sheet_sync_factory['sheet_gid']) ? (int) $sheet_sync_factory['sheet_gid'] : 0,
+						'sheet' => isset($sheet_sync_factory['sheet_title']) ? (string) $sheet_sync_factory['sheet_title'] : 'KASBON',
+						'payload' => $payload_filter_stats
+					)
+				);
+				redirect('home#manajemen-karyawan');
+				return;
+			}
+
+			$synced_rows = isset($sync_result['synced']) && is_array($sync_result['synced'])
+				? $sync_result['synced']
+				: array();
+			$skipped_items = isset($sync_result['skipped_items']) && is_array($sync_result['skipped_items'])
+				? $sync_result['skipped_items']
+				: array();
+			$synced_by_id = array();
+			for ($i = 0; $i < count($synced_rows); $i += 1)
+			{
+				$synced_id = isset($synced_rows[$i]['id']) ? trim((string) $synced_rows[$i]['id']) : '';
+				if ($synced_id === '')
+				{
+					continue;
+				}
+				$synced_by_id[$synced_id] = $synced_rows[$i];
+			}
+			$duplicate_by_id = array();
+			for ($i = 0; $i < count($skipped_items); $i += 1)
+			{
+				$skipped_id = isset($skipped_items[$i]['id']) ? trim((string) $skipped_items[$i]['id']) : '';
+				$skip_reason = isset($skipped_items[$i]['reason']) ? trim((string) $skipped_items[$i]['reason']) : '';
+				if ($skipped_id === '' || $skip_reason !== 'duplikat_signature')
+				{
+					continue;
+				}
+				$duplicate_by_id[$skipped_id] = TRUE;
+			}
+
+			$updated_metadata = FALSE;
+			if (!empty($synced_by_id) || !empty($duplicate_by_id))
+			{
+				for ($i = 0; $i < count($loan_records); $i += 1)
+				{
+					$loan_id = isset($loan_records[$i]['id']) ? trim((string) $loan_records[$i]['id']) : '';
+					if ($loan_id === '')
+					{
+						continue;
+					}
+					if (isset($synced_by_id[$loan_id]))
+					{
+						$loan_records[$i]['sheet_kasbon_synced_at'] = date('Y-m-d H:i:s');
+						$loan_records[$i]['sheet_kasbon_row'] = isset($synced_by_id[$loan_id]['row_number']) ? (int) $synced_by_id[$loan_id]['row_number'] : 0;
+						$loan_records[$i]['sheet_kasbon_signature'] = isset($synced_by_id[$loan_id]['signature']) ? (string) $synced_by_id[$loan_id]['signature'] : '';
+						$updated_metadata = TRUE;
+						continue;
+					}
+					if (!isset($duplicate_by_id[$loan_id]))
+					{
+						continue;
+					}
+					$loan_records[$i]['sheet_kasbon_synced_at'] = date('Y-m-d H:i:s');
+					if (!isset($loan_records[$i]['sheet_kasbon_row']))
+					{
+						$loan_records[$i]['sheet_kasbon_row'] = 0;
+					}
+					$updated_metadata = TRUE;
+				}
+			}
+			if ($updated_metadata)
+			{
+				$this->save_loan_requests($loan_records);
+			}
+
+			$written_rows = isset($sync_result['written_rows']) ? (int) $sync_result['written_rows'] : count($synced_rows);
+			$skipped_rows = isset($sync_result['skipped_rows']) ? (int) $sync_result['skipped_rows'] : 0;
+			$skip_reason_counts = $this->summarize_loan_sync_skipped_reasons($skipped_items);
+			$skip_reason_text = $this->format_loan_sync_skip_reason_summary($skip_reason_counts);
+			$debug_text = 'Kandidat='.((int) (isset($payload_filter_stats['prepared']) ? $payload_filter_stats['prepared'] : 0)).
+				', ditulis='.$written_rows.
+				', dilewati='.$skipped_rows.
+				', alasan_skip=['.$skip_reason_text.']';
+			$this->session->set_flashdata(
+				'account_notice_success',
+				'Sync Data Web ke Pinjaman selesai. '.$debug_text.'.'
+			);
+			if ($written_rows <= 0)
+			{
+				$this->session->set_flashdata(
+					'account_notice_error',
+					'Tidak ada data pinjaman baru yang bisa dikirim ke sheet kasbon. '.$debug_text.'.'
+				);
+			}
+			$this->write_loan_sheet_sync_report(
+				'sync_web_to_loan_sheet',
+				$written_rows > 0 ? 'success' : 'warning',
+				$written_rows > 0
+					? 'Sync Data Web ke Pinjaman berhasil menulis '.$written_rows.' row.'
+					: 'Sync Data Web ke Pinjaman selesai tanpa row baru.',
+				array(
+					'actor' => $actor,
+					'spreadsheet_id' => isset($sheet_sync_factory['spreadsheet_id']) ? (string) $sheet_sync_factory['spreadsheet_id'] : '',
+					'sheet_gid' => isset($sheet_sync_factory['sheet_gid']) ? (int) $sheet_sync_factory['sheet_gid'] : 0,
+					'sheet' => isset($sheet_sync_factory['sheet_title']) ? (string) $sheet_sync_factory['sheet_title'] : 'KASBON',
+					'payload' => $payload_filter_stats,
+					'written_rows' => $written_rows,
+					'skipped_rows' => $skipped_rows,
+					'skip_reasons' => $skip_reason_counts
+				)
+			);
+
+			$this->log_activity_event(
+				'sync_web_to_loan_sheet',
+				'web_data',
+				'',
+				'',
+				'Menjalankan Sync Data Web ke Pinjaman.',
+				array(
+					'sheet' => isset($sheet_sync_factory['sheet_title']) ? (string) $sheet_sync_factory['sheet_title'] : 'KASBON',
+					'new_value' => 'written='.$written_rows.', skipped='.$skipped_rows
+				)
+			);
+		}
+		catch (Throwable $exception)
+		{
+			$message = 'Sync Data Web ke Pinjaman gagal karena error server: '.$exception->getMessage();
+			$this->session->set_flashdata('account_notice_error', $message);
+			$this->write_loan_sheet_sync_report(
+				'sync_web_to_loan_sheet',
+				'error',
+				$message,
+				array(
+					'actor' => $actor,
+					'exception_class' => get_class($exception)
+				)
+			);
+		}
+		finally
+		{
+			$this->collab_release_sync_lock($lock_token, $actor);
+		}
+
+		redirect('home#manajemen-karyawan');
+	}
+
+	public function sync_sheet_loan_to_web_now()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			redirect('login');
+			return;
+		}
+
+		if ((string) $this->session->userdata('absen_role') === 'user')
+		{
+			redirect('home');
+			return;
+		}
+
+		$actor = strtolower(trim((string) $this->session->userdata('absen_username')));
+		if ($actor === '')
+		{
+			$actor = 'admin';
+		}
+		if (!$this->assert_expected_revision_or_redirect('home#manajemen-karyawan', 'account_notice_error'))
+		{
+			$this->write_loan_sheet_sync_report(
+				'sync_loan_sheet_to_web',
+				'blocked',
+				'Sync dibatalkan karena konflik versi data (expected_revision).',
+				array('actor' => $actor)
+			);
+			return;
+		}
+		if (!$this->assert_sync_local_backup_ready_or_redirect('home#manajemen-karyawan', 'account_notice_error', $actor))
+		{
+			$this->write_loan_sheet_sync_report(
+				'sync_loan_sheet_to_web',
+				'blocked',
+				'Sync dibatalkan karena backup local belum aktif.',
+				array('actor' => $actor)
+			);
+			return;
+		}
+
+		$lock_result = $this->collab_try_acquire_sync_lock($actor, 'sync_sheet_loan_to_web');
+		if (!isset($lock_result['success']) || $lock_result['success'] !== TRUE)
+		{
+			$lock_wait = isset($lock_result['remaining_seconds']) ? (int) $lock_result['remaining_seconds'] : 0;
+			$lock_owner = isset($lock_result['owner']) ? trim((string) $lock_result['owner']) : 'admin lain';
+			$lock_message = 'Sync lock sedang aktif oleh '.$lock_owner.'. Tunggu '.max(1, $lock_wait).' detik lalu coba lagi.';
+			$this->session->set_flashdata(
+				'account_notice_error',
+				$lock_message
+			);
+			$this->write_loan_sheet_sync_report(
+				'sync_loan_sheet_to_web',
+				'blocked',
+				$lock_message,
+				array('actor' => $actor, 'lock_owner' => $lock_owner, 'lock_wait_seconds' => max(1, $lock_wait))
+			);
+			redirect('home#manajemen-karyawan');
+			return;
+		}
+
+		$lock_token = isset($lock_result['token']) ? trim((string) $lock_result['token']) : '';
+		$this->sync_local_backup_consume($actor);
+		try
+		{
+			$sheet_sync_factory = $this->build_loan_sheet_sync_instance();
+			if (!isset($sheet_sync_factory['success']) || $sheet_sync_factory['success'] !== TRUE)
+			{
+				$message = isset($sheet_sync_factory['message']) && trim((string) $sheet_sync_factory['message']) !== ''
+					? (string) $sheet_sync_factory['message']
+					: 'Konfigurasi sync sheet kasbon belum lengkap.';
+				$this->session->set_flashdata('account_notice_error', $message);
+				$this->write_loan_sheet_sync_report(
+					'sync_loan_sheet_to_web',
+					'error',
+					$message,
+					array('actor' => $actor)
+				);
+				redirect('home#manajemen-karyawan');
+				return;
+			}
+
+			$loan_sheet_sync = isset($sheet_sync_factory['sync']) && is_object($sheet_sync_factory['sync'])
+				? $sheet_sync_factory['sync']
+				: NULL;
+			if (!$loan_sheet_sync || !method_exists($loan_sheet_sync, 'read_loans_from_sheet'))
+			{
+				$message = 'Library sync kasbon belum mendukung fitur pinjaman -> web.';
+				$this->session->set_flashdata('account_notice_error', $message);
+				$this->write_loan_sheet_sync_report(
+					'sync_loan_sheet_to_web',
+					'error',
+					$message,
+					array('actor' => $actor)
+				);
+				redirect('home#manajemen-karyawan');
+				return;
+			}
+
+			$sheet_result = $loan_sheet_sync->read_loans_from_sheet(array());
+			if (!(isset($sheet_result['success']) && $sheet_result['success'] === TRUE))
+			{
+				$message = isset($sheet_result['message']) && trim((string) $sheet_result['message']) !== ''
+					? (string) $sheet_result['message']
+					: 'Baca data pinjaman dari sheet kasbon gagal.';
+				$this->session->set_flashdata('account_notice_error', $message);
+				$this->write_loan_sheet_sync_report(
+					'sync_loan_sheet_to_web',
+					'error',
+					$message,
+					array('actor' => $actor)
+				);
+				redirect('home#manajemen-karyawan');
+				return;
+			}
+
+			$sheet_rows = isset($sheet_result['rows']) && is_array($sheet_result['rows'])
+				? $sheet_result['rows']
+				: array();
+			usort($sheet_rows, function ($left, $right) {
+				$left_row = isset($left['row_number']) ? (int) $left['row_number'] : 0;
+				$right_row = isset($right['row_number']) ? (int) $right['row_number'] : 0;
+				return $left_row - $right_row;
+			});
+
+			$profiles = $this->employee_profile_book(TRUE);
+			$scope_lookup = $this->scoped_employee_lookup();
+			$alias_meta = $this->build_loan_sync_alias_meta($profiles, $scope_lookup);
+			$employee_lookup = isset($alias_meta['employee_lookup']) && is_array($alias_meta['employee_lookup'])
+				? $alias_meta['employee_lookup']
+				: array();
+			$employee_alias_lookup = isset($alias_meta['employee_alias_lookup']) && is_array($alias_meta['employee_alias_lookup'])
+				? $alias_meta['employee_alias_lookup']
+				: array();
+
+			$loan_records = $this->load_loan_requests();
+			$existing_signature_lookup = $this->build_loan_sync_signature_lookup($loan_records);
+			$has_prior_loan_by_user = array();
+			for ($i = 0; $i < count($loan_records); $i += 1)
+			{
+				$username_key = $this->normalize_username_key(isset($loan_records[$i]['username']) ? (string) $loan_records[$i]['username'] : '');
+				if ($username_key === '')
+				{
+					continue;
+				}
+
+				/*
+				 * "Sudah melakukan pinjaman" mengikuti status diterima.
+				 * Status kosong dianggap legacy yang sudah terlaksana.
+				 */
+				$status_text = isset($loan_records[$i]['status']) ? trim((string) $loan_records[$i]['status']) : '';
+				if ($status_text !== '' && !$this->is_loan_request_status_accepted($status_text))
+				{
+					continue;
+				}
+
+				$has_prior_loan_by_user[$username_key] = TRUE;
+			}
+
+			$imported_count = 0;
+			$skipped_count = 0;
+			$new_signature_lookup = array();
+			for ($i = 0; $i < count($sheet_rows); $i += 1)
+			{
+				$row = isset($sheet_rows[$i]) && is_array($sheet_rows[$i]) ? $sheet_rows[$i] : array();
+				$name_raw = isset($row['name']) ? (string) $row['name'] : '';
+				$username_key = $this->resolve_admin_metric_employee_username_key($name_raw, $employee_lookup, $employee_alias_lookup);
+				if ($username_key === '')
+				{
+					$skipped_count += 1;
+					continue;
+				}
+				if (!isset($scope_lookup[$username_key]))
+				{
+					$skipped_count += 1;
+					continue;
+				}
+
+				$date_iso = isset($row['date_iso']) ? trim((string) $row['date_iso']) : '';
+				if (!$this->is_valid_date_format($date_iso))
+				{
+					$date_iso = $this->parse_dmy_to_iso(isset($row['date_text']) ? (string) $row['date_text'] : '');
+				}
+				if (!$this->is_valid_date_format($date_iso))
+				{
+					$date_iso = date('Y-m-d');
+				}
+
+				$amount = isset($row['amount']) ? $this->parse_money_to_int($row['amount']) : 0;
+				if ($amount <= 0)
+				{
+					$skipped_count += 1;
+					continue;
+				}
+
+				$purpose = $this->normalize_loan_reason_text(isset($row['purpose']) ? (string) $row['purpose'] : '');
+				if ($purpose === '')
+				{
+					$purpose = 'KEPERLUAN PINJAMAN';
+				}
+
+				$signature = $this->build_loan_sync_signature($username_key, $date_iso, $amount, $purpose);
+				if ($signature === '' || isset($existing_signature_lookup[$signature]) || isset($new_signature_lookup[$signature]))
+				{
+					$skipped_count += 1;
+					continue;
+				}
+
+				$is_first_loan = !isset($has_prior_loan_by_user[$username_key]);
+				$loan_summary = $this->calculate_spaylater_loan_for_sync_import($amount, 1, $is_first_loan);
+				$loan_id_seed = $username_key.'|'.$date_iso.'|'.$amount.'|'.(isset($row['row_number']) ? (int) $row['row_number'] : $i).'|'.microtime(TRUE);
+				$loan_id = 'LOAN-SHEET-'.strtoupper(substr(sha1($loan_id_seed), 0, 12));
+				$phone = $this->get_employee_phone($username_key);
+
+				$loan_records[] = array(
+					'id' => $loan_id,
+					'username' => $username_key,
+					'phone' => $phone,
+					'request_date' => $date_iso,
+					'request_date_label' => date('d-m-Y', strtotime($date_iso.' 00:00:00')),
+					'amount' => $amount,
+					'amount_label' => 'Rp '.number_format($amount, 0, ',', '.'),
+					'tenor_months' => isset($loan_summary['tenor_months']) ? (int) $loan_summary['tenor_months'] : 1,
+					'is_first_loan' => $is_first_loan ? TRUE : FALSE,
+					'monthly_rate_percent' => isset($loan_summary['monthly_rate_percent']) ? (float) $loan_summary['monthly_rate_percent'] : ($is_first_loan ? 0.0 : 2.95),
+					'monthly_interest_amount' => isset($loan_summary['monthly_interest_amount']) ? (int) $loan_summary['monthly_interest_amount'] : 0,
+					'total_interest_amount' => isset($loan_summary['total_interest_amount']) ? (int) $loan_summary['total_interest_amount'] : 0,
+					'interest_rate_percent' => isset($loan_summary['monthly_rate_percent']) ? (float) $loan_summary['monthly_rate_percent'] : ($is_first_loan ? 0.0 : 2.95),
+					'interest_amount' => isset($loan_summary['total_interest_amount']) ? (int) $loan_summary['total_interest_amount'] : 0,
+					'total_payment' => isset($loan_summary['total_payment']) ? (int) $loan_summary['total_payment'] : $amount,
+					'monthly_installment_estimate' => isset($loan_summary['monthly_installment_estimate']) ? (int) $loan_summary['monthly_installment_estimate'] : $amount,
+					'installments' => isset($loan_summary['installments']) && is_array($loan_summary['installments']) ? $loan_summary['installments'] : array(
+						array('month' => 1, 'amount' => $amount)
+					),
+					'reason' => $purpose,
+					'transparency' => $this->build_loan_detail_text($loan_summary),
+					'status' => 'Diterima',
+					'status_note' => 'Sync dari sheet kasbon',
+					'sheet_kasbon_synced_at' => date('Y-m-d H:i:s'),
+					'sheet_kasbon_row' => isset($row['row_number']) ? (int) $row['row_number'] : 0,
+					'sheet_kasbon_signature' => $signature,
+					'created_at' => $date_iso.' 12:00:00',
+					'updated_at' => date('Y-m-d H:i:s')
+				);
+
+				$new_signature_lookup[$signature] = TRUE;
+				$has_prior_loan_by_user[$username_key] = TRUE;
+				$imported_count += 1;
+			}
+
+			if ($imported_count > 0)
+			{
+				$loan_records = $this->sort_loan_requests_for_storage($loan_records);
+				$this->save_loan_requests($loan_records);
+			}
+
+			$this->session->set_flashdata(
+				'account_notice_success',
+				'Sync Data Pinjaman ke Web selesai. Data baru: '.$imported_count.', data dilewati: '.$skipped_count.'.'
+			);
+			if ($imported_count <= 0)
+			{
+				$this->session->set_flashdata('account_notice_error', 'Tidak ada data pinjaman baru dari sheet yang bisa ditambahkan ke web.');
+			}
+			$this->write_loan_sheet_sync_report(
+				'sync_loan_sheet_to_web',
+				$imported_count > 0 ? 'success' : 'warning',
+				$imported_count > 0
+					? 'Sync Data Pinjaman ke Web berhasil menambah '.$imported_count.' data.'
+					: 'Sync Data Pinjaman ke Web selesai tanpa data baru.',
+				array(
+					'actor' => $actor,
+					'spreadsheet_id' => isset($sheet_sync_factory['spreadsheet_id']) ? (string) $sheet_sync_factory['spreadsheet_id'] : '',
+					'sheet_gid' => isset($sheet_sync_factory['sheet_gid']) ? (int) $sheet_sync_factory['sheet_gid'] : 0,
+					'sheet' => isset($sheet_sync_factory['sheet_title']) ? (string) $sheet_sync_factory['sheet_title'] : 'KASBON',
+					'imported_count' => $imported_count,
+					'skipped_count' => $skipped_count
+				)
+			);
+
+			$this->log_activity_event(
+				'sync_loan_sheet_to_web',
+				'spreadsheet_data',
+				'',
+				'',
+				'Menjalankan Sync Data Pinjaman ke Web.',
+				array(
+					'sheet' => isset($sheet_sync_factory['sheet_title']) ? (string) $sheet_sync_factory['sheet_title'] : 'KASBON',
+					'new_value' => 'imported='.$imported_count.', skipped='.$skipped_count
+				)
+			);
+		}
+		catch (Throwable $exception)
+		{
+			$message = 'Sync Data Pinjaman ke Web gagal karena error server: '.$exception->getMessage();
+			$this->session->set_flashdata('account_notice_error', $message);
+			$this->write_loan_sheet_sync_report(
+				'sync_loan_sheet_to_web',
+				'error',
+				$message,
+				array(
+					'actor' => $actor,
+					'exception_class' => get_class($exception)
+				)
+			);
+		}
+		finally
+		{
+			$this->collab_release_sync_lock($lock_token, $actor);
+		}
+
+		redirect('home#manajemen-karyawan');
+	}
+
 	public function prepare_sync_local_backup_now()
 	{
 		if ($this->session->userdata('absen_logged_in') !== TRUE)
@@ -1522,6 +2188,108 @@ class Home extends CI_Controller {
 		return FALSE;
 	}
 
+	private function loan_sheet_sync_report_file_path()
+	{
+		return APPPATH.'cache/loan_sheet_sync_last_report.json';
+	}
+
+	private function read_loan_sheet_sync_report()
+	{
+		$file_path = $this->loan_sheet_sync_report_file_path();
+		if (!is_file($file_path))
+		{
+			return array();
+		}
+
+		$content = @file_get_contents($file_path);
+		if ($content === FALSE || trim($content) === '')
+		{
+			return array();
+		}
+		if (substr($content, 0, 3) === "\xEF\xBB\xBF")
+		{
+			$content = substr($content, 3);
+		}
+		$data = json_decode($content, TRUE);
+		return is_array($data) ? $data : array();
+	}
+
+	private function write_loan_sheet_sync_report($action, $status, $message, $meta = array())
+	{
+		$action_key = strtolower(trim((string) $action));
+		$status_key = strtolower(trim((string) $status));
+		if ($status_key === '')
+		{
+			$status_key = 'info';
+		}
+		$message_text = trim((string) $message);
+		$meta_data = is_array($meta) ? $meta : array();
+
+		$report = array(
+			'action' => $action_key,
+			'status' => $status_key,
+			'message' => $message_text,
+			'meta' => $meta_data,
+			'created_at' => date('Y-m-d H:i:s')
+		);
+
+		$file_path = $this->loan_sheet_sync_report_file_path();
+		$directory = dirname($file_path);
+		if (!is_dir($directory))
+		{
+			@mkdir($directory, 0755, TRUE);
+		}
+		@file_put_contents($file_path, json_encode($report, JSON_PRETTY_PRINT));
+	}
+
+	private function summarize_loan_sync_skipped_reasons($items)
+	{
+		$rows = is_array($items) ? array_values($items) : array();
+		$counts = array();
+		for ($i = 0; $i < count($rows); $i += 1)
+		{
+			$row = isset($rows[$i]) && is_array($rows[$i]) ? $rows[$i] : array();
+			$reason = isset($row['reason']) ? strtolower(trim((string) $row['reason'])) : '';
+			if ($reason === '')
+			{
+				$reason = 'lainnya';
+			}
+			if (!isset($counts[$reason]))
+			{
+				$counts[$reason] = 0;
+			}
+			$counts[$reason] += 1;
+		}
+		return $counts;
+	}
+
+	private function format_loan_sync_skip_reason_summary($reason_counts)
+	{
+		$counts = is_array($reason_counts) ? $reason_counts : array();
+		if (empty($counts))
+		{
+			return '-';
+		}
+
+		$labels = array(
+			'duplikat_signature' => 'duplikat',
+			'duplikat_tanggal_nama' => 'duplikat tgl+nama',
+			'nama_tidak_ditemukan' => 'nama tidak ditemukan',
+			'nominal_tidak_valid' => 'nominal tidak valid',
+			'keperluan_kosong' => 'keperluan kosong',
+			'lainnya' => 'lainnya'
+		);
+
+		$parts = array();
+		foreach ($counts as $reason => $count)
+		{
+			$key = strtolower(trim((string) $reason));
+			$label = isset($labels[$key]) ? (string) $labels[$key] : str_replace('_', ' ', $key);
+			$parts[] = $label.'='.(int) $count;
+		}
+		return implode(', ', $parts);
+	}
+
 	private function sync_local_backup_root_directory()
 	{
 		return APPPATH.'cache/local_sync_backups';
@@ -1664,6 +2432,502 @@ class Home extends CI_Controller {
 			'missing_files' => $missing_files,
 			'failed_files' => $failed_files
 		);
+	}
+
+	private function build_loan_sheet_sync_instance()
+	{
+		$this->load->config('absen_sheet_sync', TRUE);
+		$config = $this->config->item('absen_sheet_sync', 'absen_sheet_sync');
+		if (!is_array($config))
+		{
+			$config = array();
+		}
+
+		$loan_enabled = !isset($config['loan_sheet_enabled']) || $config['loan_sheet_enabled'] === TRUE;
+		if (!$loan_enabled)
+		{
+			return array(
+				'success' => FALSE,
+				'message' => 'Sync sheet pinjaman dinonaktifkan di konfigurasi.'
+			);
+		}
+
+		$spreadsheet_id = isset($config['loan_spreadsheet_id']) ? trim((string) $config['loan_spreadsheet_id']) : '';
+		if ($spreadsheet_id === '')
+		{
+			return array(
+				'success' => FALSE,
+				'message' => 'Spreadsheet ID kasbon belum diatur.'
+			);
+		}
+		$sheet_title = isset($config['loan_sheet_title']) ? trim((string) $config['loan_sheet_title']) : 'KASBON';
+		if ($sheet_title === '')
+		{
+			$sheet_title = 'KASBON';
+		}
+		$sheet_gid = isset($config['loan_sheet_gid']) ? (int) $config['loan_sheet_gid'] : 0;
+		$credential_path = isset($config['loan_credential_json_path']) ? trim((string) $config['loan_credential_json_path']) : '';
+		$credential_raw = isset($config['loan_credential_json_raw']) ? trim((string) $config['loan_credential_json_raw']) : '';
+		if ($credential_path === '' && $credential_raw === '')
+		{
+			$credential_path = isset($config['credential_json_path']) ? trim((string) $config['credential_json_path']) : '';
+			$credential_raw = isset($config['credential_json_raw']) ? trim((string) $config['credential_json_raw']) : '';
+		}
+
+		$loan_config = $config;
+		$loan_config['enabled'] = TRUE;
+		$loan_config['spreadsheet_id'] = $spreadsheet_id;
+		$loan_config['sheet_gid'] = $sheet_gid;
+		$loan_config['sheet_title'] = $sheet_title;
+		$loan_config['credential_json_path'] = $credential_path;
+		$loan_config['credential_json_raw'] = $credential_raw;
+		$loan_config['attendance_sync_enabled'] = FALSE;
+		$loan_config['attendance_push_enabled'] = FALSE;
+		$loan_config['writeback_on_web_change'] = FALSE;
+
+		$sync_library = new Absen_sheet_sync($loan_config);
+		return array(
+			'success' => TRUE,
+			'spreadsheet_id' => $spreadsheet_id,
+			'sheet_gid' => $sheet_gid,
+			'sheet_title' => $sheet_title,
+			'sync' => $sync_library
+		);
+	}
+
+	private function build_loan_sheet_name_whitelist($profiles, $scope_lookup = array())
+	{
+		$rows = is_array($profiles) ? $profiles : array();
+		$scope = is_array($scope_lookup) ? $scope_lookup : array();
+		$names = array();
+		$lookup = array();
+		foreach ($rows as $username_key => $profile)
+		{
+			$username = $this->normalize_username_key($username_key);
+			if ($username === '')
+			{
+				continue;
+			}
+			if (!empty($scope) && !isset($scope[$username]))
+			{
+				continue;
+			}
+
+			$display_name = isset($profile['display_name']) && trim((string) $profile['display_name']) !== ''
+				? trim((string) $profile['display_name'])
+				: $username;
+			$display_name = preg_replace('/\s+/', ' ', $display_name);
+			if ($display_name === NULL)
+			{
+				$display_name = $username;
+			}
+			$display_name = trim((string) $display_name);
+			if ($display_name === '')
+			{
+				continue;
+			}
+
+			$canonical = function_exists('mb_strtoupper')
+				? (string) mb_strtoupper($display_name, 'UTF-8')
+				: strtoupper($display_name);
+			$key = strtolower(trim($canonical));
+			if ($key === '' || isset($lookup[$key]))
+			{
+				continue;
+			}
+			$lookup[$key] = TRUE;
+			$names[] = $canonical;
+		}
+
+		sort($names);
+		return $names;
+	}
+
+	private function build_loan_sync_alias_meta($profiles, $scope_lookup = array())
+	{
+		$rows = is_array($profiles) ? $profiles : array();
+		$scope = is_array($scope_lookup) ? $scope_lookup : array();
+		$employee_lookup = array();
+		$employee_alias_lookup = array();
+		$employee_id_book = $this->employee_id_book();
+
+		$set_alias = function ($alias_key, $username_key) use (&$employee_alias_lookup) {
+			$key = strtolower(trim((string) $alias_key));
+			$username = strtolower(trim((string) $username_key));
+			if ($key === '' || $username === '')
+			{
+				return;
+			}
+			if (!isset($employee_alias_lookup[$key]))
+			{
+				$employee_alias_lookup[$key] = $username;
+				return;
+			}
+			if ($employee_alias_lookup[$key] !== $username)
+			{
+				$employee_alias_lookup[$key] = '';
+			}
+		};
+
+		foreach ($rows as $username_key => $profile)
+		{
+			$username = $this->normalize_username_key($username_key);
+			if ($username === '')
+			{
+				continue;
+			}
+			if (!empty($scope) && !isset($scope[$username]))
+			{
+				continue;
+			}
+			$employee_lookup[$username] = TRUE;
+
+			$set_alias($username, $username);
+			$set_alias($this->normalize_username_key($username), $username);
+
+			$display_name = isset($profile['display_name']) && trim((string) $profile['display_name']) !== ''
+				? trim((string) $profile['display_name'])
+				: $username;
+			$display_name_lower = strtolower($display_name);
+			$set_alias($display_name_lower, $username);
+			$display_name_normalized = $this->normalize_username_key($display_name);
+			if ($display_name_normalized !== '')
+			{
+				$set_alias($display_name_normalized, $username);
+				$set_alias(str_replace('_', '', $display_name_normalized), $username);
+			}
+			$display_parts = preg_split('/\s+/', trim($display_name_lower));
+			if (is_array($display_parts) && isset($display_parts[0]) && trim((string) $display_parts[0]) !== '')
+			{
+				$set_alias((string) $display_parts[0], $username);
+			}
+
+			$employee_id = $this->resolve_employee_id_from_book($username, $employee_id_book);
+			if ($employee_id !== '-' && trim((string) $employee_id) !== '')
+			{
+				$set_alias((string) $employee_id, $username);
+			}
+		}
+
+		return array(
+			'employee_lookup' => $employee_lookup,
+			'employee_alias_lookup' => $employee_alias_lookup
+		);
+	}
+
+	private function parse_money_to_int($value)
+	{
+		$digits = preg_replace('/\D+/', '', (string) $value);
+		if ($digits === '' || $digits === NULL)
+		{
+			return 0;
+		}
+		return (int) $digits;
+	}
+
+	private function is_loan_request_status_accepted($status)
+	{
+		$status_key = strtolower(trim((string) $status));
+		if ($status_key === '')
+		{
+			return FALSE;
+		}
+		if (in_array($status_key, array('diterima', 'disetujui', 'approved', 'approve'), TRUE))
+		{
+			return TRUE;
+		}
+		return strpos($status_key, 'terima') !== FALSE;
+	}
+
+	private function normalize_loan_reason_text($value)
+	{
+		$text = trim((string) $value);
+		if ($text === '')
+		{
+			return '';
+		}
+		$text = preg_replace('/\s+/', ' ', $text);
+		if ($text === NULL || trim((string) $text) === '')
+		{
+			return '';
+		}
+		$text = trim((string) $text);
+		return function_exists('mb_strtoupper')
+			? (string) mb_strtoupper($text, 'UTF-8')
+			: strtoupper($text);
+	}
+
+	private function parse_dmy_to_iso($value)
+	{
+		$text = trim((string) $value);
+		if ($text === '')
+		{
+			return '';
+		}
+		if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $text) === 1)
+		{
+			return $this->is_valid_date_format($text) ? $text : '';
+		}
+
+		$matches = array();
+		if (preg_match('/^(\d{1,2})[\/\.-](\d{1,2})[\/\.-](\d{2,4})$/', $text, $matches) !== 1)
+		{
+			return '';
+		}
+
+		$day = (int) $matches[1];
+		$month = (int) $matches[2];
+		$year = (int) $matches[3];
+		if ($year < 100)
+		{
+			$year += 2000;
+		}
+		$candidate = sprintf('%04d-%02d-%02d', $year, $month, $day);
+		return $this->is_valid_date_format($candidate) ? $candidate : '';
+	}
+
+	private function resolve_loan_record_date_iso($row)
+	{
+		$data = is_array($row) ? $row : array();
+		$request_date = isset($data['request_date']) ? trim((string) $data['request_date']) : '';
+		if ($this->is_valid_date_format($request_date))
+		{
+			return $request_date;
+		}
+
+		$request_date_label = isset($data['request_date_label']) ? trim((string) $data['request_date_label']) : '';
+		$parsed_label = $this->parse_dmy_to_iso($request_date_label);
+		if ($parsed_label !== '')
+		{
+			return $parsed_label;
+		}
+
+		$sheet_date = isset($data['sheet_kasbon_date']) ? trim((string) $data['sheet_kasbon_date']) : '';
+		if ($this->is_valid_date_format($sheet_date))
+		{
+			return $sheet_date;
+		}
+
+		$created_at = isset($data['created_at']) ? trim((string) $data['created_at']) : '';
+		$created_ts = $created_at !== '' ? strtotime($created_at) : FALSE;
+		if ($created_ts !== FALSE)
+		{
+			return date('Y-m-d', $created_ts);
+		}
+
+		return '';
+	}
+
+	private function resolve_loan_sheet_kasbon_amount($row)
+	{
+		$data = is_array($row) ? $row : array();
+
+		$total_payment = $this->parse_money_to_int(isset($data['total_payment']) ? $data['total_payment'] : 0);
+		if ($total_payment > 0)
+		{
+			return $total_payment;
+		}
+
+		$principal = $this->parse_money_to_int(isset($data['amount']) ? $data['amount'] : 0);
+		if ($principal <= 0)
+		{
+			return 0;
+		}
+
+		$tenor_months = isset($data['tenor_months']) ? (int) $data['tenor_months'] : 1;
+		if ($tenor_months < 1)
+		{
+			$tenor_months = 1;
+		}
+		if ($tenor_months > 12)
+		{
+			$tenor_months = 12;
+		}
+		$is_first_loan = isset($data['is_first_loan']) ? ((bool) $data['is_first_loan']) : FALSE;
+
+		$loan_summary = $this->calculate_spaylater_loan_for_sync_import($principal, $tenor_months, $is_first_loan);
+		$computed_total_payment = isset($loan_summary['total_payment']) ? (int) $loan_summary['total_payment'] : 0;
+		if ($computed_total_payment > 0)
+		{
+			return $computed_total_payment;
+		}
+
+		return $principal;
+	}
+
+	private function is_loan_record_marked_sheet_synced($row)
+	{
+		$data = is_array($row) ? $row : array();
+		$synced_at = isset($data['sheet_kasbon_synced_at']) ? trim((string) $data['sheet_kasbon_synced_at']) : '';
+		if ($synced_at !== '')
+		{
+			return TRUE;
+		}
+
+		$sheet_row = isset($data['sheet_kasbon_row']) ? (int) $data['sheet_kasbon_row'] : 0;
+		if ($sheet_row > 0)
+		{
+			return TRUE;
+		}
+
+		$signature = isset($data['sheet_kasbon_signature']) ? trim((string) $data['sheet_kasbon_signature']) : '';
+		return $signature !== '';
+	}
+
+	private function is_loan_record_originated_from_sheet($row)
+	{
+		$data = is_array($row) ? $row : array();
+		$loan_id = isset($data['id']) ? strtoupper(trim((string) $data['id'])) : '';
+		if ($loan_id !== '' && strpos($loan_id, 'LOAN-SHEET-') === 0)
+		{
+			return TRUE;
+		}
+
+		$status_note = strtolower(trim((string) (isset($data['status_note']) ? $data['status_note'] : '')));
+		if ($status_note !== '' && strpos($status_note, 'sync dari sheet kasbon') !== FALSE)
+		{
+			return TRUE;
+		}
+
+		$source = strtolower(trim((string) (isset($data['source']) ? $data['source'] : '')));
+		if ($source === 'sheet_kasbon' || $source === 'sheet')
+		{
+			return TRUE;
+		}
+
+		return FALSE;
+	}
+
+	private function build_loan_sync_signature($username, $date_iso, $amount, $reason)
+	{
+		$username_key = $this->normalize_username_key($username);
+		if ($username_key === '')
+		{
+			return '';
+		}
+		$date_key = trim((string) $date_iso);
+		if (!$this->is_valid_date_format($date_key))
+		{
+			$date_key = '';
+		}
+		$amount_int = $this->parse_money_to_int($amount);
+		if ($amount_int <= 0)
+		{
+			return '';
+		}
+		$reason_key = $this->normalize_loan_reason_text($reason);
+		return sha1($username_key.'|'.$date_key.'|'.$amount_int.'|'.$reason_key);
+	}
+
+	private function build_loan_sync_signature_lookup($loan_records)
+	{
+		$rows = is_array($loan_records) ? array_values($loan_records) : array();
+		$lookup = array();
+		for ($i = 0; $i < count($rows); $i += 1)
+		{
+			$row = isset($rows[$i]) && is_array($rows[$i]) ? $rows[$i] : array();
+			$username_key = $this->normalize_username_key(isset($row['username']) ? (string) $row['username'] : '');
+			if ($username_key === '')
+			{
+				continue;
+			}
+			$date_iso = $this->resolve_loan_record_date_iso($row);
+			$amount = $this->resolve_loan_sheet_kasbon_amount($row);
+			$reason = isset($row['reason']) ? (string) $row['reason'] : '';
+			if (trim($reason) === '')
+			{
+				$reason = isset($row['source_sheet_purpose']) ? (string) $row['source_sheet_purpose'] : '';
+			}
+			$signature = $this->build_loan_sync_signature($username_key, $date_iso, $amount, $reason);
+			if ($signature !== '')
+			{
+				$lookup[$signature] = TRUE;
+			}
+		}
+
+		return $lookup;
+	}
+
+	private function calculate_spaylater_loan_for_sync_import($principal, $tenor_months, $is_first_loan = FALSE)
+	{
+		$principal_value = max(0, (int) $principal);
+		$tenor_value = (int) $tenor_months;
+		if ($tenor_value < 1)
+		{
+			$tenor_value = 1;
+		}
+		if ($tenor_value > 12)
+		{
+			$tenor_value = 12;
+		}
+
+		$strict_result = $this->calculate_spaylater_loan($principal_value, $tenor_value, $is_first_loan ? TRUE : FALSE);
+		if (isset($strict_result['success']) && $strict_result['success'] === TRUE && isset($strict_result['data']) && is_array($strict_result['data']))
+		{
+			return $strict_result['data'];
+		}
+
+		$monthly_rate_percent = $is_first_loan ? 0.0 : 2.95;
+		$monthly_interest_amount = (int) round($principal_value * $monthly_rate_percent / 100);
+		$total_interest_amount = (int) ($monthly_interest_amount * $tenor_value);
+		$total_payment = (int) ($principal_value + $total_interest_amount);
+		$monthly_installment_estimate = $tenor_value > 0 ? (int) round($total_payment / $tenor_value) : $total_payment;
+
+		$base_installment = $tenor_value > 0 ? (int) floor($total_payment / $tenor_value) : $total_payment;
+		$remainder = $tenor_value > 0 ? (int) ($total_payment - ($base_installment * $tenor_value)) : 0;
+		$installments = array();
+		for ($month = 1; $month <= $tenor_value; $month += 1)
+		{
+			$amount = $base_installment;
+			if ($month === $tenor_value && $remainder > 0)
+			{
+				$amount += $remainder;
+			}
+			$installments[] = array(
+				'month' => $month,
+				'amount' => (int) $amount
+			);
+		}
+
+		return array(
+			'principal' => $principal_value,
+			'tenor_months' => $tenor_value,
+			'is_first_loan' => $is_first_loan ? TRUE : FALSE,
+			'monthly_rate_percent' => (float) $monthly_rate_percent,
+			'monthly_interest_amount' => (int) $monthly_interest_amount,
+			'total_interest_amount' => (int) $total_interest_amount,
+			'interest_rate_percent' => (float) $monthly_rate_percent,
+			'interest_amount' => (int) $total_interest_amount,
+			'total_payment' => (int) $total_payment,
+			'monthly_installment_estimate' => (int) $monthly_installment_estimate,
+			'installments' => $installments
+		);
+	}
+
+	private function sort_loan_requests_for_storage($rows)
+	{
+		$list = array_values(is_array($rows) ? $rows : array());
+		usort($list, function ($left, $right) {
+			$left_date = $this->resolve_loan_record_date_iso($left);
+			$right_date = $this->resolve_loan_record_date_iso($right);
+			if ($left_date !== $right_date)
+			{
+				return strcmp($left_date, $right_date);
+			}
+
+			$left_created = isset($left['created_at']) ? trim((string) $left['created_at']) : '';
+			$right_created = isset($right['created_at']) ? trim((string) $right['created_at']) : '';
+			if ($left_created !== $right_created)
+			{
+				return strcmp($left_created, $right_created);
+			}
+
+			$left_id = isset($left['id']) ? (string) $left['id'] : '';
+			$right_id = isset($right['id']) ? (string) $right['id'] : '';
+			return strcmp($left_id, $right_id);
+		});
+
+		return $list;
 	}
 
 	public function reset_total_alpha_now()
@@ -8547,10 +9811,14 @@ class Home extends CI_Controller {
 				}
 				else
 				{
-					$late_duration = isset($records[$i]['check_in_late']) ? trim((string) $records[$i]['check_in_late']) : '';
-					if ($late_duration === '' && ($shift_time !== '' || $shift_name !== ''))
+					$late_duration = '';
+					if ($shift_time !== '' || $shift_name !== '')
 					{
 						$late_duration = $this->calculate_late_duration($check_in_time, $shift_time, $shift_name);
+					}
+					if ($late_duration === '')
+					{
+						$late_duration = isset($records[$i]['check_in_late']) ? trim((string) $records[$i]['check_in_late']) : '';
 					}
 					if ($late_duration === '')
 					{
@@ -8978,15 +10246,20 @@ class Home extends CI_Controller {
 				$late_category = '';
 				$shift_time = isset($row['shift_time']) ? trim((string) $row['shift_time']) : '';
 				$shift_name = isset($row['shift_name']) ? trim((string) $row['shift_name']) : '';
-				$stored_late = isset($row['check_in_late']) ? trim((string) $row['check_in_late']) : '';
-				if ($stored_late !== '')
+				$late_duration = '';
+				if ($shift_time !== '' || $shift_name !== '')
 				{
-					$late_seconds = $this->duration_to_seconds($stored_late);
+					$late_duration = $this->calculate_late_duration($check_in_time, $shift_time, $shift_name);
 				}
-				elseif ($shift_time !== '' || $shift_name !== '')
+				if ($late_duration === '')
 				{
-					$late_seconds = $this->duration_to_seconds($this->calculate_late_duration($check_in_time, $shift_time, $shift_name));
+					$late_duration = isset($row['check_in_late']) ? trim((string) $row['check_in_late']) : '';
 				}
+				if ($late_duration === '')
+				{
+					$late_duration = '00:00:00';
+				}
+				$late_seconds = $this->duration_to_seconds($late_duration);
 
 				if ($late_seconds > 0 && $late_seconds <= 1800)
 				{
@@ -10538,16 +11811,26 @@ class Home extends CI_Controller {
 			redirect('home');
 			return;
 		}
+		$return_page = (int) $this->input->post('return_page', TRUE);
+		if ($return_page <= 0)
+		{
+			$return_page = (int) $this->input->get('page', TRUE);
+		}
+		if ($return_page <= 0)
+		{
+			$return_page = 1;
+		}
+		$loan_redirect_url = 'home/loan_requests'.($return_page > 1 ? '?page='.$return_page : '');
 		if (!$this->can_process_loan_requests_feature())
 		{
 			$this->session->set_flashdata('loan_notice_error', 'Akun login kamu belum punya izin untuk proses pengajuan pinjaman.');
-			redirect('home/loan_requests');
+			redirect($loan_redirect_url);
 			return;
 		}
 
 		if ($this->input->method(TRUE) !== 'POST')
 		{
-			redirect('home/loan_requests');
+			redirect($loan_redirect_url);
 			return;
 		}
 
@@ -10556,7 +11839,7 @@ class Home extends CI_Controller {
 		if ($request_id === '' || ($next_status !== 'diterima' && $next_status !== 'ditolak'))
 		{
 			$this->session->set_flashdata('loan_notice_error', 'Aksi status pengajuan pinjaman tidak valid.');
-			redirect('home/loan_requests');
+			redirect($loan_redirect_url);
 			return;
 		}
 
@@ -10574,7 +11857,7 @@ class Home extends CI_Controller {
 		if ($target_index < 0)
 		{
 			$this->session->set_flashdata('loan_notice_error', 'Data pengajuan pinjaman tidak ditemukan.');
-			redirect('home/loan_requests');
+			redirect($loan_redirect_url);
 			return;
 		}
 
@@ -10583,7 +11866,7 @@ class Home extends CI_Controller {
 		if (!$this->is_username_in_actor_scope($request_username))
 		{
 			$this->session->set_flashdata('loan_notice_error', 'Akses pengajuan ditolak karena beda cabang.');
-			redirect('home/loan_requests');
+			redirect($loan_redirect_url);
 			return;
 		}
 		$request_row['status'] = $next_status === 'diterima' ? 'Diterima' : 'Ditolak';
@@ -10635,7 +11918,7 @@ class Home extends CI_Controller {
 			);
 		}
 
-		redirect('home/loan_requests');
+		redirect($loan_redirect_url);
 	}
 
 	public function delete_leave_request()
@@ -10743,17 +12026,27 @@ class Home extends CI_Controller {
 			redirect('home');
 			return;
 		}
+		$return_page = (int) $this->input->post('return_page', TRUE);
+		if ($return_page <= 0)
+		{
+			$return_page = (int) $this->input->get('page', TRUE);
+		}
+		if ($return_page <= 0)
+		{
+			$return_page = 1;
+		}
+		$loan_redirect_url = 'home/loan_requests'.($return_page > 1 ? '?page='.$return_page : '');
 
 		if ($this->input->method(TRUE) !== 'POST')
 		{
-			redirect('home/loan_requests');
+			redirect($loan_redirect_url);
 			return;
 		}
 
 		if (!$this->can_delete_loan_requests_feature())
 		{
 			$this->session->set_flashdata('loan_notice_error', 'Akun login kamu belum punya izin untuk hapus data pengajuan pinjaman.');
-			redirect('home/loan_requests');
+			redirect($loan_redirect_url);
 			return;
 		}
 
@@ -10761,7 +12054,7 @@ class Home extends CI_Controller {
 		if ($request_id === '')
 		{
 			$this->session->set_flashdata('loan_notice_error', 'Data pinjaman yang ingin dihapus tidak valid.');
-			redirect('home/loan_requests');
+			redirect($loan_redirect_url);
 			return;
 		}
 
@@ -10779,7 +12072,7 @@ class Home extends CI_Controller {
 		if ($target_index < 0)
 		{
 			$this->session->set_flashdata('loan_notice_error', 'Data pengajuan pinjaman tidak ditemukan atau sudah dihapus.');
-			redirect('home/loan_requests');
+			redirect($loan_redirect_url);
 			return;
 		}
 
@@ -10788,7 +12081,7 @@ class Home extends CI_Controller {
 		if (!$this->is_username_in_actor_scope($request_username))
 		{
 			$this->session->set_flashdata('loan_notice_error', 'Akses pengajuan ditolak karena beda cabang.');
-			redirect('home/loan_requests');
+			redirect($loan_redirect_url);
 			return;
 		}
 
@@ -10810,7 +12103,7 @@ class Home extends CI_Controller {
 		);
 
 		$this->session->set_flashdata('loan_notice_success', 'Data pengajuan pinjaman berhasil dihapus.');
-		redirect('home/loan_requests');
+		redirect($loan_redirect_url);
 	}
 
 	public function delete_overtime_record()
@@ -11197,22 +12490,24 @@ class Home extends CI_Controller {
 			}
 
 			$username_key = strtolower(trim((string) $username));
+			$status_text = isset($requests[$i]['status']) ? trim((string) $requests[$i]['status']) : '';
+			$is_realized_loan = $status_text === '' || $this->is_loan_request_status_accepted($status_text);
 			$is_first_for_account = !isset($first_loan_tracker[$username_key]);
 			if (!isset($requests[$i]['is_first_loan']) || (bool) $requests[$i]['is_first_loan'] !== $is_first_for_account)
 			{
 				$requests[$i]['is_first_loan'] = $is_first_for_account;
 				$should_save_requests = TRUE;
 			}
-			$first_loan_tracker[$username_key] = TRUE;
+			if ($is_realized_loan)
+			{
+				$first_loan_tracker[$username_key] = TRUE;
+			}
 
-			$loan_summary_result = $this->calculate_spaylater_loan(
+			$loan_summary = $this->calculate_spaylater_loan_for_sync_import(
 				(int) $requests[$i]['amount'],
 				$tenor_months_value,
 				$is_first_for_account
 			);
-			$loan_summary = isset($loan_summary_result['data']) && is_array($loan_summary_result['data'])
-				? $loan_summary_result['data']
-				: array();
 			$next_monthly_rate_percent = isset($loan_summary['monthly_rate_percent']) ? (float) $loan_summary['monthly_rate_percent'] : ($is_first_for_account ? 0.0 : 2.95);
 			$next_monthly_interest_amount = isset($loan_summary['monthly_interest_amount']) ? (int) $loan_summary['monthly_interest_amount'] : 0;
 			$next_total_interest_amount = isset($loan_summary['total_interest_amount']) ? (int) $loan_summary['total_interest_amount'] : 0;
@@ -11333,9 +12628,113 @@ class Home extends CI_Controller {
 			$visible_requests[] = $requests[$i];
 		}
 
+		$rows_by_date = array();
+		$date_keys = array();
+		$date_label_by_key = array();
+		for ($i = 0; $i < count($visible_requests); $i += 1)
+		{
+			$row = isset($visible_requests[$i]) && is_array($visible_requests[$i]) ? $visible_requests[$i] : array();
+			$date_key = $this->resolve_loan_record_date_iso($row);
+			if (!$this->is_valid_date_format($date_key))
+			{
+				$date_key = '0000-00-00';
+			}
+			if (!isset($rows_by_date[$date_key]))
+			{
+				$rows_by_date[$date_key] = array();
+				$date_keys[] = $date_key;
+			}
+			if (!isset($date_label_by_key[$date_key]))
+			{
+				$date_label = isset($row['request_date_label']) ? trim((string) $row['request_date_label']) : '';
+				if ($date_label === '' && $this->is_valid_date_format($date_key))
+				{
+					$date_label = date('d-m-Y', strtotime($date_key));
+				}
+				if ($date_label === '')
+				{
+					$date_label = '-';
+				}
+				$date_label_by_key[$date_key] = $date_label;
+			}
+			$rows_by_date[$date_key][] = $row;
+		}
+		usort($date_keys, function ($left, $right) {
+			$left_text = (string) $left;
+			$right_text = (string) $right;
+			if ($left_text === $right_text)
+			{
+				return 0;
+			}
+			if ($left_text === '0000-00-00')
+			{
+				return 1;
+			}
+			if ($right_text === '0000-00-00')
+			{
+				return -1;
+			}
+			return strcmp($right_text, $left_text);
+		});
+
+		$page_raw = (int) $this->input->get('page', TRUE);
+		$current_page = $page_raw > 0 ? $page_raw : 1;
+		$total_pages = count($date_keys);
+		if ($total_pages < 1)
+		{
+			$total_pages = 1;
+			$current_page = 1;
+		}
+		if ($current_page > $total_pages)
+		{
+			$current_page = $total_pages;
+		}
+		if ($current_page < 1)
+		{
+			$current_page = 1;
+		}
+
+		$current_date_key = '';
+		$current_date_label = '-';
+		$current_page_requests = array();
+		if (!empty($date_keys))
+		{
+			$current_date_key = isset($date_keys[$current_page - 1]) ? (string) $date_keys[$current_page - 1] : '';
+			$current_page_requests = isset($rows_by_date[$current_date_key]) && is_array($rows_by_date[$current_date_key])
+				? $rows_by_date[$current_date_key]
+				: array();
+			$current_date_label = isset($date_label_by_key[$current_date_key]) ? (string) $date_label_by_key[$current_date_key] : '';
+			if ($current_date_label === '' && $this->is_valid_date_format($current_date_key))
+			{
+				$current_date_label = date('d-m-Y', strtotime($current_date_key));
+			}
+			if ($current_date_label === '')
+			{
+				$current_date_label = '-';
+			}
+		}
+
+		$page_window = 5;
+		$start_page = max(1, $current_page - (int) floor($page_window / 2));
+		$end_page = min($total_pages, $start_page + $page_window - 1);
+		if (($end_page - $start_page + 1) < $page_window)
+		{
+			$start_page = max(1, $end_page - $page_window + 1);
+		}
+
 		$data = array(
 			'title' => 'Pengajuan Pinjaman',
-			'requests' => $visible_requests,
+			'requests' => $current_page_requests,
+			'loan_pagination' => array(
+				'current_page' => $current_page,
+				'total_pages' => $total_pages,
+				'start_page' => $start_page,
+				'end_page' => $end_page,
+				'current_date_key' => $current_date_key,
+				'current_date_label' => $current_date_label,
+				'current_page_total' => count($current_page_requests),
+				'total_records' => count($visible_requests)
+			),
 			'is_developer_actor' => $this->is_developer_actor(),
 			'can_process_loan_requests' => $this->can_process_loan_requests_feature(),
 			'can_delete_loan_requests' => $this->can_delete_loan_requests_feature()
@@ -11714,10 +13113,14 @@ class Home extends CI_Controller {
 				$row_shift_time = $shift_time;
 			}
 
-			$late_duration = isset($records[$i]['check_in_late']) ? trim((string) $records[$i]['check_in_late']) : '';
-			if ($late_duration === '' && $row_check_in !== '')
+			$late_duration = '';
+			if ($row_check_in !== '' && ($row_shift_time !== '' || $row_shift_name !== ''))
 			{
 				$late_duration = $this->calculate_late_duration($row_check_in, $row_shift_time, $row_shift_name);
+			}
+			if ($late_duration === '')
+			{
+				$late_duration = isset($records[$i]['check_in_late']) ? trim((string) $records[$i]['check_in_late']) : '';
 			}
 			if ($late_duration === '')
 			{
@@ -11851,28 +13254,178 @@ class Home extends CI_Controller {
 				$request_date_label = '-';
 			}
 
-			$amount_digits = preg_replace('/\D+/', '', isset($loan_records[$i]['amount']) ? (string) $loan_records[$i]['amount'] : '');
-			$amount_value = $amount_digits === '' ? 0 : (int) $amount_digits;
+			$request_date_iso = $this->is_valid_date_format($request_date) ? $request_date : '';
+			if ($request_date_iso === '' && $request_date_label !== '')
+			{
+				$request_date_iso = $this->parse_dmy_to_iso($request_date_label);
+			}
+			if (!$this->is_valid_date_format($request_date_iso))
+			{
+				$request_date_iso = '';
+			}
+
+			$amount_value = $this->parse_money_to_int(isset($loan_records[$i]['amount']) ? $loan_records[$i]['amount'] : 0);
+			if ($amount_value <= 0 && isset($loan_records[$i]['principal']))
+			{
+				$amount_value = $this->parse_money_to_int($loan_records[$i]['principal']);
+			}
+			if ($amount_value < 0)
+			{
+				$amount_value = 0;
+			}
 			$amount_label = $amount_value > 0 ? 'Rp '.number_format($amount_value, 0, ',', '.') : 'Rp 0';
 
 			$tenor_months = isset($loan_records[$i]['tenor_months']) ? (int) $loan_records[$i]['tenor_months'] : 0;
+			if ($tenor_months <= 0 && isset($loan_records[$i]['tenor']))
+			{
+				$tenor_months = (int) $loan_records[$i]['tenor'];
+			}
 			if ($tenor_months < 0)
 			{
 				$tenor_months = 0;
 			}
-			$tenor_label = $tenor_months > 0 ? $tenor_months.' bulan' : '-';
 
-			$monthly_installment = isset($loan_records[$i]['monthly_installment_estimate'])
-				? (int) $loan_records[$i]['monthly_installment_estimate']
-				: 0;
-			if ($monthly_installment <= 0 && $tenor_months > 0)
+			$is_first_loan = isset($loan_records[$i]['is_first_loan']) ? ((bool) $loan_records[$i]['is_first_loan']) : FALSE;
+			$monthly_rate_percent = isset($loan_records[$i]['monthly_rate_percent'])
+				? (float) $loan_records[$i]['monthly_rate_percent']
+				: (isset($loan_records[$i]['interest_rate_percent']) ? (float) $loan_records[$i]['interest_rate_percent'] : ($is_first_loan ? 0.0 : 2.95));
+			if ($monthly_rate_percent < 0)
 			{
-				$total_payment = isset($loan_records[$i]['total_payment']) ? (int) $loan_records[$i]['total_payment'] : 0;
-				if ($total_payment > 0)
+				$monthly_rate_percent = 0.0;
+			}
+
+			$monthly_interest_amount = $this->parse_money_to_int(isset($loan_records[$i]['monthly_interest_amount']) ? $loan_records[$i]['monthly_interest_amount'] : 0);
+			if ($monthly_interest_amount <= 0 && $amount_value > 0 && $tenor_months > 0)
+			{
+				$monthly_interest_amount = (int) round($amount_value * $monthly_rate_percent / 100);
+			}
+
+			$total_interest_amount = $this->parse_money_to_int(isset($loan_records[$i]['total_interest_amount']) ? $loan_records[$i]['total_interest_amount'] : 0);
+			if ($total_interest_amount <= 0 && isset($loan_records[$i]['interest_amount']))
+			{
+				$total_interest_amount = $this->parse_money_to_int($loan_records[$i]['interest_amount']);
+			}
+			if ($total_interest_amount <= 0 && $monthly_interest_amount > 0 && $tenor_months > 0)
+			{
+				$total_interest_amount = (int) ($monthly_interest_amount * $tenor_months);
+			}
+
+			$total_payment = $this->parse_money_to_int(isset($loan_records[$i]['total_payment']) ? $loan_records[$i]['total_payment'] : 0);
+			if ($total_payment <= 0)
+			{
+				$total_payment = (int) ($amount_value + max(0, $total_interest_amount));
+			}
+			if ($total_payment <= 0)
+			{
+				$total_payment = $amount_value;
+			}
+
+			$monthly_installment = $this->parse_money_to_int(isset($loan_records[$i]['monthly_installment_estimate']) ? $loan_records[$i]['monthly_installment_estimate'] : 0);
+			if ($monthly_installment <= 0 && $tenor_months > 0 && $total_payment > 0)
+			{
+				$monthly_installment = (int) round($total_payment / $tenor_months);
+			}
+
+			$installments_raw = isset($loan_records[$i]['installments']) && is_array($loan_records[$i]['installments'])
+				? $loan_records[$i]['installments']
+				: array();
+			$installments = array();
+			for ($installment_index = 0; $installment_index < count($installments_raw); $installment_index += 1)
+			{
+				$installment_row = isset($installments_raw[$installment_index]) && is_array($installments_raw[$installment_index])
+					? $installments_raw[$installment_index]
+					: array();
+				$month_value = isset($installment_row['month']) ? (int) $installment_row['month'] : ($installment_index + 1);
+				if ($month_value < 1)
 				{
-					$monthly_installment = (int) round($total_payment / $tenor_months);
+					$month_value = $installment_index + 1;
+				}
+				$amount_installment_value = $this->parse_money_to_int(isset($installment_row['amount']) ? $installment_row['amount'] : 0);
+				if ($amount_installment_value <= 0 && $monthly_installment > 0)
+				{
+					$amount_installment_value = $monthly_installment;
+				}
+
+				$due_date_iso = '';
+				if (isset($installment_row['due_date']) && $this->is_valid_date_format((string) $installment_row['due_date']))
+				{
+					$due_date_iso = (string) $installment_row['due_date'];
+				}
+				elseif (isset($installment_row['due_date_label']))
+				{
+					$due_date_candidate = $this->parse_dmy_to_iso((string) $installment_row['due_date_label']);
+					if ($this->is_valid_date_format($due_date_candidate))
+					{
+						$due_date_iso = $due_date_candidate;
+					}
+				}
+				if ($due_date_iso === '' && $request_date_iso !== '')
+				{
+					$request_timestamp = strtotime($request_date_iso.' 00:00:00');
+					if ($request_timestamp !== FALSE)
+					{
+						$due_timestamp = strtotime('+'.$month_value.' month', $request_timestamp);
+						if ($due_timestamp !== FALSE)
+						{
+							$due_date_iso = date('Y-m-d', $due_timestamp);
+						}
+					}
+				}
+
+				$installments[] = array(
+					'month' => (int) $month_value,
+					'amount' => (int) max(0, $amount_installment_value),
+					'due_date' => $due_date_iso,
+					'due_date_label' => $due_date_iso !== '' ? date('d/m/Y', strtotime($due_date_iso.' 00:00:00')) : '-'
+				);
+			}
+
+			if ($tenor_months <= 0 && !empty($installments))
+			{
+				$tenor_months = count($installments);
+			}
+
+			if (empty($installments) && $tenor_months > 0)
+			{
+				$base_installment = (int) floor($total_payment / $tenor_months);
+				$remainder = (int) ($total_payment - ($base_installment * $tenor_months));
+				for ($month_value = 1; $month_value <= $tenor_months; $month_value += 1)
+				{
+					$amount_installment_value = $base_installment;
+					if ($month_value === $tenor_months && $remainder > 0)
+					{
+						$amount_installment_value += $remainder;
+					}
+
+					$due_date_iso = '';
+					if ($request_date_iso !== '')
+					{
+						$request_timestamp = strtotime($request_date_iso.' 00:00:00');
+						if ($request_timestamp !== FALSE)
+						{
+							$due_timestamp = strtotime('+'.$month_value.' month', $request_timestamp);
+							if ($due_timestamp !== FALSE)
+							{
+								$due_date_iso = date('Y-m-d', $due_timestamp);
+							}
+						}
+					}
+
+					$installments[] = array(
+						'month' => (int) $month_value,
+						'amount' => (int) max(0, $amount_installment_value),
+						'due_date' => $due_date_iso,
+						'due_date_label' => $due_date_iso !== '' ? date('d/m/Y', strtotime($due_date_iso.' 00:00:00')) : '-'
+					);
 				}
 			}
+
+			if ($monthly_installment <= 0 && !empty($installments))
+			{
+				$monthly_installment = isset($installments[0]['amount']) ? (int) $installments[0]['amount'] : 0;
+			}
+
+			$tenor_label = $tenor_months > 0 ? $tenor_months.' bulan' : '-';
 			$monthly_installment_label = $monthly_installment > 0 ? 'Rp '.number_format($monthly_installment, 0, ',', '.') : 'Rp 0';
 
 			$status_label = isset($loan_records[$i]['status']) ? trim((string) $loan_records[$i]['status']) : '';
@@ -11889,11 +13442,22 @@ class Home extends CI_Controller {
 
 			$loan_rows[] = array(
 				'sort_key' => $sort_key,
+				'request_date' => $request_date_iso,
+				'request_date_label' => $request_date_label,
 				'tanggal' => $request_date_label,
+				'nominal_value' => (int) $amount_value,
 				'nominal' => $amount_label,
+				'tenor_months' => (int) $tenor_months,
 				'tenor' => $tenor_label,
+				'is_first_loan' => $is_first_loan ? TRUE : FALSE,
+				'monthly_rate_percent' => (float) $monthly_rate_percent,
+				'monthly_interest_amount' => (int) max(0, $monthly_interest_amount),
+				'total_interest_amount' => (int) max(0, $total_interest_amount),
+				'total_payment' => (int) max(0, $total_payment),
+				'monthly_installment' => (int) max(0, $monthly_installment),
 				'cicilan_bulanan' => $monthly_installment_label,
-				'status' => $status_label
+				'status' => $status_label,
+				'installments' => $installments
 			);
 		}
 
@@ -11907,11 +13471,24 @@ class Home extends CI_Controller {
 		for ($i = 0; $i < count($loan_rows) && $i < $recent_loans_limit; $i += 1)
 		{
 			$recent_loans[] = array(
+				'request_date' => isset($loan_rows[$i]['request_date']) ? (string) $loan_rows[$i]['request_date'] : '',
+				'request_date_label' => isset($loan_rows[$i]['request_date_label']) ? (string) $loan_rows[$i]['request_date_label'] : '-',
 				'tanggal' => isset($loan_rows[$i]['tanggal']) ? (string) $loan_rows[$i]['tanggal'] : '-',
+				'nominal_value' => isset($loan_rows[$i]['nominal_value']) ? (int) $loan_rows[$i]['nominal_value'] : 0,
 				'nominal' => isset($loan_rows[$i]['nominal']) ? (string) $loan_rows[$i]['nominal'] : 'Rp 0',
+				'tenor_months' => isset($loan_rows[$i]['tenor_months']) ? (int) $loan_rows[$i]['tenor_months'] : 0,
 				'tenor' => isset($loan_rows[$i]['tenor']) ? (string) $loan_rows[$i]['tenor'] : '-',
+				'is_first_loan' => isset($loan_rows[$i]['is_first_loan']) ? ((bool) $loan_rows[$i]['is_first_loan']) : FALSE,
+				'monthly_rate_percent' => isset($loan_rows[$i]['monthly_rate_percent']) ? (float) $loan_rows[$i]['monthly_rate_percent'] : 0.0,
+				'monthly_interest_amount' => isset($loan_rows[$i]['monthly_interest_amount']) ? (int) $loan_rows[$i]['monthly_interest_amount'] : 0,
+				'total_interest_amount' => isset($loan_rows[$i]['total_interest_amount']) ? (int) $loan_rows[$i]['total_interest_amount'] : 0,
+				'total_payment' => isset($loan_rows[$i]['total_payment']) ? (int) $loan_rows[$i]['total_payment'] : 0,
+				'monthly_installment' => isset($loan_rows[$i]['monthly_installment']) ? (int) $loan_rows[$i]['monthly_installment'] : 0,
 				'cicilan_bulanan' => isset($loan_rows[$i]['cicilan_bulanan']) ? (string) $loan_rows[$i]['cicilan_bulanan'] : 'Rp 0',
-				'status' => isset($loan_rows[$i]['status']) ? (string) $loan_rows[$i]['status'] : 'Menunggu'
+				'status' => isset($loan_rows[$i]['status']) ? (string) $loan_rows[$i]['status'] : 'Menunggu',
+				'installments' => isset($loan_rows[$i]['installments']) && is_array($loan_rows[$i]['installments'])
+					? $loan_rows[$i]['installments']
+					: array()
 			);
 		}
 
@@ -11990,15 +13567,15 @@ class Home extends CI_Controller {
 		$check_in = trim((string) $check_in_time);
 		$check_out = trim((string) $check_out_time);
 		$late_value = trim((string) $late_duration);
+		$row_shift_name = isset($record_row['shift_name']) ? trim((string) $record_row['shift_name']) : '';
+		$row_shift_time = isset($record_row['shift_time']) ? trim((string) $record_row['shift_time']) : '';
+		if ($check_in !== '' && ($row_shift_time !== '' || $row_shift_name !== ''))
+		{
+			$late_value = $this->calculate_late_duration($check_in, $row_shift_time, $row_shift_name);
+		}
 		if ($late_value === '')
 		{
 			$late_value = isset($record_row['check_in_late']) ? trim((string) $record_row['check_in_late']) : '';
-		}
-		if ($late_value === '' && $check_in !== '')
-		{
-			$row_shift_name = isset($record_row['shift_name']) ? (string) $record_row['shift_name'] : '';
-			$row_shift_time = isset($record_row['shift_time']) ? (string) $record_row['shift_time'] : '';
-			$late_value = $this->calculate_late_duration($check_in, $row_shift_time, $row_shift_name);
 		}
 		if ($late_value === '')
 		{
@@ -13223,12 +14800,20 @@ class Home extends CI_Controller {
 					$checkin_seconds_by_date[$date_key][$username_key] = $check_in_seconds;
 				}
 
-				$late_duration = isset($records[$i]['check_in_late']) ? trim((string) $records[$i]['check_in_late']) : '';
+				$row_shift_name = isset($records[$i]['shift_name']) ? (string) $records[$i]['shift_name'] : '';
+				$row_shift_time = isset($records[$i]['shift_time']) ? (string) $records[$i]['shift_time'] : '';
+				$late_duration = '';
+				if ($row_shift_time !== '' || $row_shift_name !== '')
+				{
+					$late_duration = $this->calculate_late_duration($check_in, $row_shift_time, $row_shift_name);
+				}
 				if ($late_duration === '')
 				{
-					$row_shift_name = isset($records[$i]['shift_name']) ? (string) $records[$i]['shift_name'] : '';
-					$row_shift_time = isset($records[$i]['shift_time']) ? (string) $records[$i]['shift_time'] : '';
-					$late_duration = $this->calculate_late_duration($check_in, $row_shift_time, $row_shift_name);
+					$late_duration = isset($records[$i]['check_in_late']) ? trim((string) $records[$i]['check_in_late']) : '';
+				}
+				if ($late_duration === '')
+				{
+					$late_duration = '00:00:00';
 				}
 				if ($this->duration_to_seconds($late_duration) > 0)
 				{
@@ -21884,6 +23469,20 @@ class Home extends CI_Controller {
 			return '00:00:00';
 		}
 
+		// Toleransi sampai detik ke-59 pada menit pertama.
+		// Contoh:
+		// - Shift pagi (08:00): 08:00:59 belum telat, 08:01:00 mulai telat.
+		// - Shift siang (14:00): 14:00:59 belum telat, 14:01:00 mulai telat.
+		$grace_seconds = 0;
+		if ($shift_key === 'pagi' || $shift_key === 'siang')
+		{
+			$grace_seconds = 59;
+		}
+		if ($grace_seconds > 0 && $check_seconds <= ($late_anchor_seconds + $grace_seconds))
+		{
+			return '00:00:00';
+		}
+
 		$diff = $check_seconds - $late_anchor_seconds;
 		return gmdate('H:i:s', $diff);
 	}
@@ -21899,12 +23498,16 @@ class Home extends CI_Controller {
 		$morning_ontime_end = $this->time_to_seconds(self::MULTISHIFT_ONTIME_MORNING_END);
 		$afternoon_ontime_start = $this->time_to_seconds(self::MULTISHIFT_ONTIME_AFTERNOON_START);
 		$afternoon_ontime_end = $this->time_to_seconds(self::MULTISHIFT_ONTIME_AFTERNOON_END);
+		$grace_seconds = 59;
 
-		if ($check_in_seconds <= $morning_ontime_end)
+		if ($check_in_seconds <= ($morning_ontime_end + $grace_seconds))
 		{
 			return '00:00:00';
 		}
-		if ($check_in_seconds >= $afternoon_ontime_start && $check_in_seconds <= $afternoon_ontime_end)
+		if (
+			$check_in_seconds >= $afternoon_ontime_start &&
+			$check_in_seconds <= ($afternoon_ontime_end + $grace_seconds)
+		)
 		{
 			return '00:00:00';
 		}
@@ -23830,7 +25433,10 @@ class Home extends CI_Controller {
 		{
 			$state['pending_sync'] = array();
 		}
-		if ($event_type === 'sync' && strtolower($action) === 'sync_web_to_sheet')
+		if (
+			$event_type === 'sync' &&
+			in_array(strtolower($action), array('sync_web_to_sheet', 'sync_web_to_loan_sheet'), TRUE)
+		)
 		{
 			$state['last_synced_revision'] = (int) $state['revision'];
 			$state['pending_sync'] = array();

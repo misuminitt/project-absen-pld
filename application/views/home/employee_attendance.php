@@ -338,6 +338,24 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 			flex-wrap: wrap;
 		}
 
+		#attendancePageMeta.table-meta,
+		#attendancePager.pager {
+			background: #fbfdff;
+		}
+
+		#attendancePager.pager {
+			border-top: 0;
+		}
+
+		html.theme-dark #attendancePageMeta.table-meta,
+		html.theme-dark #attendancePager.pager,
+		body.theme-dark #attendancePageMeta.table-meta,
+		body.theme-dark #attendancePager.pager {
+			background: #13273a !important;
+			color: #d9e7f6 !important;
+			border-top: 0 !important;
+		}
+
 		.pager-btn {
 			display: inline-flex;
 			align-items: center;

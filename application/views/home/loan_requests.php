@@ -7,6 +7,46 @@ $notice_error = $this->session->flashdata('loan_notice_error');
 $is_developer_actor = isset($is_developer_actor) && $is_developer_actor === TRUE;
 $can_process_loan_requests = isset($can_process_loan_requests) && $can_process_loan_requests === TRUE;
 $can_delete_loan_requests = isset($can_delete_loan_requests) && $can_delete_loan_requests === TRUE;
+$loan_pagination = isset($loan_pagination) && is_array($loan_pagination) ? $loan_pagination : array();
+$loan_current_page = isset($loan_pagination['current_page']) ? (int) $loan_pagination['current_page'] : 1;
+$loan_total_pages = isset($loan_pagination['total_pages']) ? (int) $loan_pagination['total_pages'] : 1;
+$loan_start_page = isset($loan_pagination['start_page']) ? (int) $loan_pagination['start_page'] : 1;
+$loan_end_page = isset($loan_pagination['end_page']) ? (int) $loan_pagination['end_page'] : 1;
+$loan_current_date_label = isset($loan_pagination['current_date_label']) ? (string) $loan_pagination['current_date_label'] : '-';
+$loan_current_page_total = isset($loan_pagination['current_page_total']) ? (int) $loan_pagination['current_page_total'] : count($requests);
+$loan_total_records = isset($loan_pagination['total_records']) ? (int) $loan_pagination['total_records'] : count($requests);
+if ($loan_current_page < 1)
+{
+	$loan_current_page = 1;
+}
+if ($loan_total_pages < 1)
+{
+	$loan_total_pages = 1;
+}
+if ($loan_current_page > $loan_total_pages)
+{
+	$loan_current_page = $loan_total_pages;
+}
+if ($loan_start_page < 1)
+{
+	$loan_start_page = 1;
+}
+if ($loan_start_page > $loan_total_pages)
+{
+	$loan_start_page = $loan_total_pages;
+}
+if ($loan_end_page < $loan_start_page)
+{
+	$loan_end_page = $loan_start_page;
+}
+if ($loan_end_page > $loan_total_pages)
+{
+	$loan_end_page = $loan_total_pages;
+}
+$build_loan_page_url = function ($page_number) {
+	$page_value = max(1, (int) $page_number);
+	return site_url('home/loan_requests').'?page='.$page_value;
+};
 ?>
 <?php
 $_home_theme_cookie_value = isset($_COOKIE['home_index_theme']) ? strtolower(trim((string) $_COOKIE['home_index_theme'])) : '';
@@ -305,7 +345,7 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 
 		html.theme-dark #loanPager.pager {
 			background: #13273a !important;
-			border-top: 1px solid #35516b;
+			border-top: 0 !important;
 		}
 
 		.pager-btn {
@@ -321,6 +361,7 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 			color: #1c4670;
 			font-size: 0.8rem;
 			font-weight: 700;
+			text-decoration: none;
 			cursor: pointer;
 		}
 
@@ -350,9 +391,18 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 			color: #ffffff !important;
 		}
 
+		html.theme-dark #loanPager .pager-btn.is-disabled {
+			opacity: 0.48;
+		}
+
 		.pager-btn.wide {
 			padding: 0 0.95rem;
 			min-width: 6rem;
+		}
+
+		.pager-btn.is-disabled {
+			opacity: 0.46;
+			pointer-events: none;
 		}
 
 		.notice {
@@ -614,12 +664,12 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 		<?php endif; ?>
 
 		<div class="table-card">
-			<?php if (empty($requests)): ?>
+			<?php if ($loan_total_records <= 0): ?>
 				<div class="empty">Belum ada pengajuan pinjaman dari karyawan.</div>
 			<?php else: ?>
 				<div class="table-tools">
 					<input id="loanSearchInput" type="text" class="search-input" placeholder="Cari ID, nama, atau no telp karyawan...">
-					<p class="search-help">Pencarian berlaku untuk kolom ID, Nama, dan Telp.</p>
+					<p class="search-help">Pencarian berlaku untuk data tanggal aktif di halaman ini (ID, Nama, Telp).</p>
 				</div>
 				<div class="table-wrap">
 					<table>
@@ -702,6 +752,7 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 											<?php if ($can_process_loan_requests && $is_waiting && $request_id !== ''): ?>
 												<form method="post" action="<?php echo site_url('home/update_loan_request_status'); ?>" class="admin-action-form">
 													<input type="hidden" name="request_id" value="<?php echo htmlspecialchars($request_id, ENT_QUOTES, 'UTF-8'); ?>">
+													<input type="hidden" name="return_page" value="<?php echo (int) $loan_current_page; ?>">
 													<button type="submit" name="status" value="diterima" class="admin-btn approve">Terima</button>
 													<button type="submit" name="status" value="ditolak" class="admin-btn reject">Tolak</button>
 												</form>
@@ -711,6 +762,7 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 											<?php if ($can_delete_loan_requests && $request_id !== ''): ?>
 												<form method="post" action="<?php echo site_url('home/delete_loan_request'); ?>" class="admin-action-form" onsubmit="return window.confirm('Hapus data pinjaman ini?');">
 													<input type="hidden" name="request_id" value="<?php echo htmlspecialchars($request_id, ENT_QUOTES, 'UTF-8'); ?>">
+													<input type="hidden" name="return_page" value="<?php echo (int) $loan_current_page; ?>">
 													<button type="submit" class="admin-btn delete">Hapus</button>
 												</form>
 											<?php endif; ?>
@@ -723,8 +775,23 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 					</table>
 				</div>
 				<div id="loanSearchEmpty" class="empty" style="display:none;">Data pengajuan tidak ditemukan.</div>
-				<div id="loanPageMeta" class="table-meta"></div>
-				<div id="loanPager" class="pager"></div>
+				<div id="loanPageMeta" class="table-meta">
+					<span><?php echo htmlspecialchars('Tanggal aktif: '.$loan_current_date_label.' | Halaman '.$loan_current_page.' dari '.$loan_total_pages, ENT_QUOTES, 'UTF-8'); ?></span>
+					<span><?php echo htmlspecialchars('Data tanggal ini: '.$loan_current_page_total.' | Total data: '.$loan_total_records, ENT_QUOTES, 'UTF-8'); ?></span>
+				</div>
+				<?php if ($loan_total_pages > 1): ?>
+					<div id="loanPager" class="pager">
+						<?php if ($loan_current_page > 1): ?>
+							<a href="<?php echo htmlspecialchars($build_loan_page_url($loan_current_page - 1), ENT_QUOTES, 'UTF-8'); ?>" class="pager-btn wide">Sebelumnya</a>
+						<?php endif; ?>
+						<?php for ($page_number = $loan_start_page; $page_number <= $loan_end_page; $page_number += 1): ?>
+							<a href="<?php echo htmlspecialchars($build_loan_page_url($page_number), ENT_QUOTES, 'UTF-8'); ?>" class="pager-btn<?php echo $page_number === $loan_current_page ? ' active' : ''; ?>"><?php echo (int) $page_number; ?></a>
+						<?php endfor; ?>
+						<?php if ($loan_current_page < $loan_total_pages): ?>
+							<a href="<?php echo htmlspecialchars($build_loan_page_url($loan_current_page + 1), ENT_QUOTES, 'UTF-8'); ?>" class="pager-btn wide">Selanjutnya</a>
+						<?php endif; ?>
+					</div>
+				<?php endif; ?>
 			<?php endif; ?>
 		</div>
 	</div>
@@ -732,41 +799,15 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 		(function () {
 			var searchInput = document.getElementById('loanSearchInput');
 			var emptyInfo = document.getElementById('loanSearchEmpty');
-			var pageMeta = document.getElementById('loanPageMeta');
-			var pager = document.getElementById('loanPager');
-			var rows = Array.prototype.slice.call(document.querySelectorAll('#loanRequestTableBody .loan-row'));
-			var pageSize = 15;
+			var rows = document.querySelectorAll('#loanRequestTableBody .loan-row');
 
 			if (!searchInput || !rows.length) {
 				return;
 			}
 
-			var currentPage = 1;
-
-			var assignVisibleRowNumbers = function (visibleRows, offset) {
-				for (var i = 0; i < visibleRows.length; i += 1) {
-					var noCell = visibleRows[i].querySelector('.row-no');
-					if (noCell) {
-						noCell.textContent = String(offset + i + 1);
-					}
-				}
-			};
-
-			var buildPagerButton = function (label, targetPage, extraClass) {
-				var button = document.createElement('button');
-				button.type = 'button';
-				button.className = 'pager-btn' + (extraClass ? ' ' + extraClass : '');
-				button.textContent = label;
-				button.addEventListener('click', function () {
-					currentPage = targetPage;
-					renderRows();
-				});
-				return button;
-			};
-
-			var renderRows = function () {
+			var applySearch = function () {
 				var keyword = String(searchInput.value || '').toLowerCase().trim();
-				var filteredRows = [];
+				var visibleCount = 0;
 
 				for (var i = 0; i < rows.length; i += 1) {
 					var row = rows[i];
@@ -774,69 +815,23 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 					var nameValue = String(row.getAttribute('data-name') || '');
 					var phoneValue = String(row.getAttribute('data-phone') || '');
 					var matched = keyword === '' || idValue.indexOf(keyword) !== -1 || nameValue.indexOf(keyword) !== -1 || phoneValue.indexOf(keyword) !== -1;
+					row.style.display = matched ? '' : 'none';
 					if (matched) {
-						filteredRows.push(row);
+						visibleCount += 1;
+						var noCell = row.querySelector('.row-no');
+						if (noCell) {
+							noCell.textContent = String(visibleCount);
+						}
 					}
 				}
-
-				var totalPages = filteredRows.length > 0 ? Math.ceil(filteredRows.length / pageSize) : 1;
-				if (currentPage < 1) {
-					currentPage = 1;
-				}
-				if (currentPage > totalPages) {
-					currentPage = totalPages;
-				}
-				var startIndex = (currentPage - 1) * pageSize;
-				var endIndex = startIndex + pageSize;
-				var visibleRows = [];
-				for (var j = 0; j < rows.length; j += 1) {
-					rows[j].style.display = 'none';
-				}
-				for (var k = startIndex; k < endIndex && k < filteredRows.length; k += 1) {
-					filteredRows[k].style.display = '';
-					visibleRows.push(filteredRows[k]);
-				}
-				assignVisibleRowNumbers(visibleRows, startIndex);
 
 				if (emptyInfo) {
-					emptyInfo.style.display = filteredRows.length > 0 ? 'none' : 'block';
-				}
-				if (pageMeta) {
-					if (filteredRows.length === 0) {
-						pageMeta.textContent = '';
-					} else {
-						var from = startIndex + 1;
-						var until = Math.min(endIndex, filteredRows.length);
-						pageMeta.textContent = 'Menampilkan ' + from + ' - ' + until + ' dari ' + filteredRows.length + ' data | Halaman ' + currentPage + ' / ' + totalPages;
-					}
-				}
-				if (pager) {
-					pager.innerHTML = '';
-					if (filteredRows.length > 0 && totalPages > 1) {
-						if (currentPage > 1) {
-							pager.appendChild(buildPagerButton('Sebelumnya', currentPage - 1, 'wide'));
-						}
-						var startPage = Math.max(1, currentPage - 2);
-						var endPage = Math.min(totalPages, startPage + 4);
-						if ((endPage - startPage + 1) < 5) {
-							startPage = Math.max(1, endPage - 4);
-						}
-						for (var pageNo = startPage; pageNo <= endPage; pageNo += 1) {
-							var pageButton = buildPagerButton(String(pageNo), pageNo, pageNo === currentPage ? 'active' : '');
-							pager.appendChild(pageButton);
-						}
-						if (currentPage < totalPages) {
-							pager.appendChild(buildPagerButton('Selanjutnya', currentPage + 1, 'wide'));
-						}
-					}
+					emptyInfo.style.display = visibleCount > 0 ? 'none' : 'block';
 				}
 			};
 
-			searchInput.addEventListener('input', function () {
-				currentPage = 1;
-				renderRows();
-			});
-			renderRows();
+			searchInput.addEventListener('input', applySearch);
+			applySearch();
 		})();
 
 		(function () {

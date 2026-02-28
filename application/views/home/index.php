@@ -65,7 +65,65 @@ $can_sync_sheet_accounts = isset($can_sync_sheet_accounts) && $can_sync_sheet_ac
 $can_manage_feature_accounts = isset($can_manage_feature_accounts) && $can_manage_feature_accounts === TRUE;
 $sync_backup_ready = isset($sync_backup_ready) && $sync_backup_ready === TRUE;
 $sync_backup_status_text = isset($sync_backup_status_text) ? trim((string) $sync_backup_status_text) : '';
-$sync_backup_required_directions = array('sheet_to_web_attendance', 'web_to_sheet');
+$sync_backup_required_directions = array(
+	'sheet_to_web_attendance',
+	'web_to_sheet',
+	'web_to_sheet_loan',
+	'sheet_loan_to_web'
+);
+$loan_sync_last_report = isset($loan_sync_last_report) && is_array($loan_sync_last_report)
+	? $loan_sync_last_report
+	: array();
+$loan_sync_last_action = isset($loan_sync_last_report['action']) ? strtolower(trim((string) $loan_sync_last_report['action'])) : '';
+$loan_sync_last_status = isset($loan_sync_last_report['status']) ? strtolower(trim((string) $loan_sync_last_report['status'])) : '';
+$loan_sync_last_message = isset($loan_sync_last_report['message']) ? trim((string) $loan_sync_last_report['message']) : '';
+$loan_sync_last_created_at = isset($loan_sync_last_report['created_at']) ? trim((string) $loan_sync_last_report['created_at']) : '';
+$loan_sync_last_meta = isset($loan_sync_last_report['meta']) && is_array($loan_sync_last_report['meta'])
+	? $loan_sync_last_report['meta']
+	: array();
+$loan_sync_last_action_label_map = array(
+	'sync_web_to_loan_sheet' => 'Sync Data Web ke Pinjaman',
+	'sync_loan_sheet_to_web' => 'Sync Data Pinjaman ke Web'
+);
+$loan_sync_last_action_label = isset($loan_sync_last_action_label_map[$loan_sync_last_action])
+	? $loan_sync_last_action_label_map[$loan_sync_last_action]
+	: ($loan_sync_last_action !== '' ? str_replace('_', ' ', $loan_sync_last_action) : '-');
+$loan_sync_last_detail_text = '';
+if (isset($loan_sync_last_meta['payload']) && is_array($loan_sync_last_meta['payload']))
+{
+	$payload_meta = $loan_sync_last_meta['payload'];
+	$loan_sync_last_detail_text .= 'payload='.
+		'prepared='.(int) (isset($payload_meta['prepared']) ? $payload_meta['prepared'] : 0).
+		', status_skip='.(int) (isset($payload_meta['skipped_status_not_accepted']) ? $payload_meta['skipped_status_not_accepted'] : 0).
+		', sheet_skip='.(int) (isset($payload_meta['skipped_sheet_origin']) ? $payload_meta['skipped_sheet_origin'] : 0).
+		', synced_skip='.(int) (isset($payload_meta['skipped_already_synced']) ? $payload_meta['skipped_already_synced'] : 0).
+		', scope_skip='.(int) (isset($payload_meta['skipped_out_of_scope']) ? $payload_meta['skipped_out_of_scope'] : 0).
+		', nominal_skip='.(int) (isset($payload_meta['skipped_amount_invalid']) ? $payload_meta['skipped_amount_invalid'] : 0);
+}
+if (isset($loan_sync_last_meta['written_rows']) || isset($loan_sync_last_meta['skipped_rows']))
+{
+	$loan_sync_last_detail_text .= ($loan_sync_last_detail_text !== '' ? ' | ' : '').
+		'result='.
+		'written='.(int) (isset($loan_sync_last_meta['written_rows']) ? $loan_sync_last_meta['written_rows'] : 0).
+		', skipped='.(int) (isset($loan_sync_last_meta['skipped_rows']) ? $loan_sync_last_meta['skipped_rows'] : 0);
+}
+if (isset($loan_sync_last_meta['skip_reasons']) && is_array($loan_sync_last_meta['skip_reasons']) && !empty($loan_sync_last_meta['skip_reasons']))
+{
+	$skip_reason_text_rows = array();
+	foreach ($loan_sync_last_meta['skip_reasons'] as $skip_reason_key => $skip_reason_count)
+	{
+		$skip_reason_text_rows[] = str_replace('_', ' ', (string) $skip_reason_key).'='.(int) $skip_reason_count;
+	}
+	$loan_sync_last_detail_text .= ($loan_sync_last_detail_text !== '' ? ' | ' : '').'skip_reason=['.implode(', ', $skip_reason_text_rows).']';
+}
+if (isset($loan_sync_last_meta['spreadsheet_id']) || isset($loan_sync_last_meta['sheet_gid']) || isset($loan_sync_last_meta['sheet']))
+{
+	$loan_sync_last_detail_text .= ($loan_sync_last_detail_text !== '' ? ' | ' : '').
+		'target='.
+		'id='.(isset($loan_sync_last_meta['spreadsheet_id']) ? (string) $loan_sync_last_meta['spreadsheet_id'] : '-').
+		', gid='.(isset($loan_sync_last_meta['sheet_gid']) ? (int) $loan_sync_last_meta['sheet_gid'] : 0).
+		', title='.(isset($loan_sync_last_meta['sheet']) ? (string) $loan_sync_last_meta['sheet'] : '-');
+}
 $sync_backup_required_button_attrs = $sync_backup_ready
 	? ''
 	: ' aria-disabled="true" title="Wajib backup local dulu sebelum sync."';
@@ -109,7 +167,7 @@ if ($base_path === '/' || $base_path === '.') {
 	$base_path = '';
 }
 
-$navbar_logo_path = 'src/assets/pns_logo_nav.svg';
+$navbar_logo_path = 'src/assets/pns_logo_nav.png';
 $favicon_path = 'src/assets/sinyal.svg';
 $favicon_type = 'image/svg+xml';
 
@@ -542,7 +600,7 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 		<nav class="topbar">
 			<div class="topbar-container">
 				<div class="topbar-inner">
-					<a href="<?php echo site_url('home'); ?>" class="brand-block">
+					<a href="<?php echo site_url('home'); ?>" class="brand">
 						<img class="brand-logo" src="<?php echo htmlspecialchars($navbar_logo_url, ENT_QUOTES, 'UTF-8'); ?>" alt="Logo Absen Online">
 						<span class="brand-text"><?php echo htmlspecialchars($dashboard_navbar_title, ENT_QUOTES, 'UTF-8'); ?></span>
 						</a>
@@ -707,6 +765,12 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 								<form method="post" action="<?php echo site_url('home/sync_web_attendance_to_sheet_now'); ?>" class="sync-control-form" data-sync-direction="web_to_sheet" data-sync-label="Sync Data Web ke Sheet" data-requires-backup="1">
 									<button type="submit" class="account-submit"<?php echo $sync_backup_required_button_attrs; ?>>Sync Data Web ke Sheet</button>
 								</form>
+								<form method="post" action="<?php echo site_url('home/sync_web_loan_to_sheet_now'); ?>" class="sync-control-form" data-sync-direction="web_to_sheet_loan" data-sync-label="Sync Data Web ke Pinjaman" data-requires-backup="1">
+									<button type="submit" class="account-submit"<?php echo $sync_backup_required_button_attrs; ?>>Sync Data Web ke Pinjaman</button>
+								</form>
+								<form method="post" action="<?php echo site_url('home/sync_sheet_loan_to_web_now'); ?>" class="sync-control-form" data-sync-direction="sheet_loan_to_web" data-sync-label="Sync Data Pinjaman ke Web" data-requires-backup="1">
+									<button type="submit" class="account-submit"<?php echo $sync_backup_required_button_attrs; ?>>Sync Data Pinjaman ke Web</button>
+								</form>
 								<form
 									method="post"
 									action="<?php echo site_url('home/reset_total_alpha_now'); ?>"
@@ -719,6 +783,17 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 								</form>
 							</div>
 							<p class="text-secondary mb-0 mt-2"><?php echo htmlspecialchars($sync_backup_status_text !== '' ? $sync_backup_status_text : 'Belum ada backup lokal aktif. Klik "Backup Local Dulu (Wajib)" sebelum sync.', ENT_QUOTES, 'UTF-8'); ?></p>
+							<?php if ($loan_sync_last_message !== '' || $loan_sync_last_action !== ''): ?>
+								<div class="account-divider"></div>
+								<p class="account-help mb-1"><strong>Log Sync Pinjaman Terakhir</strong></p>
+								<p class="account-help mb-0">
+									<?php echo htmlspecialchars('Waktu: '.($loan_sync_last_created_at !== '' ? $loan_sync_last_created_at : '-'), ENT_QUOTES, 'UTF-8'); ?><br>
+									<?php echo htmlspecialchars('Aksi: '.$loan_sync_last_action_label, ENT_QUOTES, 'UTF-8'); ?><br>
+									<?php echo htmlspecialchars('Status: '.($loan_sync_last_status !== '' ? strtoupper($loan_sync_last_status) : '-'), ENT_QUOTES, 'UTF-8'); ?><br>
+									<?php echo htmlspecialchars('Pesan: '.($loan_sync_last_message !== '' ? $loan_sync_last_message : '-'), ENT_QUOTES, 'UTF-8'); ?>
+									<?php if ($loan_sync_last_detail_text !== ''): ?><br><?php echo htmlspecialchars('Detail: '.$loan_sync_last_detail_text, ENT_QUOTES, 'UTF-8'); ?><?php endif; ?>
+								</p>
+							<?php endif; ?>
 						</article>
 					</div>
 

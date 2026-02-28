@@ -17,7 +17,7 @@
 	}
 	var backupRequiredDirections = Array.isArray(config.syncBackupRequiredDirections)
 		? config.syncBackupRequiredDirections
-		: ['sheet_to_web_attendance', 'web_to_sheet'];
+		: ['sheet_to_web_attendance', 'web_to_sheet', 'web_to_sheet_loan', 'sheet_loan_to_web'];
 	var backupDirectionMap = {};
 	for (var directionIndex = 0; directionIndex < backupRequiredDirections.length; directionIndex += 1) {
 		var directionKey = String(backupRequiredDirections[directionIndex] || '').trim().toLowerCase();
@@ -366,6 +366,8 @@
 			sync_accounts_from_sheet: 'Sync akun dari sheet',
 			sync_attendance_from_sheet: 'Sync data absen dari sheet',
 			sync_web_to_sheet: 'Sync data web ke sheet',
+			sync_web_to_loan_sheet: 'Sync data web ke pinjaman',
+			sync_loan_sheet_to_web: 'Sync data pinjaman ke web',
 			reset_total_alpha: 'Reset total alpha',
 			update_account_field: 'Edit field akun',
 			update_account_username: 'Ganti username akun',
@@ -1108,12 +1110,16 @@
 					}
 					event.preventDefault();
 					if (syncFormRequiresBackup(form) && !state.syncBackupReady) {
+						var backupWarningMessage = 'Sebelum sync, klik "Backup Local Dulu (Wajib)" dulu untuk buat snapshot data di server.';
 						showToast(
 							'Backup Wajib Sebelum Sync',
-							'Sebelum sync, klik "Backup Local Dulu (Wajib)" dulu untuk buat snapshot data di server.',
+							backupWarningMessage,
 							'warning',
 							12000
 						);
+						try {
+							window.alert(backupWarningMessage);
+						} catch (alertError) {}
 						updateSyncBackupButtonState();
 						return;
 					}
@@ -1121,6 +1127,14 @@
 						.then(function (lock) {
 							if (lock.active && lock.owner !== '' && lock.owner !== actor) {
 								showLockWaitModal(lock);
+								var lockOwner = String(lock.owner || 'admin lain');
+								var lockWait = toInt(lock.remaining_seconds, 0);
+								if (lockWait <= 0) {
+									lockWait = lockRefreshSeconds;
+								}
+								try {
+									window.alert('Sync lock sedang dipakai oleh ' + lockOwner + '. Coba lagi sekitar ' + String(lockWait) + ' detik lagi.');
+								} catch (alertError) {}
 								return;
 							}
 							suppressLogoutToastUntil = Date.now() + 5000;

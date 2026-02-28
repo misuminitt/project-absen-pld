@@ -32,9 +32,12 @@ user_guide_src/cilexer/pycilexer.egg-info/*
 /tests/results/
 Backup Database Localstorage Server Absen/
 uploads/PP bak/
-src/secrets/
-.xlsx
 .claude
+.vscode/
+
+output/
+*.xlsx
+*.json
 
 .env
 .env.local

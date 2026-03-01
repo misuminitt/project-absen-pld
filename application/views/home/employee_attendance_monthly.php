@@ -25,6 +25,14 @@ $build_month_page_url = function ($page_number) {
 	$page_value = max(1, (int) $page_number);
 	return site_url('home/employee_data_monthly').'?page='.$page_value;
 };
+$month_page_urls = array();
+for ($page_number = 1; $page_number <= $total_pages; $page_number += 1)
+{
+	$month_page_urls[] = array(
+		'page' => $page_number,
+		'url' => $build_month_page_url($page_number)
+	);
+}
 $export_month_url = site_url('home/employee_data_monthly').'?month='.rawurlencode($selected_month).'&export=excel';
 ?>
 <?php
@@ -711,6 +719,7 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 			<div class="mode-tabs">
 				<a href="<?php echo site_url('home/employee_data'); ?>" class="mode-link">Data Harian</a>
 				<a href="<?php echo site_url('home/employee_data_monthly'); ?>" class="mode-link active">Data Bulanan</a>
+				<a href="<?php echo site_url('home/employee_data_emergency'); ?>" class="mode-link">Absen Darurat</a>
 			</div>
 			<?php if ($total_pages > 1): ?>
 				<div class="month-pager">
@@ -886,33 +895,167 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 		(function () {
 			var searchInput = document.getElementById('monthlySearchInput');
 			var emptyInfo = document.getElementById('monthlySearchEmpty');
-			var rows = document.querySelectorAll('#monthlyTableBody .monthly-row');
+			var tableBody = document.getElementById('monthlyTableBody');
+			var pager = document.querySelector('.month-pager');
+			var metaLine = document.querySelector('.meta-line');
+			var baseMetaText = metaLine ? String(metaLine.textContent || '') : '';
+			var monthPageTargets = <?php echo json_encode($month_page_urls, JSON_UNESCAPED_SLASHES); ?>;
+			var currentPage = <?php echo (int) $current_page; ?>;
 
-			if (!searchInput || !rows.length) {
+			if (!searchInput || !tableBody) {
 				return;
 			}
 
-			var filterRows = function () {
-				var keyword = String(searchInput.value || '').toLowerCase().trim();
-				var visibleCount = 0;
+			var initialRows = Array.prototype.slice.call(tableBody.querySelectorAll('.monthly-row')).map(function (row) {
+				return row.cloneNode(true);
+			});
+			var allRows = initialRows.slice();
+			var allRowsLoaded = false;
+			var loadingPromise = null;
+			var inputDelayTimer = null;
+			var searchToken = 0;
 
-				for (var i = 0; i < rows.length; i += 1) {
-					var row = rows[i];
-					var idValue = String(row.getAttribute('data-id') || '');
-					var nameValue = String(row.getAttribute('data-name') || '');
-					var matched = keyword === '' || idValue.indexOf(keyword) !== -1 || nameValue.indexOf(keyword) !== -1;
-					row.style.display = matched ? '' : 'none';
-					if (matched) {
-						visibleCount += 1;
-					}
-				}
-
-				if (emptyInfo) {
-					emptyInfo.style.display = visibleCount > 0 ? 'none' : 'block';
+			var setMetaText = function (text) {
+				if (metaLine) {
+					metaLine.textContent = text;
 				}
 			};
 
-			searchInput.addEventListener('input', filterRows);
+			var setSearchState = function (isActive) {
+				if (pager) {
+					pager.style.display = isActive ? 'none' : '';
+				}
+				if (!isActive) {
+					setMetaText(baseMetaText);
+				}
+			};
+
+			var renderRows = function (rowsToRender) {
+				tableBody.innerHTML = '';
+				for (var i = 0; i < rowsToRender.length; i += 1) {
+					var rowClone = rowsToRender[i].cloneNode(true);
+					var firstCell = rowClone.querySelector('td');
+					if (firstCell) {
+						firstCell.textContent = String(i + 1);
+					}
+					tableBody.appendChild(rowClone);
+				}
+				if (emptyInfo) {
+					emptyInfo.style.display = rowsToRender.length > 0 ? 'none' : 'block';
+				}
+			};
+
+			var loadRowsFromAllMonths = function () {
+				if (allRowsLoaded) {
+					return Promise.resolve(allRows);
+				}
+				if (loadingPromise) {
+					return loadingPromise;
+				}
+
+				loadingPromise = new Promise(function (resolve) {
+					var targets = [];
+					for (var i = 0; i < monthPageTargets.length; i += 1) {
+						var target = monthPageTargets[i];
+						var pageNumber = parseInt(target.page, 10);
+						if (isNaN(pageNumber) || pageNumber === currentPage) {
+							continue;
+						}
+						targets.push(target);
+					}
+
+					if (!targets.length) {
+						allRowsLoaded = true;
+						loadingPromise = null;
+						resolve(allRows);
+						return;
+					}
+
+					var loadNext = function (targetIndex) {
+						if (targetIndex >= targets.length) {
+							allRowsLoaded = true;
+							loadingPromise = null;
+							resolve(allRows);
+							return;
+						}
+
+						var target = targets[targetIndex];
+						fetch(String(target.url || ''), {
+							credentials: 'same-origin'
+						})
+						.then(function (response) {
+							if (!response.ok) {
+								throw new Error('HTTP ' + response.status);
+							}
+							return response.text();
+						})
+						.then(function (html) {
+							var parser = new DOMParser();
+							var doc = parser.parseFromString(html, 'text/html');
+							var fetchedRows = doc.querySelectorAll('#monthlyTableBody .monthly-row');
+							for (var rowIndex = 0; rowIndex < fetchedRows.length; rowIndex += 1) {
+								allRows.push(fetchedRows[rowIndex].cloneNode(true));
+							}
+							loadNext(targetIndex + 1);
+						})
+						.catch(function (error) {
+							console.error('Gagal memuat data bulanan halaman ' + String(target.page || ''), error);
+							loadNext(targetIndex + 1);
+						});
+					};
+
+					loadNext(0);
+				});
+
+				return loadingPromise;
+			};
+
+			var filterRows = function (token) {
+				var keyword = String(searchInput.value || '').toLowerCase().trim();
+				if (keyword === '') {
+					setSearchState(false);
+					renderRows(initialRows);
+					return;
+				}
+
+				setSearchState(true);
+				setMetaText('Pencarian semua bulan: memuat data...');
+
+				loadRowsFromAllMonths().then(function (rows) {
+					if (token !== searchToken) {
+						return;
+					}
+
+					var filteredRows = [];
+					for (var i = 0; i < rows.length; i += 1) {
+						var row = rows[i];
+						var idValue = String(row.getAttribute('data-id') || '');
+						var nameValue = String(row.getAttribute('data-name') || '');
+						if (idValue.indexOf(keyword) !== -1 || nameValue.indexOf(keyword) !== -1) {
+							filteredRows.push(row);
+						}
+					}
+
+					renderRows(filteredRows);
+					setMetaText(filteredRows.length > 0
+						? ('Pencarian semua bulan: menampilkan ' + filteredRows.length + ' data')
+						: 'Pencarian semua bulan: data tidak ditemukan.');
+				});
+			};
+
+			searchInput.addEventListener('input', function () {
+				searchToken += 1;
+				var activeToken = searchToken;
+				if (inputDelayTimer !== null) {
+					window.clearTimeout(inputDelayTimer);
+				}
+				inputDelayTimer = window.setTimeout(function () {
+					filterRows(activeToken);
+				}, 180);
+			});
+
+			renderRows(initialRows);
+			setSearchState(false);
 		})();
 
 		(function () {

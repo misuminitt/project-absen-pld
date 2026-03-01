@@ -2579,6 +2579,17 @@ class Absen_sheet_sync {
 		{
 			$account_book = array();
 		}
+		$excluded_web_to_sheet_user_lookup = array();
+		$excluded_web_to_sheet_usernames = $this->attendance_web_to_sheet_excluded_usernames();
+		for ($excluded_i = 0; $excluded_i < count($excluded_web_to_sheet_usernames); $excluded_i += 1)
+		{
+			$excluded_username_key = strtolower(trim((string) $excluded_web_to_sheet_usernames[$excluded_i]));
+			if ($excluded_username_key === '')
+			{
+				continue;
+			}
+			$excluded_web_to_sheet_user_lookup[$excluded_username_key] = TRUE;
+		}
 
 		$employee_id_lookup = $this->build_employee_id_lookup_from_accounts($account_book);
 		$username_by_employee_id = array();
@@ -2604,6 +2615,10 @@ class Absen_sheet_sync {
 		{
 			$username = strtolower(trim((string) $username_key));
 			if ($username === '' || !is_array($row))
+			{
+				continue;
+			}
+			if (isset($excluded_web_to_sheet_user_lookup[$username]))
 			{
 				continue;
 			}
@@ -2714,6 +2729,12 @@ class Absen_sheet_sync {
 					$stale_row_number_map[(int) $row_number] = TRUE;
 					continue;
 				}
+			}
+			$username_key = strtolower(trim((string) $username_key));
+			if ($username_key === '' || isset($excluded_web_to_sheet_user_lookup[$username_key]))
+			{
+				$stale_row_number_map[(int) $row_number] = TRUE;
+				continue;
 			}
 			if ($branch_scope !== '')
 			{
@@ -2829,6 +2850,10 @@ class Absen_sheet_sync {
 				continue;
 			}
 			$username_key = strtolower(trim((string) (isset($row['username']) ? $row['username'] : '')));
+			if ($username_key !== '' && isset($excluded_web_to_sheet_user_lookup[$username_key]))
+			{
+				continue;
+			}
 			$date_key = trim((string) (isset($row['date']) ? $row['date'] : ''));
 			if ($username_key === '' || !$this->is_valid_attendance_date($date_key) || strpos($date_key, $target_month) !== 0)
 			{
@@ -2872,6 +2897,10 @@ class Absen_sheet_sync {
 		{
 			$request = is_array($leave_requests[$i]) ? $leave_requests[$i] : array();
 			$username_key = strtolower(trim((string) (isset($request['username']) ? $request['username'] : '')));
+			if ($username_key !== '' && isset($excluded_web_to_sheet_user_lookup[$username_key]))
+			{
+				continue;
+			}
 			if ($username_key === '')
 			{
 				continue;
@@ -3919,6 +3948,19 @@ class Absen_sheet_sync {
 				'majorDimension' => 'ROWS',
 				'values' => array(array($total_formula))
 			);
+			if (isset($column_letters['keterangan']) && trim((string) $column_letters['keterangan']) !== '')
+			{
+				$keterangan_value = isset($row['keterangan']) ? trim((string) $row['keterangan']) : '';
+				if ($keterangan_value === '')
+				{
+					$keterangan_value = 'BELUM LUNAS';
+				}
+				$batch_updates[] = array(
+					'range' => $this->quote_sheet_title($sheet_title).'!'.$column_letters['keterangan'].$target_row,
+					'majorDimension' => 'ROWS',
+					'values' => array(array($keterangan_value))
+				);
+			}
 
 			$queued_signatures[$signature] = TRUE;
 			if ($date_name_key !== '')
@@ -4020,6 +4062,7 @@ class Absen_sheet_sync {
 		$name_index = (int) $column_indexes['name'];
 		$purpose_index = (int) $column_indexes['purpose'];
 		$kasbon_index = (int) $column_indexes['kasbon'];
+		$keterangan_index = isset($column_indexes['keterangan']) ? (int) $column_indexes['keterangan'] : -1;
 
 		$rows = array();
 		for ($i = 0; $i < count($sheet_rows); $i += 1)
@@ -4030,6 +4073,9 @@ class Absen_sheet_sync {
 			$name_text = $this->cell_value_by_index($row, $name_index);
 			$purpose_text = $this->cell_value_by_index($row, $purpose_index);
 			$amount = $this->parse_money_to_int($this->cell_value_by_index($row, $kasbon_index));
+			$keterangan_text = $keterangan_index >= 0 ? $this->cell_value_by_index($row, $keterangan_index) : '';
+			$keterangan_upper = $this->uppercase_text(trim((string) $keterangan_text));
+			$is_lunas = $keterangan_upper !== '' && strpos($keterangan_upper, 'LUNAS') !== FALSE && strpos($keterangan_upper, 'BELUM') === FALSE;
 			if ($date_text === '' && $name_text === '' && $purpose_text === '' && $amount <= 0)
 			{
 				continue;
@@ -4048,6 +4094,8 @@ class Absen_sheet_sync {
 				'name' => trim((string) $name_text),
 				'purpose' => $normalized_purpose,
 				'amount' => $amount,
+				'keterangan' => $keterangan_upper,
+				'is_lunas' => $is_lunas ? TRUE : FALSE,
 				'signature' => sha1(
 					$this->normalize_loan_sheet_date_signature($date_iso, $date_text).'|'.
 					$this->normalize_loan_sheet_name_signature($name_text).'|'.
@@ -4161,7 +4209,8 @@ class Absen_sheet_sync {
 				'name' => -1,
 				'purpose' => -1,
 				'kasbon' => -1,
-				'total' => -1
+				'total' => -1,
+				'keterangan' => -1
 			);
 			$dibayar_columns = array();
 			for ($col_index = 0; $col_index < count($row); $col_index += 1)
@@ -4196,6 +4245,10 @@ class Absen_sheet_sync {
 				elseif ($columns['total'] < 0 && strpos($cell_token, 'total') !== FALSE)
 				{
 					$columns['total'] = $col_index;
+				}
+				elseif ($columns['keterangan'] < 0 && strpos($cell_token, 'keterangan') !== FALSE)
+				{
+					$columns['keterangan'] = $col_index;
 				}
 
 				$dibayar_match = array();
@@ -4241,7 +4294,8 @@ class Absen_sheet_sync {
 			'name' => 1,
 			'purpose' => 2,
 			'kasbon' => 4,
-			'total' => 10
+			'total' => 10,
+			'keterangan' => 11
 		);
 		foreach ($fallback_columns as $column_key => $fallback_index)
 		{
@@ -7385,6 +7439,80 @@ class Absen_sheet_sync {
 		return trim((string) $name);
 	}
 
+	protected function resolve_attendance_username_candidate_conflict(
+		$row_number,
+		$username_key_from_employee_id,
+		$username_key_from_name,
+		$preferred_attendance_row_by_username = array()
+	)
+	{
+		$row_number_int = (int) $row_number;
+		$id_candidate = strtolower(trim((string) $username_key_from_employee_id));
+		$name_candidate = strtolower(trim((string) $username_key_from_name));
+		$preferred_rows = is_array($preferred_attendance_row_by_username)
+			? $preferred_attendance_row_by_username
+			: array();
+
+		if ($id_candidate === '' && $name_candidate === '')
+		{
+			return '';
+		}
+		if ($id_candidate !== '' && $name_candidate === '')
+		{
+			return $id_candidate;
+		}
+		if ($name_candidate !== '' && $id_candidate === '')
+		{
+			return $name_candidate;
+		}
+		if ($id_candidate === $name_candidate)
+		{
+			return $id_candidate;
+		}
+
+		$id_preferred_row = isset($preferred_rows[$id_candidate]) ? (int) $preferred_rows[$id_candidate] : 0;
+		$name_preferred_row = isset($preferred_rows[$name_candidate]) ? (int) $preferred_rows[$name_candidate] : 0;
+
+		if ($row_number_int > 1)
+		{
+			$id_match_current_row = $id_preferred_row > 1 && $id_preferred_row === $row_number_int;
+			$name_match_current_row = $name_preferred_row > 1 && $name_preferred_row === $row_number_int;
+			if ($id_match_current_row && !$name_match_current_row)
+			{
+				return $id_candidate;
+			}
+			if ($name_match_current_row && !$id_match_current_row)
+			{
+				return $name_candidate;
+			}
+			if ($id_preferred_row > 1 && $name_preferred_row > 1)
+			{
+				$id_distance = abs($id_preferred_row - $row_number_int);
+				$name_distance = abs($name_preferred_row - $row_number_int);
+				if ($id_distance < $name_distance)
+				{
+					return $id_candidate;
+				}
+				if ($name_distance < $id_distance)
+				{
+					return $name_candidate;
+				}
+			}
+		}
+
+		if ($id_preferred_row > 1 && $name_preferred_row <= 1)
+		{
+			return $id_candidate;
+		}
+		if ($name_preferred_row > 1 && $id_preferred_row <= 1)
+		{
+			return $name_candidate;
+		}
+
+		// Fallback: employee_id candidate lebih kuat dibanding pencocokan nama.
+		return $id_candidate;
+	}
+
 	protected function build_database_phone_lookup($account_book = array())
 	{
 		$lookup = array(
@@ -8045,6 +8173,28 @@ class Absen_sheet_sync {
 	protected function reserved_system_usernames()
 	{
 		return array('admin', 'developer', 'bos');
+	}
+
+	protected function attendance_web_to_sheet_excluded_usernames()
+	{
+		$defaults = array('akuntesting');
+		$configured = isset($this->config['attendance_web_to_sheet_excluded_usernames']) &&
+			is_array($this->config['attendance_web_to_sheet_excluded_usernames'])
+			? $this->config['attendance_web_to_sheet_excluded_usernames']
+			: array();
+		$lookup = array();
+		$combined = array_merge($defaults, $configured);
+		for ($i = 0; $i < count($combined); $i += 1)
+		{
+			$username_key = strtolower(trim((string) $combined[$i]));
+			if ($username_key === '')
+			{
+				continue;
+			}
+			$lookup[$username_key] = TRUE;
+		}
+
+		return array_keys($lookup);
 	}
 
 	protected function is_reserved_system_username($username)

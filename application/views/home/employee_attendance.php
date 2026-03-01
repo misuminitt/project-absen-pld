@@ -814,6 +814,7 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 			<div class="mode-tabs">
 				<a href="<?php echo site_url('home/employee_data'); ?>" class="mode-link active">Data Harian</a>
 				<a href="<?php echo site_url('home/employee_data_monthly'); ?>" class="mode-link">Data Bulanan</a>
+				<a href="<?php echo site_url('home/employee_data_emergency'); ?>" class="mode-link">Absen Darurat</a>
 			</div>
 			<?php if (empty($records)): ?>
 				<div class="empty">Belum ada data absensi yang tersimpan.</div>
@@ -1201,6 +1202,27 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 					if (matched) {
 						filteredRows.push(row);
 					}
+				}
+
+				if (keyword !== '') {
+					for (var k = 0; k < rows.length; k += 1) {
+						var keywordMatched = filteredRows.indexOf(rows[k]) !== -1;
+						rows[k].style.display = keywordMatched ? '' : 'none';
+					}
+					assignVisibleRowNumbers(filteredRows);
+
+					if (emptyInfo) {
+						emptyInfo.style.display = filteredRows.length > 0 ? 'none' : 'block';
+					}
+					if (pageMeta) {
+						pageMeta.textContent = filteredRows.length > 0
+							? ('Pencarian semua tanggal: menampilkan ' + filteredRows.length + ' data')
+							: '';
+					}
+					if (pager) {
+						pager.innerHTML = '';
+					}
+					return;
 				}
 
 				var datePages = uniqueDates(filteredRows);

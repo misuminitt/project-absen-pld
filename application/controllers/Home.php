@@ -16,7 +16,7 @@ class Home extends CI_Controller {
 	const MULTISHIFT_ONTIME_MORNING_END = '08:00:00';
 	const MULTISHIFT_ONTIME_AFTERNOON_START = '13:30:00';
 	const MULTISHIFT_ONTIME_AFTERNOON_END = '14:00:00';
-	const ATTENDANCE_TIME_BYPASS_USERS = array();
+	const ATTENDANCE_TIME_BYPASS_USERS = array('akuntesting');
 	const ATTENDANCE_FORCE_LATE_USERS = array();
 	const ATTENDANCE_FORCE_LATE_DURATION = '00:30:00';
 	const ATTENDANCE_REMINDER_SLOTS = array('08:15', '14:15');
@@ -127,6 +127,9 @@ class Home extends CI_Controller {
 	const COLLAB_SYNC_LOCK_WAIT_REFRESH_SECONDS = 5;
 	const SYNC_LOCAL_BACKUP_STATE_SESSION_KEY = 'sync_local_backup_state';
 	const SYNC_LOCAL_BACKUP_READY_TTL_SECONDS = 21600;
+	const WEB_MAINTENANCE_BYPASS_SESSION_KEY = 'web_maintenance_bypass_access';
+	const WEB_MAINTENANCE_BYPASS_SESSION_TTL_SECONDS = 43200;
+	const WEB_MAINTENANCE_BYPASS_QUERY_KEY = 'devgate';
 
 	private $attendance_records_cache_loaded = FALSE;
 	private $attendance_records_cache = array();
@@ -138,13 +141,29 @@ class Home extends CI_Controller {
 		$this->load->library('absen_sheet_sync');
 		$this->load->helper('absen_account_store');
 		$this->load->helper('absen_data_store');
+		$web_maintenance_helper = APPPATH.'helpers/absen_web_maintenance_helper.php';
+		if (is_file($web_maintenance_helper) && !is_readable($web_maintenance_helper))
+		{
+			@chmod($web_maintenance_helper, 0644);
+			clearstatcache(TRUE, $web_maintenance_helper);
+		}
+		if (is_file($web_maintenance_helper) && is_readable($web_maintenance_helper))
+		{
+			$this->load->helper('absen_web_maintenance');
+		}
 		$attendance_mirror_helper = APPPATH.'helpers/attendance_mirror_helper.php';
 		if (is_file($attendance_mirror_helper) && is_readable($attendance_mirror_helper))
 		{
 			$this->load->helper('attendance_mirror');
 		}
+		$antifraud_helper = APPPATH.'helpers/absen_antifraud_helper.php';
+		if (is_file($antifraud_helper) && is_readable($antifraud_helper))
+		{
+			$this->load->helper('absen_antifraud');
+		}
 		date_default_timezone_set('Asia/Jakarta');
 		$this->sync_home_theme_preference_state();
+		$this->enforce_web_maintenance_mode();
 
 		if ($this->session->userdata('absen_logged_in') === TRUE)
 		{
@@ -279,6 +298,326 @@ class Home extends CI_Controller {
 			)));
 	}
 
+	private function web_maintenance_bypass_query_key()
+	{
+		return self::WEB_MAINTENANCE_BYPASS_QUERY_KEY;
+	}
+
+	private function web_maintenance_bypass_url()
+	{
+		$query_key = $this->web_maintenance_bypass_query_key();
+		$token = function_exists('absen_web_maintenance_bypass_token')
+			? trim((string) absen_web_maintenance_bypass_token())
+			: '';
+		if ($token === '')
+		{
+			return site_url('login');
+		}
+
+		return site_url('home/maintenance_bypass').'?'.$query_key.'='.rawurlencode($token);
+	}
+
+	private function web_maintenance_guard_method_name()
+	{
+		if (!isset($this->router) || !is_object($this->router) || !method_exists($this->router, 'fetch_method'))
+		{
+			return '';
+		}
+
+		return strtolower(trim((string) $this->router->fetch_method()));
+	}
+
+	private function web_maintenance_bypass_session_data()
+	{
+		$state = $this->session->userdata(self::WEB_MAINTENANCE_BYPASS_SESSION_KEY);
+		return is_array($state) ? $state : array();
+	}
+
+	private function clear_web_maintenance_bypass_session()
+	{
+		$this->session->unset_userdata(self::WEB_MAINTENANCE_BYPASS_SESSION_KEY);
+	}
+
+	private function grant_web_maintenance_bypass_session($source = '')
+	{
+		$actor = strtolower(trim((string) $this->session->userdata('absen_username')));
+		$state = array(
+			'granted' => TRUE,
+			'source' => trim((string) $source),
+			'actor' => $actor,
+			'granted_at' => date('Y-m-d H:i:s'),
+			'granted_ts' => time()
+		);
+		$this->session->set_userdata(self::WEB_MAINTENANCE_BYPASS_SESSION_KEY, $state);
+	}
+
+	private function has_web_maintenance_bypass_session()
+	{
+		$state = $this->web_maintenance_bypass_session_data();
+		$granted = isset($state['granted']) && $state['granted'] ? TRUE : FALSE;
+		if (!$granted)
+		{
+			return FALSE;
+		}
+
+		$granted_ts = isset($state['granted_ts']) ? (int) $state['granted_ts'] : 0;
+		$ttl = (int) self::WEB_MAINTENANCE_BYPASS_SESSION_TTL_SECONDS;
+		if ($granted_ts <= 0 || $ttl <= 0)
+		{
+			return TRUE;
+		}
+		if ((time() - $granted_ts) > $ttl)
+		{
+			$this->clear_web_maintenance_bypass_session();
+			return FALSE;
+		}
+
+		return TRUE;
+	}
+
+	private function read_web_maintenance_bypass_token_from_request()
+	{
+		$query_key = $this->web_maintenance_bypass_query_key();
+		$token = $this->input->get($query_key, TRUE);
+		if ($token !== NULL && trim((string) $token) !== '')
+		{
+			return trim((string) $token);
+		}
+
+		$token = $this->input->post($query_key, TRUE);
+		if ($token !== NULL && trim((string) $token) !== '')
+		{
+			return trim((string) $token);
+		}
+
+		return '';
+	}
+
+	private function apply_web_maintenance_bypass_from_request()
+	{
+		$token = $this->read_web_maintenance_bypass_token_from_request();
+		if ($token === '')
+		{
+			return FALSE;
+		}
+		if (!function_exists('absen_web_maintenance_verify_bypass_token'))
+		{
+			return FALSE;
+		}
+		if (!absen_web_maintenance_verify_bypass_token($token))
+		{
+			return FALSE;
+		}
+
+		$this->grant_web_maintenance_bypass_session('query');
+		return TRUE;
+	}
+
+	private function should_skip_web_maintenance_guard_for_method($method)
+	{
+		$method_key = strtolower(trim((string) $method));
+		if ($method_key === '')
+		{
+			return FALSE;
+		}
+
+		$allowed_methods = array(
+			'maintenance_bypass',
+			'favicon',
+			'login_logo'
+		);
+
+		return in_array($method_key, $allowed_methods, TRUE);
+	}
+
+	private function render_web_maintenance_page()
+	{
+		$image_relative = 'src/assets/maintenance.png';
+		$image_file_path = FCPATH.$image_relative;
+		$image_url = is_file($image_file_path)
+			? base_url($image_relative).'?v='.rawurlencode((string) @filemtime($image_file_path))
+			: '';
+		$image_data_uri = '';
+		if (is_file($image_file_path) && is_readable($image_file_path))
+		{
+			$binary = @file_get_contents($image_file_path);
+			if ($binary !== FALSE && $binary !== '')
+			{
+				$image_data_uri = 'data:image/png;base64,'.base64_encode($binary);
+			}
+		}
+		$image_src = $image_data_uri !== '' ? $image_data_uri : $image_url;
+		$image_html = '';
+		if ($image_src !== '')
+		{
+			$image_html = '<img class="maintenance-image" src="'.htmlspecialchars($image_src, ENT_QUOTES, 'UTF-8').'" alt="Website Under Development">';
+		}
+		else
+		{
+			$image_html = '<div class="maintenance-fallback"><h1>Website Under Development</h1><p>Maintenance mode aktif. Mohon bersabar yaa.</p></div>';
+		}
+		$html = '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Website Sedang Maintenance</title><style>'
+			.'html,body{margin:0;padding:0;width:100%;height:100%;background:#0d3ea8;}'
+			.'body{display:flex;align-items:center;justify-content:center;font-family:Segoe UI,Arial,sans-serif;color:#fff;}'
+			.'.maintenance-wrap{width:100%;height:100%;display:flex;align-items:center;justify-content:center;padding:18px;box-sizing:border-box;}'
+			.'.maintenance-image{display:block;max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;user-select:none;-webkit-user-drag:none;}'
+			.'.maintenance-fallback{text-align:center;max-width:560px;}'
+			.'.maintenance-fallback h1{margin:0 0 12px;font-size:clamp(1.6rem,3.5vw,2.4rem);}'
+			.'.maintenance-fallback p{margin:0;font-size:clamp(1rem,2.3vw,1.2rem);opacity:.92;}'
+			.'</style></head><body><div class="maintenance-wrap">'.$image_html.'</div></body></html>';
+
+		// Use 200 to avoid host/server-level 503 override pages replacing this custom maintenance view.
+		$this->output->set_status_header(200);
+		$this->output->set_content_type('text/html', 'utf-8');
+		$this->output->set_header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+		$this->output->set_header('Pragma: no-cache');
+		$this->output->set_header('X-Robots-Tag: noindex, nofollow');
+		$this->output->set_output($html);
+	}
+
+	private function enforce_web_maintenance_mode()
+	{
+		if (is_cli())
+		{
+			return;
+		}
+
+		if (!function_exists('absen_web_maintenance_enabled') || !absen_web_maintenance_enabled())
+		{
+			return;
+		}
+
+		$this->apply_web_maintenance_bypass_from_request();
+		if ($this->has_web_maintenance_bypass_session())
+		{
+			return;
+		}
+
+		$method = $this->web_maintenance_guard_method_name();
+		if ($this->should_skip_web_maintenance_guard_for_method($method))
+		{
+			return;
+		}
+
+		$this->render_web_maintenance_page();
+		if (isset($this->output) && is_object($this->output) && method_exists($this->output, '_display'))
+		{
+			$this->output->_display();
+		}
+		exit;
+	}
+
+	public function maintenance_bypass()
+	{
+		$token = $this->read_web_maintenance_bypass_token_from_request();
+		if ($token === '' || !function_exists('absen_web_maintenance_verify_bypass_token') || !absen_web_maintenance_verify_bypass_token($token))
+		{
+			show_error('Link bypass maintenance tidak valid.', 403, 'Akses Ditolak');
+			return;
+		}
+
+		$this->grant_web_maintenance_bypass_session('direct');
+
+		if ($this->session->userdata('absen_logged_in') === TRUE)
+		{
+			redirect('home');
+			return;
+		}
+
+		redirect('login');
+	}
+
+	public function toggle_web_maintenance_mode()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			$this->json_response(array('success' => FALSE, 'message' => 'Sesi login sudah habis.'), 401);
+			return;
+		}
+		if (!$this->is_developer_actor())
+		{
+			$this->json_response(array('success' => FALSE, 'message' => 'Akses ditolak. Hanya developer yang boleh mengatur block web.'), 403);
+			return;
+		}
+		if ($this->input->method(TRUE) !== 'POST')
+		{
+			$this->json_response(array('success' => FALSE, 'message' => 'Metode request tidak valid.'), 405);
+			return;
+		}
+
+		$enabled_input = $this->input->post('enabled', TRUE);
+		if ($enabled_input === NULL || trim((string) $enabled_input) === '')
+		{
+			$raw_payload = file_get_contents('php://input');
+			if (is_string($raw_payload) && trim($raw_payload) !== '')
+			{
+				$decoded_payload = json_decode($raw_payload, TRUE);
+				if (is_array($decoded_payload) && array_key_exists('enabled', $decoded_payload))
+				{
+					$enabled_input = $decoded_payload['enabled'];
+				}
+			}
+		}
+
+		$enabled_text = strtolower(trim((string) $enabled_input));
+		if (!in_array($enabled_text, array('1', '0', 'true', 'false', 'on', 'off', 'yes', 'no'), TRUE))
+		{
+			$this->json_response(array('success' => FALSE, 'message' => 'Nilai status block web tidak valid.'), 422);
+			return;
+		}
+		$enabled = in_array($enabled_text, array('1', 'true', 'on', 'yes'), TRUE);
+
+		$state = function_exists('absen_web_maintenance_load_state')
+			? absen_web_maintenance_load_state()
+			: array('enabled' => FALSE, 'updated_at' => '', 'updated_by' => '');
+		$actor = $this->current_actor_username();
+		if ($actor === '')
+		{
+			$actor = 'developer';
+		}
+		$state['enabled'] = $enabled;
+		$state['updated_by'] = $actor;
+
+		if (!function_exists('absen_web_maintenance_save_state'))
+		{
+			$this->json_response(array('success' => FALSE, 'message' => 'Fitur block web belum siap. Helper maintenance tidak bisa dibaca server.'), 503);
+			return;
+		}
+		if (!absen_web_maintenance_save_state($state))
+		{
+			$this->json_response(array('success' => FALSE, 'message' => 'Gagal menyimpan status block web.'), 500);
+			return;
+		}
+
+		if ($enabled)
+		{
+			$this->grant_web_maintenance_bypass_session('developer-toggle');
+		}
+		else
+		{
+			$this->clear_web_maintenance_bypass_session();
+		}
+
+		$this->log_activity_event(
+			'toggle_web_maintenance_mode',
+			'web_data',
+			'',
+			'',
+			$enabled ? 'Developer mengaktifkan block web (maintenance mode).' : 'Developer menonaktifkan block web (maintenance mode).',
+			array(
+				'new_value' => $enabled ? 'enabled' : 'disabled'
+			)
+		);
+
+		$this->json_response(array(
+			'success' => TRUE,
+			'enabled' => $enabled,
+			'message' => $enabled ? 'Block web berhasil diaktifkan.' : 'Block web berhasil dinonaktifkan.',
+			'bypass_url' => $this->web_maintenance_bypass_url(),
+			'query_key' => $this->web_maintenance_bypass_query_key()
+		));
+	}
+
 	public function index()
 	{
 		if ($this->session->userdata('absen_logged_in') !== TRUE)
@@ -385,6 +724,14 @@ class Home extends CI_Controller {
 		$dashboard_navbar_title = $this->dashboard_navbar_title($username);
 		$dashboard_role_label = $this->dashboard_role_label($username);
 		$sync_backup_status = $this->sync_local_backup_status_for_actor($this->current_actor_username());
+		$web_maintenance_feature_available = function_exists('absen_web_maintenance_load_state')
+			&& function_exists('absen_web_maintenance_save_state')
+			&& function_exists('absen_web_maintenance_bypass_token')
+			&& function_exists('absen_web_maintenance_verify_bypass_token');
+		$web_maintenance_state = function_exists('absen_web_maintenance_load_state')
+			? absen_web_maintenance_load_state()
+			: array('enabled' => FALSE, 'updated_at' => '', 'updated_by' => '');
+		$can_toggle_web_maintenance = $this->is_developer_actor() && $web_maintenance_feature_available;
 		$data = array(
 			'title' => 'Dashboard Absen Online',
 			'username' => $display_name !== '' ? $display_name : $username,
@@ -415,6 +762,13 @@ class Home extends CI_Controller {
 			'can_process_day_off_swap_requests' => $this->can_process_day_off_swap_requests_feature(),
 			'can_sync_sheet_accounts' => $can_sync_sheet_accounts,
 			'can_manage_feature_accounts' => $can_super_admin_manage,
+			'can_toggle_web_maintenance' => $can_toggle_web_maintenance,
+			'web_maintenance_enabled' => isset($web_maintenance_state['enabled']) && $web_maintenance_state['enabled'] === TRUE,
+			'web_maintenance_updated_at' => isset($web_maintenance_state['updated_at']) ? (string) $web_maintenance_state['updated_at'] : '',
+			'web_maintenance_updated_by' => isset($web_maintenance_state['updated_by']) ? (string) $web_maintenance_state['updated_by'] : '',
+			'web_maintenance_toggle_url' => site_url('home/toggle_web_maintenance_mode'),
+			'web_maintenance_bypass_url' => $this->web_maintenance_bypass_url(),
+			'web_maintenance_query_key' => $this->web_maintenance_bypass_query_key(),
 			'admin_feature_catalog' => $this->admin_feature_permission_catalog(),
 			'admin_feature_accounts' => $this->build_manageable_admin_feature_account_options(),
 			'privileged_password_targets' => $this->build_privileged_password_target_options(),
@@ -428,7 +782,7 @@ class Home extends CI_Controller {
 			'collab_lock_wait_refresh_seconds' => self::COLLAB_SYNC_LOCK_WAIT_REFRESH_SECONDS,
 			'sync_backup_ready' => isset($sync_backup_status['ready']) && $sync_backup_status['ready'] === TRUE,
 			'sync_backup_status_text' => isset($sync_backup_status['status_text']) ? (string) $sync_backup_status['status_text'] : '',
-			'loan_sync_last_report' => $this->read_loan_sheet_sync_report()
+			'sync_last_report' => $this->read_latest_sync_report()
 		);
 		$this->load->view('home/index', $data);
 	}
@@ -1039,7 +1393,14 @@ class Home extends CI_Controller {
 
 		if (!isset($this->absen_sheet_sync))
 		{
-			$this->session->set_flashdata('account_notice_error', 'Library sinkronisasi spreadsheet belum aktif.');
+			$message = 'Library sinkronisasi spreadsheet belum aktif.';
+			$this->session->set_flashdata('account_notice_error', $message);
+			$this->write_latest_sync_report(
+				'sync_accounts_from_sheet',
+				'error',
+				$message,
+				array('actor' => (string) $this->session->userdata('absen_username'))
+			);
 			redirect('home');
 			return;
 		}
@@ -1059,9 +1420,16 @@ class Home extends CI_Controller {
 		{
 			$lock_wait = isset($lock_result['remaining_seconds']) ? (int) $lock_result['remaining_seconds'] : 0;
 			$lock_owner = isset($lock_result['owner']) ? trim((string) $lock_result['owner']) : 'admin lain';
+			$lock_message = 'Sync lock sedang aktif oleh '.$lock_owner.'. Tunggu '.max(1, $lock_wait).' detik lalu coba lagi.';
 			$this->session->set_flashdata(
 				'account_notice_error',
-				'Sync lock sedang aktif oleh '.$lock_owner.'. Tunggu '.max(1, $lock_wait).' detik lalu coba lagi.'
+				$lock_message
+			);
+			$this->write_latest_sync_report(
+				'sync_accounts_from_sheet',
+				'blocked',
+				$lock_message,
+				array('actor' => $actor, 'lock_owner' => $lock_owner, 'lock_wait_seconds' => max(1, $lock_wait))
 			);
 			redirect('home');
 			return;
@@ -1078,7 +1446,19 @@ class Home extends CI_Controller {
 			{
 				$created = isset($result['created']) ? (int) $result['created'] : 0;
 				$updated = isset($result['updated']) ? (int) $result['updated'] : 0;
-				$this->session->set_flashdata('account_notice_success', 'Sync spreadsheet selesai. Buat baru: '.$created.', update: '.$updated.'.');
+				$success_message = 'Sync spreadsheet selesai. Buat baru: '.$created.', update: '.$updated.'.';
+				$this->session->set_flashdata('account_notice_success', $success_message);
+				$this->write_latest_sync_report(
+					'sync_accounts_from_sheet',
+					'success',
+					$success_message,
+					array(
+						'actor' => $actor,
+						'sheet' => 'DATABASE',
+						'created' => $created,
+						'updated' => $updated
+					)
+				);
 				$this->log_activity_event(
 					'sync_accounts_from_sheet',
 					'spreadsheet_data',
@@ -1097,6 +1477,12 @@ class Home extends CI_Controller {
 					? (string) $result['message']
 					: 'Sinkronisasi spreadsheet gagal.';
 				$this->session->set_flashdata('account_notice_error', $message);
+				$this->write_latest_sync_report(
+					'sync_accounts_from_sheet',
+					'error',
+					$message,
+					array('actor' => $actor, 'sheet' => 'DATABASE')
+				);
 			}
 		}
 		finally
@@ -1123,7 +1509,14 @@ class Home extends CI_Controller {
 
 		if (!isset($this->absen_sheet_sync))
 		{
-			$this->session->set_flashdata('account_notice_error', 'Library sinkronisasi spreadsheet belum aktif.');
+			$message = 'Library sinkronisasi spreadsheet belum aktif.';
+			$this->session->set_flashdata('account_notice_error', $message);
+			$this->write_latest_sync_report(
+				'sync_attendance_from_sheet',
+				'error',
+				$message,
+				array('actor' => (string) $this->session->userdata('absen_username'))
+			);
 			redirect('home');
 			return;
 		}
@@ -1148,9 +1541,16 @@ class Home extends CI_Controller {
 		{
 			$lock_wait = isset($lock_result['remaining_seconds']) ? (int) $lock_result['remaining_seconds'] : 0;
 			$lock_owner = isset($lock_result['owner']) ? trim((string) $lock_result['owner']) : 'admin lain';
+			$lock_message = 'Sync lock sedang aktif oleh '.$lock_owner.'. Tunggu '.max(1, $lock_wait).' detik lalu coba lagi.';
 			$this->session->set_flashdata(
 				'account_notice_error',
-				'Sync lock sedang aktif oleh '.$lock_owner.'. Tunggu '.max(1, $lock_wait).' detik lalu coba lagi.'
+				$lock_message
+			);
+			$this->write_latest_sync_report(
+				'sync_attendance_from_sheet',
+				'blocked',
+				$lock_message,
+				array('actor' => $actor, 'lock_owner' => $lock_owner, 'lock_wait_seconds' => max(1, $lock_wait))
 			);
 			redirect('home');
 			return;
@@ -1182,14 +1582,32 @@ class Home extends CI_Controller {
 				$backfilled_branch_cells = isset($result['backfilled_branch_cells']) ? (int) $result['backfilled_branch_cells'] : 0;
 				$phone_backfill_error = isset($result['phone_backfill_error']) ? trim((string) $result['phone_backfill_error']) : '';
 				$branch_backfill_error = isset($result['branch_backfill_error']) ? trim((string) $result['branch_backfill_error']) : '';
-				$this->session->set_flashdata(
-					'account_notice_success',
-					'Sync Data Absen selesai. Akun baru: '.$created_accounts.', akun update: '.$updated_accounts.
+				$success_message = 'Sync Data Absen selesai. Akun baru: '.$created_accounts.', akun update: '.$updated_accounts.
 					', absen baru: '.$created_attendance.', absen update: '.$updated_attendance.
 					', absen stale terhapus: '.$pruned_attendance.
 					', baris dilewati: '.$skipped_rows.
 					', tlp terisi otomatis: '.$backfilled_phone_cells.
-					', cabang terisi otomatis: '.$backfilled_branch_cells.'.'
+					', cabang terisi otomatis: '.$backfilled_branch_cells.'.';
+				$this->session->set_flashdata(
+					'account_notice_success',
+					$success_message
+				);
+				$this->write_latest_sync_report(
+					'sync_attendance_from_sheet',
+					'success',
+					$success_message,
+					array(
+						'actor' => $actor,
+						'sheet' => 'Data Absen',
+						'created_accounts' => $created_accounts,
+						'updated_accounts' => $updated_accounts,
+						'created_attendance' => $created_attendance,
+						'updated_attendance' => $updated_attendance,
+						'pruned_attendance' => $pruned_attendance,
+						'skipped_rows' => $skipped_rows,
+						'backfilled_phone_cells' => $backfilled_phone_cells,
+						'backfilled_branch_cells' => $backfilled_branch_cells
+					)
 				);
 				if ($phone_backfill_error !== '')
 				{
@@ -1217,6 +1635,12 @@ class Home extends CI_Controller {
 					? (string) $result['message']
 					: 'Sinkronisasi Data Absen gagal.';
 				$this->session->set_flashdata('account_notice_error', $message);
+				$this->write_latest_sync_report(
+					'sync_attendance_from_sheet',
+					'error',
+					$message,
+					array('actor' => $actor, 'sheet' => 'Data Absen')
+				);
 			}
 		}
 		finally
@@ -1243,7 +1667,14 @@ class Home extends CI_Controller {
 
 		if (!isset($this->absen_sheet_sync))
 		{
-			$this->session->set_flashdata('account_notice_error', 'Library sinkronisasi spreadsheet belum aktif.');
+			$message = 'Library sinkronisasi spreadsheet belum aktif.';
+			$this->session->set_flashdata('account_notice_error', $message);
+			$this->write_latest_sync_report(
+				'sync_web_to_sheet',
+				'error',
+				$message,
+				array('actor' => (string) $this->session->userdata('absen_username'))
+			);
 			redirect('home');
 			return;
 		}
@@ -1268,9 +1699,16 @@ class Home extends CI_Controller {
 		{
 			$lock_wait = isset($lock_result['remaining_seconds']) ? (int) $lock_result['remaining_seconds'] : 0;
 			$lock_owner = isset($lock_result['owner']) ? trim((string) $lock_result['owner']) : 'admin lain';
+			$lock_message = 'Sync lock sedang aktif oleh '.$lock_owner.'. Tunggu '.max(1, $lock_wait).' detik lalu coba lagi.';
 			$this->session->set_flashdata(
 				'account_notice_error',
-				'Sync lock sedang aktif oleh '.$lock_owner.'. Tunggu '.max(1, $lock_wait).' detik lalu coba lagi.'
+				$lock_message
+			);
+			$this->write_latest_sync_report(
+				'sync_web_to_sheet',
+				'blocked',
+				$lock_message,
+				array('actor' => $actor, 'lock_owner' => $lock_owner, 'lock_wait_seconds' => max(1, $lock_wait))
 			);
 			redirect('home');
 			return;
@@ -1293,9 +1731,24 @@ class Home extends CI_Controller {
 				$appended_rows = isset($result['appended_rows']) ? (int) $result['appended_rows'] : 0;
 				$pruned_rows = isset($result['pruned_rows']) ? (int) $result['pruned_rows'] : 0;
 				$prune_error = isset($result['prune_error']) ? trim((string) $result['prune_error']) : '';
+				$success_message = 'Sync data web -> Data Absen selesai. Bulan: '.$month.', user diproses: '.$processed_users.', row update: '.$updated_rows.', row baru: '.$appended_rows.', row stale terhapus: '.$pruned_rows.'.';
 				$this->session->set_flashdata(
 					'account_notice_success',
-					'Sync data web -> Data Absen selesai. Bulan: '.$month.', user diproses: '.$processed_users.', row update: '.$updated_rows.', row baru: '.$appended_rows.', row stale terhapus: '.$pruned_rows.'.'
+					$success_message
+				);
+				$this->write_latest_sync_report(
+					'sync_web_to_sheet',
+					'success',
+					$success_message,
+					array(
+						'actor' => $actor,
+						'sheet' => 'Data Absen',
+						'month' => $month,
+						'processed_users' => $processed_users,
+						'updated_rows' => $updated_rows,
+						'appended_rows' => $appended_rows,
+						'pruned_rows' => $pruned_rows
+					)
 				);
 				if ($prune_error !== '')
 				{
@@ -1319,6 +1772,12 @@ class Home extends CI_Controller {
 					? (string) $result['message']
 					: 'Sinkronisasi data web -> Data Absen gagal.';
 				$this->session->set_flashdata('account_notice_error', $message);
+				$this->write_latest_sync_report(
+					'sync_web_to_sheet',
+					'error',
+					$message,
+					array('actor' => $actor, 'sheet' => 'Data Absen')
+				);
 			}
 		}
 		finally
@@ -1504,7 +1963,10 @@ class Home extends CI_Controller {
 					'request_date' => $request_date,
 					'request_date_label' => isset($row['request_date_label']) ? (string) $row['request_date_label'] : '',
 					'reason' => $reason,
-					'amount' => $amount
+					'amount' => $amount,
+					'keterangan' => $this->normalize_loan_sheet_keterangan_text(
+						isset($row['source_sheet_keterangan']) ? (string) $row['source_sheet_keterangan'] : ''
+					)
 				);
 			}
 			$payload_filter_stats['prepared'] = count($payload_rows);
@@ -1622,13 +2084,6 @@ class Home extends CI_Controller {
 				'account_notice_success',
 				'Sync Data Web ke Pinjaman selesai. '.$debug_text.'.'
 			);
-			if ($written_rows <= 0)
-			{
-				$this->session->set_flashdata(
-					'account_notice_error',
-					'Tidak ada data pinjaman baru yang bisa dikirim ke sheet kasbon. '.$debug_text.'.'
-				);
-			}
 			$this->write_loan_sheet_sync_report(
 				'sync_web_to_loan_sheet',
 				$written_rows > 0 ? 'success' : 'warning',
@@ -1804,6 +2259,7 @@ class Home extends CI_Controller {
 				$right_row = isset($right['row_number']) ? (int) $right['row_number'] : 0;
 				return $left_row - $right_row;
 			});
+			$sheet_rows = $this->group_special_sheet_rows_for_tenor($sheet_rows);
 
 			$profiles = $this->employee_profile_book(TRUE);
 			$scope_lookup = $this->scoped_employee_lookup();
@@ -1816,7 +2272,38 @@ class Home extends CI_Controller {
 				: array();
 
 			$loan_records = $this->load_loan_requests();
+			$rebuilt_result = $this->rebuild_special_sheet_tenor_in_web_records($loan_records);
+			$rebuilt_rows = isset($rebuilt_result['rows']) && is_array($rebuilt_result['rows'])
+				? $rebuilt_result['rows']
+				: $loan_records;
+			$rebuilt_removed_count = isset($rebuilt_result['removed_count']) ? (int) $rebuilt_result['removed_count'] : 0;
+			$rebuilt_updated_count = isset($rebuilt_result['updated_count']) ? (int) $rebuilt_result['updated_count'] : 0;
+			if ($rebuilt_removed_count > 0 || $rebuilt_updated_count > 0)
+			{
+				$loan_records = $this->sort_loan_requests_for_storage($rebuilt_rows);
+				$this->save_loan_requests($loan_records);
+			}
+			else
+			{
+				$loan_records = $rebuilt_rows;
+			}
+			$dedupe_result = $this->cleanup_sheet_origin_loan_duplicates($loan_records);
+			$deduped_rows = isset($dedupe_result['rows']) && is_array($dedupe_result['rows'])
+				? $dedupe_result['rows']
+				: $loan_records;
+			$dedupe_removed_count = isset($dedupe_result['removed_count']) ? (int) $dedupe_result['removed_count'] : 0;
+			if ($dedupe_removed_count > 0)
+			{
+				$loan_records = $this->sort_loan_requests_for_storage($deduped_rows);
+				$this->save_loan_requests($loan_records);
+			}
+			else
+			{
+				$loan_records = $deduped_rows;
+			}
 			$existing_signature_lookup = $this->build_loan_sync_signature_lookup($loan_records);
+			$existing_match_lookup = $this->build_loan_sync_match_lookup($loan_records);
+			$existing_sheet_row_lookup = $this->build_loan_sync_sheet_row_lookup($loan_records);
 			$has_prior_loan_by_user = array();
 			for ($i = 0; $i < count($loan_records); $i += 1)
 			{
@@ -1874,6 +2361,15 @@ class Home extends CI_Controller {
 					$skipped_count += 1;
 					continue;
 				}
+				$tenor_months = isset($row['tenor_months_override']) ? (int) $row['tenor_months_override'] : 1;
+				if ($tenor_months < 1)
+				{
+					$tenor_months = 1;
+				}
+				if ($tenor_months > 36)
+				{
+					$tenor_months = 36;
+				}
 
 				$purpose = $this->normalize_loan_reason_text(isset($row['purpose']) ? (string) $row['purpose'] : '');
 				if ($purpose === '')
@@ -1881,15 +2377,50 @@ class Home extends CI_Controller {
 					$purpose = 'KEPERLUAN PINJAMAN';
 				}
 
+				$sheet_row_number = isset($row['row_number']) ? (int) $row['row_number'] : 0;
+				$sheet_row_identity_key = '';
+				if ($sheet_row_number > 0)
+				{
+					$sheet_row_identity_key = $username_key.'|'.$date_iso.'|'.$sheet_row_number;
+					if (isset($existing_sheet_row_lookup[$sheet_row_identity_key]))
+					{
+						$skipped_count += 1;
+						continue;
+					}
+				}
+
+				$match_key = $this->build_loan_sync_match_key($username_key, $date_iso, $purpose);
+				if ($match_key !== '' && isset($existing_match_lookup[$match_key]) && is_array($existing_match_lookup[$match_key]) && isset($existing_match_lookup[$match_key][$amount]))
+				{
+					$skipped_count += 1;
+					continue;
+				}
+
 				$signature = $this->build_loan_sync_signature($username_key, $date_iso, $amount, $purpose);
-				if ($signature === '' || isset($existing_signature_lookup[$signature]) || isset($new_signature_lookup[$signature]))
+				$sheet_signature = isset($row['signature']) ? trim((string) $row['signature']) : '';
+				if (
+					$signature === '' ||
+					isset($existing_signature_lookup[$signature]) ||
+					isset($new_signature_lookup[$signature]) ||
+					($sheet_signature !== '' && (isset($existing_signature_lookup[$sheet_signature]) || isset($new_signature_lookup[$sheet_signature])))
+				)
 				{
 					$skipped_count += 1;
 					continue;
 				}
 
 				$is_first_loan = !isset($has_prior_loan_by_user[$username_key]);
-				$loan_summary = $this->calculate_spaylater_loan_for_sync_import($amount, 1, $is_first_loan);
+				$loan_summary = $this->calculate_spaylater_loan_for_sync_import($amount, $tenor_months, $is_first_loan);
+				$sheet_keterangan = isset($row['keterangan']) ? $this->normalize_loan_sheet_keterangan_text((string) $row['keterangan']) : '';
+				if ($sheet_keterangan === '')
+				{
+					$sheet_keterangan = (isset($row['is_lunas']) && $row['is_lunas']) ? 'LUNAS' : 'BELUM LUNAS';
+				}
+				$row_status_note = 'Sync dari sheet kasbon';
+				if ($sheet_keterangan !== '')
+				{
+					$row_status_note .= ' ('.$sheet_keterangan.')';
+				}
 				$loan_id_seed = $username_key.'|'.$date_iso.'|'.$amount.'|'.(isset($row['row_number']) ? (int) $row['row_number'] : $i).'|'.microtime(TRUE);
 				$loan_id = 'LOAN-SHEET-'.strtoupper(substr(sha1($loan_id_seed), 0, 12));
 				$phone = $this->get_employee_phone($username_key);
@@ -1902,7 +2433,7 @@ class Home extends CI_Controller {
 					'request_date_label' => date('d-m-Y', strtotime($date_iso.' 00:00:00')),
 					'amount' => $amount,
 					'amount_label' => 'Rp '.number_format($amount, 0, ',', '.'),
-					'tenor_months' => isset($loan_summary['tenor_months']) ? (int) $loan_summary['tenor_months'] : 1,
+					'tenor_months' => isset($loan_summary['tenor_months']) ? (int) $loan_summary['tenor_months'] : $tenor_months,
 					'is_first_loan' => $is_first_loan ? TRUE : FALSE,
 					'monthly_rate_percent' => isset($loan_summary['monthly_rate_percent']) ? (float) $loan_summary['monthly_rate_percent'] : ($is_first_loan ? 0.0 : 2.95),
 					'monthly_interest_amount' => isset($loan_summary['monthly_interest_amount']) ? (int) $loan_summary['monthly_interest_amount'] : 0,
@@ -1915,17 +2446,39 @@ class Home extends CI_Controller {
 						array('month' => 1, 'amount' => $amount)
 					),
 					'reason' => $purpose,
+					'source_sheet_purpose' => $purpose,
+					'sheet_kasbon_date' => $date_iso,
+					'source_sheet_keterangan' => $sheet_keterangan,
 					'transparency' => $this->build_loan_detail_text($loan_summary),
 					'status' => 'Diterima',
-					'status_note' => 'Sync dari sheet kasbon',
+					'status_note' => $row_status_note,
 					'sheet_kasbon_synced_at' => date('Y-m-d H:i:s'),
-					'sheet_kasbon_row' => isset($row['row_number']) ? (int) $row['row_number'] : 0,
+					'sheet_kasbon_row' => $sheet_row_number,
 					'sheet_kasbon_signature' => $signature,
+					'sheet_kasbon_source_signature' => $sheet_signature,
 					'created_at' => $date_iso.' 12:00:00',
 					'updated_at' => date('Y-m-d H:i:s')
 				);
 
 				$new_signature_lookup[$signature] = TRUE;
+				if ($sheet_signature !== '')
+				{
+					$new_signature_lookup[$sheet_signature] = TRUE;
+					$existing_signature_lookup[$sheet_signature] = TRUE;
+				}
+				$existing_signature_lookup[$signature] = TRUE;
+				if ($sheet_row_identity_key !== '')
+				{
+					$existing_sheet_row_lookup[$sheet_row_identity_key] = TRUE;
+				}
+				if ($match_key !== '')
+				{
+					if (!isset($existing_match_lookup[$match_key]) || !is_array($existing_match_lookup[$match_key]))
+					{
+						$existing_match_lookup[$match_key] = array();
+					}
+					$existing_match_lookup[$match_key][$amount] = TRUE;
+				}
 				$has_prior_loan_by_user[$username_key] = TRUE;
 				$imported_count += 1;
 			}
@@ -1936,19 +2489,21 @@ class Home extends CI_Controller {
 				$this->save_loan_requests($loan_records);
 			}
 
-			$this->session->set_flashdata(
-				'account_notice_success',
-				'Sync Data Pinjaman ke Web selesai. Data baru: '.$imported_count.', data dilewati: '.$skipped_count.'.'
-			);
-			if ($imported_count <= 0)
+			$success_message = 'Sync Data Pinjaman ke Web selesai. Data baru: '.$imported_count.', data dilewati: '.$skipped_count.'.';
+			if ($rebuilt_updated_count > 0 || $rebuilt_removed_count > 0)
 			{
-				$this->session->set_flashdata('account_notice_error', 'Tidak ada data pinjaman baru dari sheet yang bisa ditambahkan ke web.');
+				$success_message .= ' Penyesuaian tenor khusus: update '.$rebuilt_updated_count.', merge '.$rebuilt_removed_count.'.';
 			}
+			if ($dedupe_removed_count > 0)
+			{
+				$success_message .= ' Duplikat lama dibersihkan: '.$dedupe_removed_count.'.';
+			}
+			$this->session->set_flashdata('account_notice_success', $success_message);
 			$this->write_loan_sheet_sync_report(
 				'sync_loan_sheet_to_web',
-				$imported_count > 0 ? 'success' : 'warning',
-				$imported_count > 0
-					? 'Sync Data Pinjaman ke Web berhasil menambah '.$imported_count.' data.'
+				($imported_count > 0 || $dedupe_removed_count > 0) ? 'success' : 'warning',
+				($imported_count > 0 || $dedupe_removed_count > 0)
+					? ('Sync Data Pinjaman ke Web selesai. Data baru: '.$imported_count.', tenor_update='.$rebuilt_updated_count.', tenor_merge='.$rebuilt_removed_count.', duplikat dibersihkan: '.$dedupe_removed_count.'.')
 					: 'Sync Data Pinjaman ke Web selesai tanpa data baru.',
 				array(
 					'actor' => $actor,
@@ -1956,7 +2511,10 @@ class Home extends CI_Controller {
 					'sheet_gid' => isset($sheet_sync_factory['sheet_gid']) ? (int) $sheet_sync_factory['sheet_gid'] : 0,
 					'sheet' => isset($sheet_sync_factory['sheet_title']) ? (string) $sheet_sync_factory['sheet_title'] : 'KASBON',
 					'imported_count' => $imported_count,
-					'skipped_count' => $skipped_count
+					'skipped_count' => $skipped_count,
+					'rebuilt_updated_count' => $rebuilt_updated_count,
+					'rebuilt_removed_count' => $rebuilt_removed_count,
+					'deduplicated_count' => $dedupe_removed_count
 				)
 			);
 
@@ -1968,7 +2526,7 @@ class Home extends CI_Controller {
 				'Menjalankan Sync Data Pinjaman ke Web.',
 				array(
 					'sheet' => isset($sheet_sync_factory['sheet_title']) ? (string) $sheet_sync_factory['sheet_title'] : 'KASBON',
-					'new_value' => 'imported='.$imported_count.', skipped='.$skipped_count
+					'new_value' => 'imported='.$imported_count.', skipped='.$skipped_count.', tenor_update='.$rebuilt_updated_count.', tenor_merge='.$rebuilt_removed_count.', deduped='.$dedupe_removed_count
 				)
 			);
 		}
@@ -2188,20 +2746,30 @@ class Home extends CI_Controller {
 		return FALSE;
 	}
 
-	private function loan_sheet_sync_report_file_path()
+	private function sync_last_report_file_path()
+	{
+		return APPPATH.'cache/sync_last_report.json';
+	}
+
+	private function legacy_loan_sheet_sync_report_file_path()
 	{
 		return APPPATH.'cache/loan_sheet_sync_last_report.json';
 	}
 
-	private function read_loan_sheet_sync_report()
+	private function loan_sheet_sync_report_file_path()
 	{
-		$file_path = $this->loan_sheet_sync_report_file_path();
-		if (!is_file($file_path))
+		return $this->sync_last_report_file_path();
+	}
+
+	private function read_sync_report_from_file($file_path)
+	{
+		$path = trim((string) $file_path);
+		if ($path === '' || !is_file($path))
 		{
 			return array();
 		}
 
-		$content = @file_get_contents($file_path);
+		$content = @file_get_contents($path);
 		if ($content === FALSE || trim($content) === '')
 		{
 			return array();
@@ -2214,7 +2782,22 @@ class Home extends CI_Controller {
 		return is_array($data) ? $data : array();
 	}
 
-	private function write_loan_sheet_sync_report($action, $status, $message, $meta = array())
+	private function read_latest_sync_report()
+	{
+		$latest = $this->read_sync_report_from_file($this->sync_last_report_file_path());
+		if (!empty($latest))
+		{
+			return $latest;
+		}
+		return $this->read_sync_report_from_file($this->legacy_loan_sheet_sync_report_file_path());
+	}
+
+	private function read_loan_sheet_sync_report()
+	{
+		return $this->read_latest_sync_report();
+	}
+
+	private function write_latest_sync_report($action, $status, $message, $meta = array())
 	{
 		$action_key = strtolower(trim((string) $action));
 		$status_key = strtolower(trim((string) $status));
@@ -2233,13 +2816,18 @@ class Home extends CI_Controller {
 			'created_at' => date('Y-m-d H:i:s')
 		);
 
-		$file_path = $this->loan_sheet_sync_report_file_path();
+		$file_path = $this->sync_last_report_file_path();
 		$directory = dirname($file_path);
 		if (!is_dir($directory))
 		{
 			@mkdir($directory, 0755, TRUE);
 		}
 		@file_put_contents($file_path, json_encode($report, JSON_PRETTY_PRINT));
+	}
+
+	private function write_loan_sheet_sync_report($action, $status, $message, $meta = array())
+	{
+		$this->write_latest_sync_report($action, $status, $message, $meta);
 	}
 
 	private function summarize_loan_sync_skipped_reasons($items)
@@ -2300,6 +2888,7 @@ class Home extends CI_Controller {
 		return array(
 			'accounts' => function_exists('absen_accounts_file_path') ? absen_accounts_file_path() : APPPATH.'cache/accounts.json',
 			'attendance_records' => $this->attendance_file_path(),
+			'attendance_emergency_requests' => $this->emergency_attendance_requests_file_path(),
 			'leave_requests' => $this->leave_requests_file_path(),
 			'loan_requests' => $this->loan_requests_file_path(),
 			'overtime_records' => $this->overtime_file_path(),
@@ -2657,6 +3246,340 @@ class Home extends CI_Controller {
 			: strtoupper($text);
 	}
 
+	private function normalize_loan_sheet_keterangan_text($value)
+	{
+		$text = trim((string) $value);
+		if ($text === '')
+		{
+			return '';
+		}
+		$text_upper = function_exists('mb_strtoupper')
+			? (string) mb_strtoupper($text, 'UTF-8')
+			: strtoupper($text);
+		if (strpos($text_upper, 'BELUM') !== FALSE && strpos($text_upper, 'LUNAS') !== FALSE)
+		{
+			return 'BELUM LUNAS';
+		}
+		if (strpos($text_upper, 'LUNAS') !== FALSE)
+		{
+			return 'LUNAS';
+		}
+		return '';
+	}
+
+	private function normalize_special_tenor_base_purpose($purpose)
+	{
+		$text = $this->normalize_loan_reason_text($purpose);
+		if ($text === '')
+		{
+			return '';
+		}
+
+		$match = array();
+		if (preg_match('/^(4 BULANAN)\s+[0-9]{1,2}$/', $text, $match) === 1)
+		{
+			return $match[1];
+		}
+		if (preg_match('/^(MODAL NIKAH ANAK)\s+[0-9]{1,2}$/', $text, $match) === 1)
+		{
+			return $match[1];
+		}
+		if (preg_match('/^(CICILAN HP)\s+[0-9]{1,2}$/', $text, $match) === 1)
+		{
+			return $match[1];
+		}
+		if (preg_match('/^(MAULID)\s+[0-9]{1,2}$/', $text, $match) === 1)
+		{
+			return $match[1];
+		}
+		if (preg_match('/^(CICILAN)\s+[0-9]{1,2}$/', $text, $match) === 1)
+		{
+			return $match[1];
+		}
+		if (preg_match('/^(SPAYLATER)(?:\s+HP\s+[0-9]{1,2})?$/', $text, $match) === 1)
+		{
+			return $match[1];
+		}
+		if (strpos($text, 'CICILAN BEAT ') === 0)
+		{
+			return 'CICILAN BEAT';
+		}
+
+		$manual_group_purposes = array(
+			'TUKER TAMBAH LAPTOP',
+			'KHAUL NENEK',
+			'KEBUTUHAN WISUDA',
+			'SIPINJAM BUAT SERVIS MOTOR',
+			'7 BULAN ISTRI',
+			'BEROBAT IBU'
+		);
+		if (in_array($text, $manual_group_purposes, TRUE))
+		{
+			return $text;
+		}
+
+		return '';
+	}
+
+	private function group_special_sheet_rows_for_tenor($sheet_rows)
+	{
+		$rows = is_array($sheet_rows) ? array_values($sheet_rows) : array();
+		if (empty($rows))
+		{
+			return array();
+		}
+
+		$groups = array();
+		$passthrough = array();
+		for ($i = 0; $i < count($rows); $i += 1)
+		{
+			$row = isset($rows[$i]) && is_array($rows[$i]) ? $rows[$i] : array();
+			$base_purpose = $this->normalize_special_tenor_base_purpose(isset($row['purpose']) ? (string) $row['purpose'] : '');
+			if ($base_purpose === '')
+			{
+				$passthrough[] = $row;
+				continue;
+			}
+
+			$name_key = isset($row['name']) ? preg_replace('/\s+/', ' ', strtolower(trim((string) $row['name']))) : '';
+			$date_key = isset($row['date_iso']) ? trim((string) $row['date_iso']) : '';
+			if (!$this->is_valid_date_format($date_key))
+			{
+				$date_key = isset($row['date_text']) ? trim((string) $row['date_text']) : '';
+			}
+			if ($name_key === '' || $date_key === '')
+			{
+				$passthrough[] = $row;
+				continue;
+			}
+
+			$group_key = $name_key.'|'.$date_key.'|'.$base_purpose;
+			if (!isset($groups[$group_key]) || !is_array($groups[$group_key]))
+			{
+				$groups[$group_key] = array(
+					'rows' => array(),
+					'base_purpose' => $base_purpose,
+					'name_key' => $name_key,
+					'date_key' => $date_key
+				);
+			}
+			$groups[$group_key]['rows'][] = $row;
+		}
+
+		$result_rows = $passthrough;
+		foreach ($groups as $group)
+		{
+			$group_rows = isset($group['rows']) && is_array($group['rows']) ? $group['rows'] : array();
+			if (empty($group_rows))
+			{
+				continue;
+			}
+			usort($group_rows, function ($left, $right) {
+				$left_row = isset($left['row_number']) ? (int) $left['row_number'] : 0;
+				$right_row = isset($right['row_number']) ? (int) $right['row_number'] : 0;
+				return $left_row - $right_row;
+			});
+
+			if (count($group_rows) <= 1)
+			{
+				$result_rows[] = $group_rows[0];
+				continue;
+			}
+
+			$first_row = $group_rows[0];
+			$total_amount = 0;
+			$any_belum_lunas = FALSE;
+			for ($j = 0; $j < count($group_rows); $j += 1)
+			{
+				$row_amount = isset($group_rows[$j]['amount']) ? $this->parse_money_to_int($group_rows[$j]['amount']) : 0;
+				$total_amount += max(0, (int) $row_amount);
+				$row_keterangan = $this->normalize_loan_sheet_keterangan_text(isset($group_rows[$j]['keterangan']) ? (string) $group_rows[$j]['keterangan'] : '');
+				if ($row_keterangan === 'BELUM LUNAS')
+				{
+					$any_belum_lunas = TRUE;
+				}
+			}
+			if ($total_amount <= 0)
+			{
+				$result_rows[] = $first_row;
+				continue;
+			}
+
+			$tenor_months = count($group_rows);
+			$first_row['tenor_months_override'] = $tenor_months;
+			$first_row['amount'] = $total_amount;
+			$first_row['purpose'] = isset($group['base_purpose']) ? (string) $group['base_purpose'] : (isset($first_row['purpose']) ? (string) $first_row['purpose'] : '');
+			$first_row['keterangan'] = $any_belum_lunas ? 'BELUM LUNAS' : 'LUNAS';
+			$first_row['is_lunas'] = $any_belum_lunas ? FALSE : TRUE;
+			$first_row['source_group_rows'] = array_map(function ($row_item) {
+				return isset($row_item['row_number']) ? (int) $row_item['row_number'] : 0;
+			}, $group_rows);
+			$result_rows[] = $first_row;
+		}
+
+		usort($result_rows, function ($left, $right) {
+			$left_row = isset($left['row_number']) ? (int) $left['row_number'] : 0;
+			$right_row = isset($right['row_number']) ? (int) $right['row_number'] : 0;
+			return $left_row - $right_row;
+		});
+
+		return $result_rows;
+	}
+
+	private function rebuild_special_sheet_tenor_in_web_records($loan_records)
+	{
+		$rows = array_values(is_array($loan_records) ? $loan_records : array());
+		if (empty($rows))
+		{
+			return array('rows' => array(), 'updated_count' => 0, 'removed_count' => 0);
+		}
+
+		$group_indexes = array();
+		for ($i = 0; $i < count($rows); $i += 1)
+		{
+			$row = isset($rows[$i]) && is_array($rows[$i]) ? $rows[$i] : array();
+			$username_key = $this->normalize_username_key(isset($row['username']) ? (string) $row['username'] : '');
+			$date_iso = $this->resolve_loan_record_date_iso($row);
+			if ($username_key === '' || !$this->is_valid_date_format($date_iso))
+			{
+				continue;
+			}
+			$purpose_raw = isset($row['source_sheet_purpose']) ? (string) $row['source_sheet_purpose'] : '';
+			if (trim($purpose_raw) === '')
+			{
+				$purpose_raw = isset($row['reason']) ? (string) $row['reason'] : '';
+			}
+			$base_purpose = $this->normalize_special_tenor_base_purpose($purpose_raw);
+			if ($base_purpose === '')
+			{
+				continue;
+			}
+			$is_sheet_origin = $this->is_loan_record_originated_from_sheet($row);
+			$status_text = isset($row['status']) ? trim((string) $row['status']) : '';
+			$is_accepted_status = $this->is_loan_request_status_accepted($status_text);
+			if (!$is_sheet_origin && !$is_accepted_status)
+			{
+				continue;
+			}
+			$group_key = $username_key.'|'.$date_iso.'|'.$base_purpose;
+			if (!isset($group_indexes[$group_key]) || !is_array($group_indexes[$group_key]))
+			{
+				$group_indexes[$group_key] = array();
+			}
+			$group_indexes[$group_key][] = $i;
+		}
+
+		$drop_indexes = array();
+		$updated_count = 0;
+		$removed_count = 0;
+		foreach ($group_indexes as $group_key => $indexes)
+		{
+			if (!is_array($indexes) || count($indexes) <= 1)
+			{
+				continue;
+			}
+			sort($indexes);
+			$keep_index = (int) $indexes[0];
+			$base_row = isset($rows[$keep_index]) && is_array($rows[$keep_index]) ? $rows[$keep_index] : array();
+
+			$total_amount = 0;
+			$any_belum_lunas = FALSE;
+			$latest_updated_at = '';
+			for ($j = 0; $j < count($indexes); $j += 1)
+			{
+				$idx = (int) $indexes[$j];
+				$row = isset($rows[$idx]) && is_array($rows[$idx]) ? $rows[$idx] : array();
+				$total_amount += max(0, $this->parse_money_to_int(isset($row['amount']) ? $row['amount'] : 0));
+				$row_ket = $this->normalize_loan_sheet_keterangan_text(
+					isset($row['source_sheet_keterangan']) ? (string) $row['source_sheet_keterangan'] : (isset($row['status_note']) ? (string) $row['status_note'] : '')
+				);
+				if ($row_ket === 'BELUM LUNAS')
+				{
+					$any_belum_lunas = TRUE;
+				}
+				$row_updated_at = isset($row['updated_at']) ? trim((string) $row['updated_at']) : '';
+				if ($row_updated_at !== '' && strcmp($row_updated_at, $latest_updated_at) > 0)
+				{
+					$latest_updated_at = $row_updated_at;
+				}
+			}
+			if ($total_amount <= 0)
+			{
+				continue;
+			}
+
+			$parts = explode('|', (string) $group_key, 3);
+			$base_purpose = isset($parts[2]) ? (string) $parts[2] : (isset($base_row['reason']) ? (string) $base_row['reason'] : '');
+			$tenor_months = count($indexes);
+			$keterangan = $any_belum_lunas ? 'BELUM LUNAS' : 'LUNAS';
+			$base_row['reason'] = $base_purpose;
+			$base_row['source_sheet_purpose'] = $base_purpose;
+			$base_row['source_sheet_keterangan'] = $keterangan;
+			$base_row['amount'] = $total_amount;
+			$base_row['amount_label'] = 'Rp '.number_format($total_amount, 0, ',', '.');
+			$base_row['tenor_months'] = $tenor_months;
+			$base_row['is_first_loan'] = TRUE;
+			$base_row['monthly_rate_percent'] = 0.0;
+			$base_row['monthly_interest_amount'] = 0;
+			$base_row['total_interest_amount'] = 0;
+			$base_row['interest_rate_percent'] = 0.0;
+			$base_row['interest_amount'] = 0;
+			$base_row['total_payment'] = $total_amount;
+			$base_row['monthly_installment_estimate'] = $tenor_months > 0 ? (int) round($total_amount / $tenor_months) : $total_amount;
+			$base_row['installments'] = array();
+			for ($m = 1; $m <= $tenor_months; $m += 1)
+			{
+				$base_row['installments'][] = array(
+					'month' => $m,
+					'amount' => $base_row['monthly_installment_estimate']
+				);
+			}
+			$base_row['transparency'] = $this->build_loan_detail_text(array(
+				'principal' => $total_amount,
+				'tenor_months' => $tenor_months,
+				'is_first_loan' => TRUE,
+				'monthly_rate_percent' => 0.0,
+				'monthly_interest_amount' => 0,
+				'total_interest_amount' => 0,
+				'interest_rate_percent' => 0.0,
+				'interest_amount' => 0,
+				'total_payment' => $total_amount,
+				'monthly_installment_estimate' => $base_row['monthly_installment_estimate'],
+				'installments' => $base_row['installments']
+			));
+			$base_row['status_note'] = 'Sync dari sheet kasbon ('.$keterangan.')';
+			$base_row['updated_at'] = $latest_updated_at !== '' ? $latest_updated_at : date('Y-m-d H:i:s');
+			$rows[$keep_index] = $base_row;
+			$updated_count += 1;
+
+			for ($j = 1; $j < count($indexes); $j += 1)
+			{
+				$drop_indexes[(int) $indexes[$j]] = TRUE;
+				$removed_count += 1;
+			}
+		}
+
+		if (!empty($drop_indexes))
+		{
+			$normalized = array();
+			for ($i = 0; $i < count($rows); $i += 1)
+			{
+				if (isset($drop_indexes[$i]))
+				{
+					continue;
+				}
+				$normalized[] = $rows[$i];
+			}
+			$rows = $normalized;
+		}
+
+		return array(
+			'rows' => $rows,
+			'updated_count' => $updated_count,
+			'removed_count' => $removed_count
+		);
+	}
+
 	private function parse_dmy_to_iso($value)
 	{
 		$text = trim((string) $value);
@@ -2826,6 +3749,16 @@ class Home extends CI_Controller {
 		for ($i = 0; $i < count($rows); $i += 1)
 		{
 			$row = isset($rows[$i]) && is_array($rows[$i]) ? $rows[$i] : array();
+			$stored_signature = isset($row['sheet_kasbon_signature']) ? trim((string) $row['sheet_kasbon_signature']) : '';
+			if ($stored_signature !== '')
+			{
+				$lookup[$stored_signature] = TRUE;
+			}
+			$stored_sheet_signature = isset($row['sheet_kasbon_source_signature']) ? trim((string) $row['sheet_kasbon_source_signature']) : '';
+			if ($stored_sheet_signature !== '')
+			{
+				$lookup[$stored_sheet_signature] = TRUE;
+			}
 			$username_key = $this->normalize_username_key(isset($row['username']) ? (string) $row['username'] : '');
 			if ($username_key === '')
 			{
@@ -2848,6 +3781,217 @@ class Home extends CI_Controller {
 		return $lookup;
 	}
 
+	private function build_loan_sync_match_key($username, $date_iso, $reason)
+	{
+		$username_key = $this->normalize_username_key($username);
+		if ($username_key === '')
+		{
+			return '';
+		}
+
+		$date_key = trim((string) $date_iso);
+		if (!$this->is_valid_date_format($date_key))
+		{
+			return '';
+		}
+
+		$reason_key = $this->normalize_loan_reason_text($reason);
+		if ($reason_key === '')
+		{
+			$reason_key = 'KEPERLUAN PINJAMAN';
+		}
+
+		return $username_key.'|'.$date_key.'|'.$reason_key;
+	}
+
+	private function build_loan_sync_match_lookup($loan_records)
+	{
+		$rows = is_array($loan_records) ? array_values($loan_records) : array();
+		$lookup = array();
+
+		for ($i = 0; $i < count($rows); $i += 1)
+		{
+			$row = isset($rows[$i]) && is_array($rows[$i]) ? $rows[$i] : array();
+			$username_key = $this->normalize_username_key(isset($row['username']) ? (string) $row['username'] : '');
+			if ($username_key === '')
+			{
+				continue;
+			}
+
+			$date_iso = $this->resolve_loan_record_date_iso($row);
+			if (!$this->is_valid_date_format($date_iso))
+			{
+				continue;
+			}
+
+			$reason = isset($row['reason']) ? (string) $row['reason'] : '';
+			if (trim($reason) === '')
+			{
+				$reason = isset($row['source_sheet_purpose']) ? (string) $row['source_sheet_purpose'] : '';
+			}
+			$match_key = $this->build_loan_sync_match_key($username_key, $date_iso, $reason);
+			if ($match_key === '')
+			{
+				continue;
+			}
+
+			if (!isset($lookup[$match_key]) || !is_array($lookup[$match_key]))
+			{
+				$lookup[$match_key] = array();
+			}
+
+			$candidate_amounts = array(
+				$this->parse_money_to_int(isset($row['amount']) ? $row['amount'] : 0),
+				$this->parse_money_to_int(isset($row['total_payment']) ? $row['total_payment'] : 0),
+				$this->resolve_loan_sheet_kasbon_amount($row)
+			);
+			for ($j = 0; $j < count($candidate_amounts); $j += 1)
+			{
+				$amount = (int) $candidate_amounts[$j];
+				if ($amount <= 0)
+				{
+					continue;
+				}
+				$lookup[$match_key][$amount] = TRUE;
+			}
+		}
+
+		return $lookup;
+	}
+
+	private function build_loan_sync_sheet_row_lookup($loan_records)
+	{
+		$rows = is_array($loan_records) ? array_values($loan_records) : array();
+		$lookup = array();
+		for ($i = 0; $i < count($rows); $i += 1)
+		{
+			$row = isset($rows[$i]) && is_array($rows[$i]) ? $rows[$i] : array();
+			$row_number = isset($row['sheet_kasbon_row']) ? (int) $row['sheet_kasbon_row'] : 0;
+			if ($row_number <= 0)
+			{
+				continue;
+			}
+
+			$username_key = $this->normalize_username_key(isset($row['username']) ? (string) $row['username'] : '');
+			if ($username_key === '')
+			{
+				continue;
+			}
+
+			$date_iso = $this->resolve_loan_record_date_iso($row);
+			if (!$this->is_valid_date_format($date_iso))
+			{
+				continue;
+			}
+
+			$lookup[$username_key.'|'.$date_iso.'|'.$row_number] = TRUE;
+		}
+
+		return $lookup;
+	}
+
+	private function cleanup_sheet_origin_loan_duplicates($loan_records)
+	{
+		$rows = array_values(is_array($loan_records) ? $loan_records : array());
+		$clean_rows = array();
+		$removed_count = 0;
+
+		$seen_row_key = array();
+		$seen_signature_key = array();
+		$seen_source_signature_key = array();
+		$seen_fallback_key = array();
+
+		for ($i = 0; $i < count($rows); $i += 1)
+		{
+			$row = isset($rows[$i]) && is_array($rows[$i]) ? $rows[$i] : array();
+			if (!$this->is_loan_record_originated_from_sheet($row))
+			{
+				$clean_rows[] = $row;
+				continue;
+			}
+
+			$username_key = $this->normalize_username_key(isset($row['username']) ? (string) $row['username'] : '');
+			$date_iso = $this->resolve_loan_record_date_iso($row);
+			$row_number = isset($row['sheet_kasbon_row']) ? (int) $row['sheet_kasbon_row'] : 0;
+			$sheet_signature = isset($row['sheet_kasbon_signature']) ? trim((string) $row['sheet_kasbon_signature']) : '';
+			$source_signature = isset($row['sheet_kasbon_source_signature']) ? trim((string) $row['sheet_kasbon_source_signature']) : '';
+
+			$row_key = '';
+			if ($username_key !== '' && $this->is_valid_date_format($date_iso) && $row_number > 0)
+			{
+				$row_key = $username_key.'|'.$date_iso.'|'.$row_number;
+			}
+
+			$is_duplicate = FALSE;
+			if ($row_key !== '' && isset($seen_row_key[$row_key]))
+			{
+				$is_duplicate = TRUE;
+			}
+			if (!$is_duplicate && $sheet_signature !== '' && isset($seen_signature_key[$sheet_signature]))
+			{
+				$is_duplicate = TRUE;
+			}
+			if (!$is_duplicate && $source_signature !== '' && isset($seen_source_signature_key[$source_signature]))
+			{
+				$is_duplicate = TRUE;
+			}
+
+			$fallback_key = '';
+			if (!$is_duplicate && $row_key === '' && $sheet_signature === '' && $source_signature === '' && $username_key !== '' && $this->is_valid_date_format($date_iso))
+			{
+				$purpose = isset($row['reason']) ? (string) $row['reason'] : '';
+				if (trim($purpose) === '')
+				{
+					$purpose = isset($row['source_sheet_purpose']) ? (string) $row['source_sheet_purpose'] : '';
+				}
+				$purpose = $this->normalize_loan_reason_text($purpose);
+				if ($purpose === '')
+				{
+					$purpose = 'KEPERLUAN PINJAMAN';
+				}
+				$amount = $this->parse_money_to_int(isset($row['amount']) ? $row['amount'] : 0);
+				if ($amount > 0)
+				{
+					$fallback_key = $username_key.'|'.$date_iso.'|'.$purpose.'|'.$amount;
+					if (isset($seen_fallback_key[$fallback_key]))
+					{
+						$is_duplicate = TRUE;
+					}
+				}
+			}
+
+			if ($is_duplicate)
+			{
+				$removed_count += 1;
+				continue;
+			}
+
+			if ($row_key !== '')
+			{
+				$seen_row_key[$row_key] = TRUE;
+			}
+			if ($sheet_signature !== '')
+			{
+				$seen_signature_key[$sheet_signature] = TRUE;
+			}
+			if ($source_signature !== '')
+			{
+				$seen_source_signature_key[$source_signature] = TRUE;
+			}
+			if ($fallback_key !== '')
+			{
+				$seen_fallback_key[$fallback_key] = TRUE;
+			}
+
+			$clean_rows[] = $row;
+		}
+
+		return array(
+			'rows' => $clean_rows,
+			'removed_count' => $removed_count
+		);
+	}
+
 	private function calculate_spaylater_loan_for_sync_import($principal, $tenor_months, $is_first_loan = FALSE)
 	{
 		$principal_value = max(0, (int) $principal);
@@ -2856,15 +4000,18 @@ class Home extends CI_Controller {
 		{
 			$tenor_value = 1;
 		}
-		if ($tenor_value > 12)
+		if ($tenor_value > 36)
 		{
-			$tenor_value = 12;
+			$tenor_value = 36;
 		}
 
-		$strict_result = $this->calculate_spaylater_loan($principal_value, $tenor_value, $is_first_loan ? TRUE : FALSE);
-		if (isset($strict_result['success']) && $strict_result['success'] === TRUE && isset($strict_result['data']) && is_array($strict_result['data']))
+		if ($tenor_value <= 12)
 		{
-			return $strict_result['data'];
+			$strict_result = $this->calculate_spaylater_loan($principal_value, $tenor_value, $is_first_loan ? TRUE : FALSE);
+			if (isset($strict_result['success']) && $strict_result['success'] === TRUE && isset($strict_result['data']) && is_array($strict_result['data']))
+			{
+				return $strict_result['data'];
+			}
 		}
 
 		$monthly_rate_percent = $is_first_loan ? 0.0 : 2.95;
@@ -8552,11 +9699,160 @@ class Home extends CI_Controller {
 		$distance_m = isset($nearest_office['distance_m']) ? (float) $nearest_office['distance_m'] : 0.0;
 		$office_label = isset($nearest_office['label']) ? (string) $nearest_office['label'] : 'kantor';
 		$geofence_check = $this->evaluate_geofence($distance_m, $accuracy_m, $office_label);
+		$antifraud_enabled = function_exists('antifraud_config')
+			&& function_exists('antifraud_evaluate_risk')
+			&& antifraud_config('enabled');
+		$client_signals = array();
+		$client_ip = $this->input->ip_address();
+		$risk = NULL;
+		$antifraud_blocked = FALSE;
+		$antifraud_block_message = '';
+		if ($antifraud_enabled)
+		{
+			$client_signals = function_exists('antifraud_extract_client_signals')
+				? antifraud_extract_client_signals($this->input)
+				: array();
+			$client_ip = function_exists('antifraud_client_ip')
+				? antifraud_client_ip()
+				: $client_ip;
+
+			$attestation_verdict = isset($client_signals['attestation_verdict'])
+				? strtoupper(trim((string) $client_signals['attestation_verdict']))
+				: '';
+			$attestation_reason = isset($client_signals['attestation_reason'])
+				? trim((string) $client_signals['attestation_reason'])
+				: '';
+			$attestation_nonce = isset($client_signals['attestation_nonce'])
+				? trim((string) $client_signals['attestation_nonce'])
+				: '';
+			$integrity_token = isset($client_signals['integrity_token'])
+				? trim((string) $client_signals['integrity_token'])
+				: '';
+			$payload_signature = isset($client_signals['payload_signature'])
+				? trim((string) $client_signals['payload_signature'])
+				: '';
+			if ($attestation_verdict === ''
+				&& function_exists('antifraud_verify_attestation')
+				&& ($attestation_nonce !== '' || $integrity_token !== ''))
+			{
+				$attestation_result = antifraud_verify_attestation(array(
+					'nonce' => $attestation_nonce,
+					'integrity_token' => $integrity_token,
+					'payload_signature' => $payload_signature
+				));
+				$attestation_verdict = isset($attestation_result['verdict'])
+					? strtoupper(trim((string) $attestation_result['verdict']))
+					: '';
+				$attestation_reason = isset($attestation_result['reason'])
+					? trim((string) $attestation_result['reason'])
+					: '';
+			}
+			if ($attestation_verdict !== '')
+			{
+				$client_signals['attestation_verdict'] = $attestation_verdict;
+			}
+			if ($attestation_reason !== '')
+			{
+				$client_signals['attestation_reason'] = $attestation_reason;
+			}
+
+			$risk = antifraud_evaluate_risk(array(
+				'username'        => $username,
+				'latitude'        => (float) $latitude,
+				'longitude'       => (float) $longitude,
+				'accuracy_m'      => $accuracy_m,
+				'distance_m'      => $distance_m,
+				'ip'              => $client_ip,
+				'geofence_inside' => $geofence_check['inside'] === TRUE,
+				'client_signals'  => $client_signals
+			));
+
+			// Always record attempt for rate-limiting and location risk model.
+			if (function_exists('antifraud_record_rate_limit_hit'))
+			{
+				antifraud_record_rate_limit_hit($username, $client_ip);
+			}
+			if (function_exists('antifraud_record_location'))
+			{
+				$is_trusted_point = ($geofence_check['inside'] === TRUE)
+					&& !(isset($risk['flagged']) && $risk['flagged']);
+				antifraud_record_location($username, (float) $latitude, (float) $longitude, $is_trusted_point);
+			}
+
+			$log_only_mode = function_exists('antifraud_config') ? antifraud_config('log_only_mode') : FALSE;
+			$antifraud_blocked = isset($risk['flagged']) && $risk['flagged'] && !$log_only_mode;
+
+			if (function_exists('antifraud_audit_log'))
+			{
+				antifraud_audit_log(array(
+					'event'       => 'attendance_submission',
+					'username'    => $username,
+					'action'      => $action,
+					'ip'          => $client_ip,
+					'latitude'    => (float) $latitude,
+					'longitude'   => (float) $longitude,
+					'accuracy_m'  => $accuracy_m,
+					'distance_m'  => round($distance_m, 2),
+					'geofence_inside' => $geofence_check['inside'] === TRUE,
+					'risk_score'  => isset($risk['score']) ? $risk['score'] : 0,
+					'risk_flags'  => isset($risk['flags']) ? $risk['flags'] : array(),
+					'risk_details'=> isset($risk['details']) ? $risk['details'] : array(),
+					'client_signals' => $client_signals,
+					'blocked'     => $antifraud_blocked
+				));
+			}
+
+			if ($antifraud_blocked)
+			{
+				$flag_labels = array(
+					'geofence_fail' => 'lokasi di luar radius',
+					'accuracy_poor' => 'akurasi GPS terlalu rendah',
+					'accuracy_suspiciously_perfect' => 'akurasi GPS tidak wajar',
+					'impossible_travel' => 'kecepatan perpindahan tidak mungkin',
+					'jump_distance' => 'perpindahan jarak besar dalam waktu singkat',
+					'rate_limit' => 'terlalu banyak percobaan, coba lagi nanti',
+					'mock_location_suspected' => 'terdeteksi lokasi palsu',
+					'dev_options_on' => 'opsi developer aktif',
+					'rooted_suspected' => 'perangkat terdeteksi di-root',
+					'client_time_drift' => 'waktu perangkat tidak sinkron',
+					'attestation_fail' => 'verifikasi integritas perangkat gagal'
+				);
+				$reasons = array();
+				$risk_flags = isset($risk['flags']) && is_array($risk['flags']) ? $risk['flags'] : array();
+				for ($i = 0; $i < count($risk_flags); $i += 1)
+				{
+					$flag_name = (string) $risk_flags[$i];
+					$reasons[] = isset($flag_labels[$flag_name]) ? $flag_labels[$flag_name] : $flag_name;
+				}
+				$reason_text = implode(', ', array_filter($reasons));
+				if ($reason_text === '')
+				{
+					$reason_text = 'indikator risiko tidak dikenal';
+				}
+				$antifraud_block_message = 'Absensi normal tidak dapat diproses karena terdeteksi anomali: '
+					.$reason_text.'. '
+					.'Silakan gunakan Absen Darurat jika Anda memang berada di lokasi yang benar.';
+			}
+		}
+
 		if ($geofence_check['inside'] !== TRUE)
 		{
 			$this->json_response(array(
 				'success' => FALSE,
-				'message' => $geofence_check['message']
+				'message' => $geofence_check['message'],
+				'force_emergency' => TRUE,
+				'risk_score' => is_array($risk) && isset($risk['score']) ? $risk['score'] : 0
+			), 422);
+			return;
+		}
+
+		if ($antifraud_blocked)
+		{
+			$this->json_response(array(
+				'success' => FALSE,
+				'message' => $antifraud_block_message !== '' ? $antifraud_block_message : 'Absensi normal tidak dapat diproses.',
+				'force_emergency' => TRUE,
+				'risk_score' => is_array($risk) && isset($risk['score']) ? $risk['score'] : 0
 			), 422);
 			return;
 		}
@@ -8713,6 +10009,14 @@ class Home extends CI_Controller {
 				$record['check_in_late'] = self::ATTENDANCE_FORCE_LATE_DURATION;
 			}
 			$record['check_in_photo'] = $this->normalize_attendance_photo_reference($photo, $username, $date_key, 'in');
+			if ($record['check_in_photo'] === '' || strpos((string) $record['check_in_photo'], 'data:image/') === 0)
+			{
+				$this->json_response(array(
+					'success' => FALSE,
+					'message' => 'Gagal menyimpan foto absen masuk. Cek permission folder uploads/attendance_photo lalu coba lagi.'
+				), 500);
+				return;
+			}
 			$record['check_in_lat'] = (string) $latitude;
 			$record['check_in_lng'] = (string) $longitude;
 			$record['check_in_accuracy_m'] = number_format($accuracy_m, 2, '.', '');
@@ -8759,6 +10063,14 @@ class Home extends CI_Controller {
 
 			$record['check_out_time'] = $current_time;
 			$record['check_out_photo'] = $this->normalize_attendance_photo_reference($photo, $username, $date_key, 'out');
+			if ($record['check_out_photo'] === '' || strpos((string) $record['check_out_photo'], 'data:image/') === 0)
+			{
+				$this->json_response(array(
+					'success' => FALSE,
+					'message' => 'Gagal menyimpan foto absen pulang. Cek permission folder uploads/attendance_photo lalu coba lagi.'
+				), 500);
+				return;
+			}
 			$record['check_out_lat'] = (string) $latitude;
 			$record['check_out_lng'] = (string) $longitude;
 			$record['check_out_accuracy_m'] = number_format($accuracy_m, 2, '.', '');
@@ -8779,6 +10091,580 @@ class Home extends CI_Controller {
 			'success' => TRUE,
 			'message' => $message
 		));
+	}
+
+	public function submit_emergency_attendance()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			$this->json_response(array('success' => FALSE, 'message' => 'Sesi login sudah habis.'), 401);
+			return;
+		}
+		if ((string) $this->session->userdata('absen_role') !== 'user')
+		{
+			$this->json_response(array('success' => FALSE, 'message' => 'Akses ditolak.'), 403);
+			return;
+		}
+		if ($this->input->method(TRUE) !== 'POST')
+		{
+			$this->json_response(array('success' => FALSE, 'message' => 'Metode request tidak valid.'), 405);
+			return;
+		}
+
+		try
+		{
+			$action = strtolower(trim((string) $this->input->post('action', TRUE)));
+			$photo = (string) $this->input->post('photo', FALSE);
+			$latitude = trim((string) $this->input->post('latitude', TRUE));
+			$longitude = trim((string) $this->input->post('longitude', TRUE));
+			$accuracy = trim((string) $this->input->post('accuracy', TRUE));
+			$emergency_reason = trim((string) $this->input->post('emergency_reason', TRUE));
+			$late_reason_input = trim((string) $this->input->post('late_reason', TRUE));
+
+			if ($action !== 'masuk' && $action !== 'pulang')
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Jenis absensi darurat tidak valid.'), 422);
+				return;
+			}
+			if ($photo === '' || strpos($photo, 'data:image/') !== 0)
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Foto absen darurat wajib diambil.'), 422);
+				return;
+			}
+			if (!is_numeric($latitude) || !is_numeric($longitude) || !is_numeric($accuracy))
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Koordinat atau akurasi GPS tidak valid.'), 422);
+				return;
+			}
+			$accuracy_m = (float) $accuracy;
+			if ($accuracy_m <= 0 || $accuracy_m > 1000)
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Akurasi GPS tidak valid.'), 422);
+				return;
+			}
+			if ($emergency_reason === '')
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Keterangan darurat wajib diisi.'), 422);
+				return;
+			}
+
+			$username = (string) $this->session->userdata('absen_username');
+			$user_profile = $this->get_employee_profile($username);
+			$attendance_branch = $this->resolve_attendance_branch_for_user($username, $user_profile);
+			$cross_branch_enabled = $this->resolve_cross_branch_for_user($username, $user_profile);
+			$shift_name = (string) $this->session->userdata('absen_shift_name');
+			$shift_time = (string) $this->session->userdata('absen_shift_time');
+			$shift_key = $this->resolve_shift_key_from_shift_values($shift_name, $shift_time);
+			$nearest_office = $this->nearest_attendance_office((float) $latitude, (float) $longitude, $attendance_branch, $shift_key, $cross_branch_enabled);
+			$attendance_branch_from_location = $attendance_branch;
+			if ($cross_branch_enabled === 1)
+			{
+				$attendance_branch_from_location = $this->resolve_attendance_branch_from_nearest_office($nearest_office, $attendance_branch);
+			}
+			$distance_m = isset($nearest_office['distance_m']) ? (float) $nearest_office['distance_m'] : 0.0;
+			$office_label = isset($nearest_office['label']) ? (string) $nearest_office['label'] : 'kantor';
+			$date_key = date('Y-m-d');
+			$date_label = date('d-m-Y');
+			$current_time = date('H:i:s');
+
+			// Absen darurat sengaja bypass batas jam masuk/pulang standar.
+			// Validasi tetap dijaga lewat approval admin.
+			$schedule_block_message = $this->attendance_schedule_block_message($username, $date_key);
+			if ($schedule_block_message !== '')
+			{
+				$this->json_response(array('success' => FALSE, 'message' => $schedule_block_message), 422);
+				return;
+			}
+
+			$photo_side = $action === 'masuk' ? 'in' : 'out';
+			$photo_path = $this->normalize_attendance_photo_reference($photo, $username, $date_key, $photo_side);
+			if ($photo_path === '' || strpos((string) $photo_path, 'data:image/') === 0)
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Gagal menyimpan foto absen darurat.'), 500);
+				return;
+			}
+
+			$requests = $this->load_emergency_attendance_requests();
+			if ($this->has_pending_emergency_attendance_request($requests, $username, $date_key, $action))
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Pengajuan absen darurat untuk aksi ini masih menunggu approval admin.'), 422);
+				return;
+			}
+
+			$records = $this->load_attendance_records();
+			if ($action === 'pulang' && !$this->has_check_in_for_attendance_or_emergency($records, $requests, $username, $date_key))
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Absen pulang darurat hanya bisa diajukan setelah ada absen masuk.'), 422);
+				return;
+			}
+
+			$request_row = $this->build_emergency_attendance_request_row(array(
+				'action' => $action,
+				'username' => $username,
+				'user_profile' => $user_profile,
+				'shift_name' => $shift_name,
+				'shift_time' => $shift_time,
+				'date_key' => $date_key,
+				'date_label' => $date_label,
+				'check_time' => $current_time,
+				'latitude' => (string) $latitude,
+				'longitude' => (string) $longitude,
+				'accuracy_m' => $accuracy_m,
+				'distance_m' => $distance_m,
+				'office_label' => $office_label,
+				'branch_origin' => $attendance_branch,
+				'branch_attendance' => $attendance_branch_from_location,
+				'photo_path' => $photo_path,
+				'emergency_reason' => $emergency_reason,
+				'late_reason_input' => $late_reason_input
+			));
+			$requests[] = $request_row;
+			$this->save_emergency_attendance_requests($requests);
+
+			$notify_result = array(
+				'success' => FALSE,
+				'message' => 'Notifikasi WA admin gagal diproses.'
+			);
+			try
+			{
+				$notify_result = $this->notify_admin_new_submission('attendance_emergency', $request_row);
+			}
+			catch (Throwable $notify_exception)
+			{
+				log_message(
+					'error',
+					'[submit_emergency_attendance][notify] '.
+					$notify_exception->getMessage().' @ '.
+					$notify_exception->getFile().':'.$notify_exception->getLine()
+				);
+			}
+
+			$message = 'Pengajuan absen darurat berhasil dikirim. Menunggu approval admin.';
+			if (!isset($notify_result['success']) || $notify_result['success'] !== TRUE)
+			{
+				$reason = isset($notify_result['message']) ? trim((string) $notify_result['message']) : '';
+				if ($reason !== '')
+				{
+					$message .= ' Notifikasi WA admin belum terkirim: '.$reason;
+				}
+			}
+
+			$this->json_response(array(
+				'success' => TRUE,
+				'message' => $message,
+				'request_id' => isset($request_row['id']) ? (string) $request_row['id'] : ''
+			));
+			return;
+		}
+		catch (Throwable $exception)
+		{
+			$log_username = strtolower(trim((string) $this->session->userdata('absen_username')));
+			$log_action = strtolower(trim((string) $this->input->post('action', TRUE)));
+			log_message(
+				'error',
+				'[submit_emergency_attendance]['.$log_username.']['.$log_action.'] '.
+				$exception->getMessage().' @ '.
+				$exception->getFile().':'.$exception->getLine()
+			);
+			$this->json_response(array(
+				'success' => FALSE,
+				'message' => 'Terjadi gangguan server saat memproses absen darurat. Silakan coba lagi.'
+			), 500);
+			return;
+		}
+	}
+
+	private function attendance_action_time_window_error($action, $current_time, $shift_key, $username)
+	{
+		$action_key = strtolower(trim((string) $action));
+		$current_seconds = $this->time_to_seconds((string) $current_time);
+		$is_time_window_bypassed = $this->should_bypass_attendance_time_window($username);
+		if ($action_key === 'masuk')
+		{
+			$check_in_window = $this->resolve_shift_check_in_window($shift_key);
+			$check_in_start_time = isset($check_in_window['start']) ? (string) $check_in_window['start'] : self::CHECK_IN_MIN_TIME;
+			$check_in_end_time = isset($check_in_window['end']) ? (string) $check_in_window['end'] : self::CHECK_IN_MAX_TIME;
+			$check_in_start_label = isset($check_in_window['start_label']) ? (string) $check_in_window['start_label'] : '07:30';
+			$check_in_end_label = isset($check_in_window['end_label']) ? (string) $check_in_window['end_label'] : '17:00';
+			if (!$is_time_window_bypassed && $current_seconds < $this->time_to_seconds($check_in_start_time))
+			{
+				return 'Absen masuk baru bisa dilakukan mulai jam '.$check_in_start_label.' WIB.';
+			}
+			if (!$is_time_window_bypassed && $current_seconds > $this->time_to_seconds($check_in_end_time))
+			{
+				return 'Batas maksimal absen masuk adalah jam '.$check_in_end_label.' WIB.';
+			}
+			return '';
+		}
+
+		$check_out_window = $this->resolve_shift_check_out_window($shift_key);
+		$check_out_end_time = isset($check_out_window['end']) ? (string) $check_out_window['end'] : self::CHECK_OUT_MAX_TIME;
+		$check_out_end_label = isset($check_out_window['end_label']) ? (string) $check_out_window['end_label'] : '23:59';
+		if (!$is_time_window_bypassed && $current_seconds > $this->time_to_seconds($check_out_end_time))
+		{
+			return 'Batas maksimal absen pulang adalah jam '.$check_out_end_label.' WIB.';
+		}
+		return '';
+	}
+
+	private function has_pending_emergency_attendance_request($requests, $username, $date_key, $action)
+	{
+		$username_key = strtolower(trim((string) $username));
+		$date_value = trim((string) $date_key);
+		$action_key = strtolower(trim((string) $action));
+		$rows = is_array($requests) ? array_values($requests) : array();
+		for ($i = 0; $i < count($rows); $i += 1)
+		{
+			$row = isset($rows[$i]) && is_array($rows[$i]) ? $rows[$i] : array();
+			$row_username = strtolower(trim((string) (isset($row['username']) ? $row['username'] : '')));
+			$row_date = trim((string) (isset($row['date']) ? $row['date'] : ''));
+			$row_action = strtolower(trim((string) (isset($row['action']) ? $row['action'] : '')));
+			$row_status = $this->normalize_emergency_attendance_status_key(isset($row['status']) ? (string) $row['status'] : 'pending');
+			if ($row_username === $username_key && $row_date === $date_value && $row_action === $action_key && $row_status === 'pending')
+			{
+				return TRUE;
+			}
+		}
+		return FALSE;
+	}
+
+	private function has_check_in_for_attendance_or_emergency($records, $requests, $username, $date_key)
+	{
+		$username_key = strtolower(trim((string) $username));
+		$date_value = trim((string) $date_key);
+		$rows = is_array($records) ? array_values($records) : array();
+		for ($i = 0; $i < count($rows); $i += 1)
+		{
+			$row = isset($rows[$i]) && is_array($rows[$i]) ? $rows[$i] : array();
+			$row_username = strtolower(trim((string) (isset($row['username']) ? $row['username'] : '')));
+			$row_date = trim((string) (isset($row['date']) ? $row['date'] : ''));
+			$row_check_in = isset($row['check_in_time']) ? (string) $row['check_in_time'] : '';
+			if ($row_username === $username_key && $row_date === $date_value && $this->has_real_attendance_time($row_check_in))
+			{
+				return TRUE;
+			}
+		}
+		return $this->has_approved_emergency_check_in_for_date($requests, $username_key, $date_value);
+	}
+
+	private function has_approved_emergency_check_in_for_date($requests, $username, $date_key)
+	{
+		$username_key = strtolower(trim((string) $username));
+		$date_value = trim((string) $date_key);
+		$rows = is_array($requests) ? array_values($requests) : array();
+		for ($i = 0; $i < count($rows); $i += 1)
+		{
+			$row = isset($rows[$i]) && is_array($rows[$i]) ? $rows[$i] : array();
+			$row_username = strtolower(trim((string) (isset($row['username']) ? $row['username'] : '')));
+			$row_date = trim((string) (isset($row['date']) ? $row['date'] : ''));
+			$row_action = strtolower(trim((string) (isset($row['action']) ? $row['action'] : '')));
+			$row_status = $this->normalize_emergency_attendance_status_key(isset($row['status']) ? (string) $row['status'] : 'pending');
+			if ($row_username === $username_key && $row_date === $date_value && $row_action === 'masuk' && $row_status === 'approved')
+			{
+				return TRUE;
+			}
+		}
+		return FALSE;
+	}
+
+	private function normalize_emergency_attendance_status_key($status)
+	{
+		$key = strtolower(trim((string) $status));
+		if (in_array($key, array('approved', 'approve', 'diterima', 'accepted'), TRUE))
+		{
+			return 'approved';
+		}
+		if (in_array($key, array('rejected', 'reject', 'ditolak', 'declined'), TRUE))
+		{
+			return 'rejected';
+		}
+		return 'pending';
+	}
+
+	private function emergency_attendance_status_label($status_key)
+	{
+		$key = $this->normalize_emergency_attendance_status_key($status_key);
+		if ($key === 'approved')
+		{
+			return 'Diterima';
+		}
+		if ($key === 'rejected')
+		{
+			return 'Ditolak';
+		}
+		return 'Menunggu';
+	}
+
+	private function emergency_attendance_status_badge_class($status_key)
+	{
+		$key = $this->normalize_emergency_attendance_status_key($status_key);
+		if ($key === 'approved')
+		{
+			return 'hadir';
+		}
+		if ($key === 'rejected')
+		{
+			return 'terlambat';
+		}
+		return 'pending';
+	}
+
+	private function build_emergency_attendance_request_row($payload)
+	{
+		$data = is_array($payload) ? $payload : array();
+		$username = isset($data['username']) ? strtolower(trim((string) $data['username'])) : '';
+		$action = isset($data['action']) ? strtolower(trim((string) $data['action'])) : 'masuk';
+		if ($action !== 'masuk' && $action !== 'pulang')
+		{
+			$action = 'masuk';
+		}
+		$date_key = isset($data['date_key']) ? trim((string) $data['date_key']) : date('Y-m-d');
+		$check_time = isset($data['check_time']) ? trim((string) $data['check_time']) : date('H:i:s');
+		$user_profile = isset($data['user_profile']) && is_array($data['user_profile']) ? $data['user_profile'] : array();
+
+		$profile_salary_tier = isset($user_profile['salary_tier']) ? strtoupper(trim((string) $user_profile['salary_tier'])) : '';
+		$profile_salary_monthly = isset($user_profile['salary_monthly']) ? (float) $user_profile['salary_monthly'] : 0;
+		$profile_weekly_day_off = isset($user_profile['weekly_day_off'])
+			? $this->resolve_employee_weekly_day_off($user_profile['weekly_day_off'])
+			: $this->default_weekly_day_off();
+		$month_policy = $this->calculate_employee_month_work_policy($username, $date_key, $profile_weekly_day_off);
+		$work_days = isset($month_policy['work_days']) ? (int) $month_policy['work_days'] : self::WORK_DAYS_DEFAULT;
+		if ($work_days <= 0)
+		{
+			$work_days = self::WORK_DAYS_DEFAULT;
+		}
+
+		$late_duration = '00:00:00';
+		$late_seconds = 0;
+		$salary_cut_amount = 0;
+		$salary_cut_rule = '';
+		$salary_cut_category = '';
+		if ($action === 'masuk')
+		{
+			$late_duration = $this->calculate_late_duration(
+				$check_time,
+				isset($data['shift_time']) ? (string) $data['shift_time'] : '',
+				isset($data['shift_name']) ? (string) $data['shift_name'] : ''
+			);
+			if ($this->should_force_late_attendance($username) && $this->duration_to_seconds($late_duration) <= 0)
+			{
+				$late_duration = self::ATTENDANCE_FORCE_LATE_DURATION;
+			}
+			$late_seconds = $this->duration_to_seconds($late_duration);
+			$deduction_result = $this->calculate_late_deduction(
+				$profile_salary_tier,
+				$profile_salary_monthly,
+				$work_days,
+				$late_seconds,
+				$date_key,
+				$username
+			);
+			$salary_cut_amount = isset($deduction_result['amount']) ? (int) $deduction_result['amount'] : 0;
+			$salary_cut_rule = isset($deduction_result['rule']) ? (string) $deduction_result['rule'] : '';
+			$salary_cut_category = isset($deduction_result['category_key']) ? (string) $deduction_result['category_key'] : '';
+		}
+
+		$employee_id = $this->resolve_employee_id_from_username($username);
+		$phone = isset($user_profile['phone']) ? trim((string) $user_profile['phone']) : '';
+		if ($phone === '')
+		{
+			$phone = $this->get_employee_phone($username);
+		}
+		$emergency_reason = isset($data['emergency_reason']) ? trim((string) $data['emergency_reason']) : '';
+		$late_reason_input = isset($data['late_reason_input']) ? trim((string) $data['late_reason_input']) : '';
+		$late_reason = $late_reason_input !== '' ? $late_reason_input : $emergency_reason;
+		$request_id = 'emg_'.date('YmdHis').'_'.substr(md5(uniqid($username, TRUE)), 0, 10);
+
+		return array(
+			'id' => $request_id,
+			'username' => $username,
+			'employee_id' => $employee_id,
+			'profile_photo' => isset($user_profile['profile_photo']) && trim((string) $user_profile['profile_photo']) !== '' ? (string) $user_profile['profile_photo'] : $this->default_employee_profile_photo(),
+			'address' => isset($user_profile['address']) && trim((string) $user_profile['address']) !== '' ? (string) $user_profile['address'] : $this->default_employee_address(),
+			'job_title' => isset($user_profile['job_title']) && trim((string) $user_profile['job_title']) !== '' ? (string) $user_profile['job_title'] : $this->default_employee_job_title(),
+			'branch_origin' => isset($data['branch_origin']) ? (string) $data['branch_origin'] : '',
+			'branch_attendance' => isset($data['branch_attendance']) ? (string) $data['branch_attendance'] : '',
+			'phone' => $phone,
+			'date' => $date_key,
+			'date_label' => isset($data['date_label']) ? (string) $data['date_label'] : $this->format_user_dashboard_date_label($date_key),
+			'shift_name' => isset($data['shift_name']) ? (string) $data['shift_name'] : '',
+			'shift_time' => isset($data['shift_time']) ? (string) $data['shift_time'] : '',
+			'action' => $action,
+			'check_time' => $check_time,
+			'check_in_time' => $action === 'masuk' ? $check_time : '',
+			'check_out_time' => $action === 'pulang' ? $check_time : '',
+			'check_in_late' => $action === 'masuk' ? $late_duration : '00:00:00',
+			'salary_cut_amount' => $salary_cut_amount,
+			'salary_cut_rule' => $salary_cut_rule,
+			'salary_cut_category' => $salary_cut_category,
+			'salary_tier' => $profile_salary_tier,
+			'salary_monthly' => number_format($profile_salary_monthly, 0, '.', ''),
+			'work_days_per_month' => $work_days,
+			'days_in_month' => isset($month_policy['days_in_month']) ? (int) $month_policy['days_in_month'] : 0,
+			'weekly_off_days' => isset($month_policy['weekly_off_days']) ? (int) $month_policy['weekly_off_days'] : 0,
+			'check_in_photo' => $action === 'masuk' ? (string) (isset($data['photo_path']) ? $data['photo_path'] : '') : '',
+			'check_out_photo' => $action === 'pulang' ? (string) (isset($data['photo_path']) ? $data['photo_path'] : '') : '',
+			'check_in_lat' => $action === 'masuk' ? (string) (isset($data['latitude']) ? $data['latitude'] : '') : '',
+			'check_in_lng' => $action === 'masuk' ? (string) (isset($data['longitude']) ? $data['longitude'] : '') : '',
+			'check_out_lat' => $action === 'pulang' ? (string) (isset($data['latitude']) ? $data['latitude'] : '') : '',
+			'check_out_lng' => $action === 'pulang' ? (string) (isset($data['longitude']) ? $data['longitude'] : '') : '',
+			'check_in_accuracy_m' => $action === 'masuk' ? number_format((float) (isset($data['accuracy_m']) ? $data['accuracy_m'] : 0), 2, '.', '') : '',
+			'check_out_accuracy_m' => $action === 'pulang' ? number_format((float) (isset($data['accuracy_m']) ? $data['accuracy_m'] : 0), 2, '.', '') : '',
+			'check_in_distance_m' => $action === 'masuk' ? number_format((float) (isset($data['distance_m']) ? $data['distance_m'] : 0), 2, '.', '') : '',
+			'check_out_distance_m' => $action === 'pulang' ? number_format((float) (isset($data['distance_m']) ? $data['distance_m'] : 0), 2, '.', '') : '',
+			'office_label' => isset($data['office_label']) ? (string) $data['office_label'] : '',
+			'late_reason' => $late_reason,
+			'emergency_reason' => $emergency_reason,
+			'status' => 'pending',
+			'status_note' => '',
+			'reviewed_by' => '',
+			'reviewed_at' => '',
+			'work_duration' => '',
+			'source' => 'emergency_attendance',
+			'created_at' => date('Y-m-d H:i:s'),
+			'updated_at' => date('Y-m-d H:i:s')
+		);
+	}
+
+	private function apply_approved_emergency_attendance_request($request_row, &$error_message = '')
+	{
+		$error_message = '';
+		$row = is_array($request_row) ? $request_row : array();
+		$username = strtolower(trim((string) (isset($row['username']) ? $row['username'] : '')));
+		$date_key = trim((string) (isset($row['date']) ? $row['date'] : ''));
+		$action = strtolower(trim((string) (isset($row['action']) ? $row['action'] : '')));
+		if ($username === '' || $date_key === '' || ($action !== 'masuk' && $action !== 'pulang'))
+		{
+			$error_message = 'Data pengajuan tidak lengkap.';
+			return FALSE;
+		}
+
+		$records = $this->load_attendance_records();
+		$record_index = -1;
+		for ($i = 0; $i < count($records); $i += 1)
+		{
+			$row_username = strtolower(trim((string) (isset($records[$i]['username']) ? $records[$i]['username'] : '')));
+			$row_date = trim((string) (isset($records[$i]['date']) ? $records[$i]['date'] : ''));
+			if ($row_username === $username && $row_date === $date_key)
+			{
+				$record_index = $i;
+				break;
+			}
+		}
+
+		if ($record_index < 0)
+		{
+			$user_profile = $this->get_employee_profile($username);
+			$records[] = array(
+				'username' => $username,
+				'date' => $date_key,
+				'date_label' => isset($row['date_label']) ? (string) $row['date_label'] : $this->format_user_dashboard_date_label($date_key),
+				'shift_name' => isset($row['shift_name']) ? (string) $row['shift_name'] : '',
+				'shift_time' => isset($row['shift_time']) ? (string) $row['shift_time'] : '',
+				'branch' => isset($row['branch_attendance']) ? (string) $row['branch_attendance'] : $this->resolve_attendance_branch_for_user($username, $user_profile),
+				'check_in_time' => '',
+				'check_in_late' => '00:00:00',
+				'check_in_photo' => '',
+				'check_in_lat' => '',
+				'check_in_lng' => '',
+				'check_in_accuracy_m' => '',
+				'check_in_distance_m' => '',
+				'jenis_masuk' => '',
+				'jenis_pulang' => '',
+				'late_reason' => '',
+				'salary_cut_amount' => 0,
+				'salary_cut_rule' => '',
+				'salary_cut_category' => '',
+				'salary_tier' => isset($row['salary_tier']) ? (string) $row['salary_tier'] : '',
+				'salary_monthly' => isset($row['salary_monthly']) ? (string) $row['salary_monthly'] : '0',
+				'work_days_per_month' => isset($row['work_days_per_month']) ? (int) $row['work_days_per_month'] : self::WORK_DAYS_DEFAULT,
+				'days_in_month' => isset($row['days_in_month']) ? (int) $row['days_in_month'] : 0,
+				'weekly_off_days' => isset($row['weekly_off_days']) ? (int) $row['weekly_off_days'] : 0,
+				'check_out_time' => '',
+				'work_duration' => '',
+				'check_out_photo' => '',
+				'check_out_lat' => '',
+				'check_out_lng' => '',
+				'check_out_accuracy_m' => '',
+				'check_out_distance_m' => '',
+				'record_version' => 1,
+				'updated_at' => date('Y-m-d H:i:s')
+			);
+			$record_index = count($records) - 1;
+		}
+
+		$record = isset($records[$record_index]) && is_array($records[$record_index]) ? $records[$record_index] : array();
+		$current_version = isset($record['record_version']) ? (int) $record['record_version'] : 1;
+		if ($current_version <= 0)
+		{
+			$current_version = 1;
+		}
+		$check_time = isset($row['check_time']) ? trim((string) $row['check_time']) : '';
+		if ($check_time === '')
+		{
+			$check_time = $action === 'pulang'
+				? trim((string) (isset($row['check_out_time']) ? $row['check_out_time'] : ''))
+				: trim((string) (isset($row['check_in_time']) ? $row['check_in_time'] : ''));
+		}
+		if ($check_time === '')
+		{
+			$check_time = date('H:i:s');
+		}
+
+		if ($action === 'masuk')
+		{
+			if ($this->has_real_attendance_time(isset($record['check_in_time']) ? $record['check_in_time'] : ''))
+			{
+				$error_message = 'Absen masuk sudah ada.';
+				return FALSE;
+			}
+			$record['check_in_time'] = $check_time;
+			$record['check_in_late'] = isset($row['check_in_late']) && trim((string) $row['check_in_late']) !== ''
+				? (string) $row['check_in_late']
+				: '00:00:00';
+			$record['check_in_photo'] = isset($row['check_in_photo']) ? (string) $row['check_in_photo'] : '';
+			$record['check_in_lat'] = isset($row['check_in_lat']) ? (string) $row['check_in_lat'] : '';
+			$record['check_in_lng'] = isset($row['check_in_lng']) ? (string) $row['check_in_lng'] : '';
+			$record['check_in_accuracy_m'] = isset($row['check_in_accuracy_m']) ? (string) $row['check_in_accuracy_m'] : '';
+			$record['check_in_distance_m'] = isset($row['check_in_distance_m']) ? (string) $row['check_in_distance_m'] : '';
+			$record['jenis_masuk'] = 'Absen Masuk Darurat';
+			$record['late_reason'] = isset($row['emergency_reason']) ? (string) $row['emergency_reason'] : '';
+			$record['salary_cut_amount'] = number_format((int) (isset($row['salary_cut_amount']) ? $row['salary_cut_amount'] : 0), 0, '.', '');
+			$record['salary_cut_rule'] = isset($row['salary_cut_rule']) ? (string) $row['salary_cut_rule'] : '';
+			$record['salary_cut_category'] = isset($row['salary_cut_category']) ? (string) $row['salary_cut_category'] : '';
+			if ($record['check_out_time'] !== '')
+			{
+				$record['work_duration'] = $this->calculate_work_duration($record['check_in_time'], $record['check_out_time']);
+			}
+		}
+		else
+		{
+			if (!$this->has_real_attendance_time(isset($record['check_in_time']) ? $record['check_in_time'] : ''))
+			{
+				$error_message = 'Belum ada absen masuk.';
+				return FALSE;
+			}
+			if ($this->has_real_attendance_time(isset($record['check_out_time']) ? $record['check_out_time'] : ''))
+			{
+				$error_message = 'Absen pulang sudah ada.';
+				return FALSE;
+			}
+			$record['check_out_time'] = $check_time;
+			$record['check_out_photo'] = isset($row['check_out_photo']) ? (string) $row['check_out_photo'] : '';
+			$record['check_out_lat'] = isset($row['check_out_lat']) ? (string) $row['check_out_lat'] : '';
+			$record['check_out_lng'] = isset($row['check_out_lng']) ? (string) $row['check_out_lng'] : '';
+			$record['check_out_accuracy_m'] = isset($row['check_out_accuracy_m']) ? (string) $row['check_out_accuracy_m'] : '';
+			$record['check_out_distance_m'] = isset($row['check_out_distance_m']) ? (string) $row['check_out_distance_m'] : '';
+			$record['jenis_pulang'] = 'Absen Pulang Darurat';
+			$record['work_duration'] = $this->calculate_work_duration((string) $record['check_in_time'], $check_time);
+		}
+
+		$record['updated_at'] = date('Y-m-d H:i:s');
+		$record['record_version'] = $current_version + 1;
+		$records[$record_index] = $record;
+		$this->save_attendance_records($records);
+		$this->clear_admin_dashboard_live_summary_cache();
+		return TRUE;
 	}
 
 	public function user_dashboard_live_data()
@@ -9910,6 +11796,78 @@ class Home extends CI_Controller {
 			'can_edit_attendance_datetime' => $this->can_edit_attendance_datetime()
 		);
 		$this->load->view('home/employee_attendance', $data);
+	}
+
+	public function employee_data_emergency()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			redirect('login');
+			return;
+		}
+		if ((string) $this->session->userdata('absen_role') === 'user')
+		{
+			redirect('home');
+			return;
+		}
+
+		$requests = $this->load_emergency_attendance_requests();
+		$scope_lookup = $this->scoped_employee_lookup(TRUE);
+		$rows = array();
+		for ($i = 0; $i < count($requests); $i += 1)
+		{
+			$row = isset($requests[$i]) && is_array($requests[$i]) ? $requests[$i] : array();
+			$username = strtolower(trim((string) (isset($row['username']) ? $row['username'] : '')));
+			if ($username === '' || !isset($scope_lookup[$username]))
+			{
+				continue;
+			}
+			$status_key = $this->normalize_emergency_attendance_status_key(isset($row['status']) ? (string) $row['status'] : 'pending');
+			$row['username'] = $username;
+			$row['employee_id'] = isset($row['employee_id']) ? (string) $row['employee_id'] : $this->resolve_employee_id_from_username($username);
+			$row['date'] = isset($row['date']) ? (string) $row['date'] : '';
+			$row['date_label'] = isset($row['date_label']) && trim((string) $row['date_label']) !== ''
+				? (string) $row['date_label']
+				: $this->format_user_dashboard_date_label($row['date']);
+			$row['status_key'] = $status_key;
+			$row['status_label'] = $this->emergency_attendance_status_label($status_key);
+			$row['status_badge_class'] = $this->emergency_attendance_status_badge_class($status_key);
+			$row['can_review'] = $status_key === 'pending';
+			$rows[] = $row;
+		}
+
+		usort($rows, function ($left, $right) {
+			$left_date = isset($left['date']) ? (string) $left['date'] : '';
+			$right_date = isset($right['date']) ? (string) $right['date'] : '';
+			$left_time = isset($left['check_time']) ? (string) $left['check_time'] : '';
+			$right_time = isset($right['check_time']) ? (string) $right['check_time'] : '';
+			$left_key = $left_date.' '.$left_time;
+			$right_key = $right_date.' '.$right_time;
+			return strcmp($right_key, $left_key);
+		});
+
+		$emergency_view_file = APPPATH.'views/home/employee_attendance_emergency.php';
+		if (is_file($emergency_view_file) && !is_readable($emergency_view_file))
+		{
+			@chmod($emergency_view_file, 0644);
+			clearstatcache(TRUE, $emergency_view_file);
+		}
+		if (!is_file($emergency_view_file) || !is_readable($emergency_view_file))
+		{
+			log_message('error', '[employee_data_emergency] View tidak bisa dibaca: '.$emergency_view_file);
+			$this->session->set_flashdata(
+				'attendance_notice_error',
+				'Halaman Absen Darurat belum bisa dibuka karena file view belum terbaca oleh server.'
+			);
+			redirect('home/employee_data');
+			return;
+		}
+
+		$this->load->view('home/employee_attendance_emergency', array(
+			'title' => 'Data Absen Darurat',
+			'records' => $rows,
+			'can_process_emergency_attendance' => $this->can_edit_attendance_records_feature()
+		));
 	}
 
 	public function employee_data_monthly()
@@ -11820,7 +13778,25 @@ class Home extends CI_Controller {
 		{
 			$return_page = 1;
 		}
-		$loan_redirect_url = 'home/loan_requests'.($return_page > 1 ? '?page='.$return_page : '');
+		$return_mode = strtolower(trim((string) $this->input->post('return_mode', TRUE)));
+		if ($return_mode === '')
+		{
+			$return_mode = strtolower(trim((string) $this->input->get('mode', TRUE)));
+		}
+		if ($return_mode !== 'monthly')
+		{
+			$return_mode = 'daily';
+		}
+		$loan_redirect_query = array();
+		if ($return_page > 1)
+		{
+			$loan_redirect_query[] = 'page='.$return_page;
+		}
+		if ($return_mode !== 'daily')
+		{
+			$loan_redirect_query[] = 'mode='.$return_mode;
+		}
+		$loan_redirect_url = 'home/loan_requests'.(!empty($loan_redirect_query) ? '?'.implode('&', $loan_redirect_query) : '');
 		if (!$this->can_process_loan_requests_feature())
 		{
 			$this->session->set_flashdata('loan_notice_error', 'Akun login kamu belum punya izin untuk proses pengajuan pinjaman.');
@@ -11919,6 +13895,144 @@ class Home extends CI_Controller {
 		}
 
 		redirect($loan_redirect_url);
+	}
+
+	public function update_emergency_attendance_status()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			redirect('login');
+			return;
+		}
+		if ((string) $this->session->userdata('absen_role') === 'user')
+		{
+			redirect('home');
+			return;
+		}
+		if (!$this->can_edit_attendance_records_feature())
+		{
+			$this->session->set_flashdata('attendance_notice_error', 'Akun login kamu belum punya izin untuk proses absen darurat.');
+			redirect('home/employee_data_emergency');
+			return;
+		}
+		if ($this->input->method(TRUE) !== 'POST')
+		{
+			redirect('home/employee_data_emergency');
+			return;
+		}
+
+		$request_id = trim((string) $this->input->post('request_id', TRUE));
+		$status_raw = strtolower(trim((string) $this->input->post('status', TRUE)));
+		$next_status = '';
+		if (in_array($status_raw, array('approve', 'approved', 'diterima'), TRUE))
+		{
+			$next_status = 'approved';
+		}
+		elseif (in_array($status_raw, array('reject', 'rejected', 'ditolak'), TRUE))
+		{
+			$next_status = 'rejected';
+		}
+		if ($request_id === '' || $next_status === '')
+		{
+			$this->session->set_flashdata('attendance_notice_error', 'Aksi status absen darurat tidak valid.');
+			redirect('home/employee_data_emergency');
+			return;
+		}
+
+		$requests = $this->load_emergency_attendance_requests();
+		$target_index = -1;
+		for ($i = 0; $i < count($requests); $i += 1)
+		{
+			if (isset($requests[$i]['id']) && (string) $requests[$i]['id'] === $request_id)
+			{
+				$target_index = $i;
+				break;
+			}
+		}
+		if ($target_index < 0)
+		{
+			$this->session->set_flashdata('attendance_notice_error', 'Data absen darurat tidak ditemukan.');
+			redirect('home/employee_data_emergency');
+			return;
+		}
+
+		$request_row = isset($requests[$target_index]) && is_array($requests[$target_index]) ? $requests[$target_index] : array();
+		$username = isset($request_row['username']) ? (string) $request_row['username'] : '';
+		if (!$this->is_username_in_actor_scope($username))
+		{
+			$this->session->set_flashdata('attendance_notice_error', 'Akses pengajuan ditolak karena beda cabang.');
+			redirect('home/employee_data_emergency');
+			return;
+		}
+
+		$current_status = $this->normalize_emergency_attendance_status_key(isset($request_row['status']) ? (string) $request_row['status'] : 'pending');
+		if ($current_status !== 'pending')
+		{
+			$this->session->set_flashdata('attendance_notice_error', 'Data absen darurat ini sudah diproses.');
+			redirect('home/employee_data_emergency');
+			return;
+		}
+
+		if ($next_status === 'approved')
+		{
+			$approval_error = '';
+			if (!$this->apply_approved_emergency_attendance_request($request_row, $approval_error))
+			{
+				$this->session->set_flashdata(
+					'attendance_notice_error',
+					'Gagal menyetujui absen darurat: '.($approval_error !== '' ? $approval_error : 'data absensi tidak valid.')
+				);
+				redirect('home/employee_data_emergency');
+				return;
+			}
+		}
+
+		$request_row['status'] = $next_status;
+		$request_row['status_note'] = $next_status === 'approved' ? 'Disetujui admin' : 'Ditolak admin';
+		$request_row['reviewed_by'] = $this->current_actor_username();
+		$request_row['reviewed_at'] = date('Y-m-d H:i:s');
+		$request_row['updated_at'] = date('Y-m-d H:i:s');
+		$phone = isset($request_row['phone']) ? trim((string) $request_row['phone']) : '';
+		if ($phone === '')
+		{
+			$phone = $this->get_employee_phone($username);
+			if ($phone !== '')
+			{
+				$request_row['phone'] = $phone;
+			}
+		}
+		$requests[$target_index] = $request_row;
+		$this->save_emergency_attendance_requests($requests);
+
+		$whatsapp_result = array(
+			'success' => FALSE,
+			'message' => 'Nomor WhatsApp karyawan belum tersedia.'
+		);
+		if ($phone !== '')
+		{
+			$whatsapp_message = $this->build_emergency_attendance_status_whatsapp_message($request_row);
+			$whatsapp_result = $this->send_whatsapp_notification($phone, $whatsapp_message);
+		}
+
+		$action_label = $next_status === 'approved' ? 'disetujui' : 'ditolak';
+		$notice_message = 'Pengajuan absen darurat berhasil '.$action_label.'.';
+		if (isset($whatsapp_result['success']) && $whatsapp_result['success'] === TRUE)
+		{
+			$notice_message .= ' Notifikasi WhatsApp ke karyawan sudah terkirim.';
+		}
+		else
+		{
+			$wa_reason = isset($whatsapp_result['message']) ? trim((string) $whatsapp_result['message']) : 'unknown error';
+			$notice_message .= ' Namun notifikasi WhatsApp ke karyawan gagal dikirim.';
+			if ($wa_reason !== '')
+			{
+				$notice_message .= ' '.$wa_reason;
+			}
+			log_message('error', 'Notifikasi WA status absen darurat gagal: '.$wa_reason.' | request_id='.$request_id.' | username='.$username);
+		}
+
+		$this->session->set_flashdata('attendance_notice_success', $notice_message);
+		redirect('home/employee_data_emergency');
 	}
 
 	public function delete_leave_request()
@@ -12035,7 +14149,25 @@ class Home extends CI_Controller {
 		{
 			$return_page = 1;
 		}
-		$loan_redirect_url = 'home/loan_requests'.($return_page > 1 ? '?page='.$return_page : '');
+		$return_mode = strtolower(trim((string) $this->input->post('return_mode', TRUE)));
+		if ($return_mode === '')
+		{
+			$return_mode = strtolower(trim((string) $this->input->get('mode', TRUE)));
+		}
+		if ($return_mode !== 'monthly')
+		{
+			$return_mode = 'daily';
+		}
+		$loan_redirect_query = array();
+		if ($return_page > 1)
+		{
+			$loan_redirect_query[] = 'page='.$return_page;
+		}
+		if ($return_mode !== 'daily')
+		{
+			$loan_redirect_query[] = 'mode='.$return_mode;
+		}
+		$loan_redirect_url = 'home/loan_requests'.(!empty($loan_redirect_query) ? '?'.implode('&', $loan_redirect_query) : '');
 
 		if ($this->input->method(TRUE) !== 'POST')
 		{
@@ -12482,7 +14614,7 @@ class Home extends CI_Controller {
 			}
 
 			$tenor_months_value = isset($requests[$i]['tenor_months']) ? (int) $requests[$i]['tenor_months'] : 0;
-			if ($tenor_months_value < 1 || $tenor_months_value > 12)
+			if ($tenor_months_value < 1 || $tenor_months_value > 36)
 			{
 				$tenor_months_value = 1;
 				$requests[$i]['tenor_months'] = $tenor_months_value;
@@ -12628,9 +14760,85 @@ class Home extends CI_Controller {
 			$visible_requests[] = $requests[$i];
 		}
 
-		$rows_by_date = array();
-		$date_keys = array();
-		$date_label_by_key = array();
+		$view_mode = strtolower(trim((string) $this->input->get('mode', TRUE)));
+		if ($view_mode !== 'monthly')
+		{
+			$view_mode = 'daily';
+		}
+		$is_monthly_mode = $view_mode === 'monthly';
+		$is_ajax_search = trim((string) $this->input->get('ajax', TRUE)) === '1';
+		$search_keyword = strtolower(trim((string) $this->input->get('keyword', TRUE)));
+
+		if ($is_ajax_search)
+		{
+			$matched_requests = array();
+			if ($search_keyword !== '')
+			{
+				for ($i = 0; $i < count($visible_requests); $i += 1)
+				{
+					$row = isset($visible_requests[$i]) && is_array($visible_requests[$i]) ? $visible_requests[$i] : array();
+					$employee_id_value = isset($row['employee_id']) ? strtolower(trim((string) $row['employee_id'])) : '';
+					$username_value = isset($row['username']) ? strtolower(trim((string) $row['username'])) : '';
+					$phone_value = isset($row['phone']) ? strtolower(trim((string) $row['phone'])) : '';
+					if ($employee_id_value === '' && $username_value === '' && $phone_value === '')
+					{
+						continue;
+					}
+					if (strpos($employee_id_value, $search_keyword) !== FALSE ||
+						strpos($username_value, $search_keyword) !== FALSE ||
+						strpos($phone_value, $search_keyword) !== FALSE)
+					{
+						$matched_requests[] = $row;
+					}
+				}
+			}
+
+			$return_page_for_render = (int) $this->input->get('page', TRUE);
+			if ($return_page_for_render < 1)
+			{
+				$return_page_for_render = 1;
+			}
+
+			$rows_html = $this->load->view(
+				'home/_loan_request_rows',
+				array(
+					'requests_for_render' => $matched_requests,
+					'render_start_no' => 1,
+					'loan_current_page_for_render' => $return_page_for_render,
+					'loan_mode_for_render' => $view_mode,
+					'can_process_loan_requests' => $this->can_process_loan_requests_feature(),
+					'can_delete_loan_requests' => $this->can_delete_loan_requests_feature()
+				),
+				TRUE
+			);
+
+			$this->output
+				->set_content_type('application/json', 'utf-8')
+				->set_output(json_encode(array(
+					'status' => 'ok',
+					'count' => count($matched_requests),
+					'rows_html' => (string) $rows_html
+				)));
+			return;
+		}
+
+		$rows_by_group = array();
+		$group_keys = array();
+		$group_label_by_key = array();
+		$month_label_map = array(
+			'01' => 'Januari',
+			'02' => 'Februari',
+			'03' => 'Maret',
+			'04' => 'April',
+			'05' => 'Mei',
+			'06' => 'Juni',
+			'07' => 'Juli',
+			'08' => 'Agustus',
+			'09' => 'September',
+			'10' => 'Oktober',
+			'11' => 'November',
+			'12' => 'Desember'
+		);
 		for ($i = 0; $i < count($visible_requests); $i += 1)
 		{
 			$row = isset($visible_requests[$i]) && is_array($visible_requests[$i]) ? $visible_requests[$i] : array();
@@ -12639,38 +14847,64 @@ class Home extends CI_Controller {
 			{
 				$date_key = '0000-00-00';
 			}
-			if (!isset($rows_by_date[$date_key]))
+
+			$group_key = $date_key;
+			if ($is_monthly_mode)
 			{
-				$rows_by_date[$date_key] = array();
-				$date_keys[] = $date_key;
+				$group_key = $date_key !== '0000-00-00' ? substr($date_key, 0, 7) : '0000-00';
 			}
-			if (!isset($date_label_by_key[$date_key]))
+
+			if (!isset($rows_by_group[$group_key]))
 			{
-				$date_label = isset($row['request_date_label']) ? trim((string) $row['request_date_label']) : '';
-				if ($date_label === '' && $this->is_valid_date_format($date_key))
-				{
-					$date_label = date('d-m-Y', strtotime($date_key));
-				}
-				if ($date_label === '')
-				{
-					$date_label = '-';
-				}
-				$date_label_by_key[$date_key] = $date_label;
+				$rows_by_group[$group_key] = array();
+				$group_keys[] = $group_key;
 			}
-			$rows_by_date[$date_key][] = $row;
+
+			if (!isset($group_label_by_key[$group_key]))
+			{
+				if ($is_monthly_mode)
+				{
+					$month_label = '-';
+					if ($group_key !== '0000-00' && preg_match('/^\d{4}\-\d{2}$/', $group_key))
+					{
+						$month_number = substr($group_key, 5, 2);
+						$month_year = substr($group_key, 0, 4);
+						if (isset($month_label_map[$month_number]))
+						{
+							$month_label = $month_label_map[$month_number].' '.$month_year;
+						}
+					}
+					$group_label_by_key[$group_key] = $month_label;
+				}
+				else
+				{
+					$date_label = isset($row['request_date_label']) ? trim((string) $row['request_date_label']) : '';
+					if ($date_label === '' && $this->is_valid_date_format($date_key))
+					{
+						$date_label = date('d-m-Y', strtotime($date_key));
+					}
+					if ($date_label === '')
+					{
+						$date_label = '-';
+					}
+					$group_label_by_key[$group_key] = $date_label;
+				}
+			}
+			$rows_by_group[$group_key][] = $row;
 		}
-		usort($date_keys, function ($left, $right) {
+		usort($group_keys, function ($left, $right) use ($is_monthly_mode) {
 			$left_text = (string) $left;
 			$right_text = (string) $right;
 			if ($left_text === $right_text)
 			{
 				return 0;
 			}
-			if ($left_text === '0000-00-00')
+			$unknown_key = $is_monthly_mode ? '0000-00' : '0000-00-00';
+			if ($left_text === $unknown_key)
 			{
 				return 1;
 			}
-			if ($right_text === '0000-00-00')
+			if ($right_text === $unknown_key)
 			{
 				return -1;
 			}
@@ -12679,7 +14913,7 @@ class Home extends CI_Controller {
 
 		$page_raw = (int) $this->input->get('page', TRUE);
 		$current_page = $page_raw > 0 ? $page_raw : 1;
-		$total_pages = count($date_keys);
+		$total_pages = count($group_keys);
 		if ($total_pages < 1)
 		{
 			$total_pages = 1;
@@ -12694,23 +14928,23 @@ class Home extends CI_Controller {
 			$current_page = 1;
 		}
 
-		$current_date_key = '';
-		$current_date_label = '-';
+		$current_group_key = '';
+		$current_group_label = '-';
 		$current_page_requests = array();
-		if (!empty($date_keys))
+		if (!empty($group_keys))
 		{
-			$current_date_key = isset($date_keys[$current_page - 1]) ? (string) $date_keys[$current_page - 1] : '';
-			$current_page_requests = isset($rows_by_date[$current_date_key]) && is_array($rows_by_date[$current_date_key])
-				? $rows_by_date[$current_date_key]
+			$current_group_key = isset($group_keys[$current_page - 1]) ? (string) $group_keys[$current_page - 1] : '';
+			$current_page_requests = isset($rows_by_group[$current_group_key]) && is_array($rows_by_group[$current_group_key])
+				? $rows_by_group[$current_group_key]
 				: array();
-			$current_date_label = isset($date_label_by_key[$current_date_key]) ? (string) $date_label_by_key[$current_date_key] : '';
-			if ($current_date_label === '' && $this->is_valid_date_format($current_date_key))
+			$current_group_label = isset($group_label_by_key[$current_group_key]) ? (string) $group_label_by_key[$current_group_key] : '';
+			if (!$is_monthly_mode && $current_group_label === '' && $this->is_valid_date_format($current_group_key))
 			{
-				$current_date_label = date('d-m-Y', strtotime($current_date_key));
+				$current_group_label = date('d-m-Y', strtotime($current_group_key));
 			}
-			if ($current_date_label === '')
+			if ($current_group_label === '')
 			{
-				$current_date_label = '-';
+				$current_group_label = '-';
 			}
 		}
 
@@ -12726,12 +14960,17 @@ class Home extends CI_Controller {
 			'title' => 'Pengajuan Pinjaman',
 			'requests' => $current_page_requests,
 			'loan_pagination' => array(
+				'mode' => $view_mode,
+				'mode_label' => $is_monthly_mode ? 'Data Bulanan' : 'Data Terbaru',
+				'group_label_prefix' => $is_monthly_mode ? 'Bulan aktif' : 'Tanggal aktif',
 				'current_page' => $current_page,
 				'total_pages' => $total_pages,
 				'start_page' => $start_page,
 				'end_page' => $end_page,
-				'current_date_key' => $current_date_key,
-				'current_date_label' => $current_date_label,
+				'current_group_key' => $current_group_key,
+				'current_group_label' => $current_group_label,
+				'current_date_key' => $current_group_key,
+				'current_date_label' => $current_group_label,
 				'current_page_total' => count($current_page_requests),
 				'total_records' => count($visible_requests)
 			),
@@ -15884,6 +18123,70 @@ class Home extends CI_Controller {
 		return APPPATH.'cache/attendance_records.json';
 	}
 
+	private function emergency_attendance_requests_file_path()
+	{
+		return APPPATH.'cache/attendance_emergency_requests.json';
+	}
+
+	private function load_emergency_attendance_requests()
+	{
+		$file_path = $this->emergency_attendance_requests_file_path();
+		if (function_exists('absen_data_store_load_value'))
+		{
+			$rows = absen_data_store_load_value('attendance_emergency_requests', NULL, $file_path);
+			if (is_array($rows))
+			{
+				return array_values($rows);
+			}
+		}
+
+		if (!is_file($file_path))
+		{
+			return array();
+		}
+
+		$content = @file_get_contents($file_path);
+		if ($content === FALSE || trim($content) === '')
+		{
+			return array();
+		}
+
+		if (substr($content, 0, 3) === "\xEF\xBB\xBF")
+		{
+			$content = substr($content, 3);
+		}
+
+		$data = json_decode($content, TRUE);
+		if (!is_array($data))
+		{
+			return array();
+		}
+
+		return array_values($data);
+	}
+
+	private function save_emergency_attendance_requests($requests)
+	{
+		$file_path = $this->emergency_attendance_requests_file_path();
+		$normalized = array_values(is_array($requests) ? $requests : array());
+		if (function_exists('absen_data_store_save_value'))
+		{
+			$saved_to_store = absen_data_store_save_value('attendance_emergency_requests', $normalized, $file_path);
+			if ($saved_to_store)
+			{
+				return;
+			}
+		}
+
+		$directory = dirname($file_path);
+		if (!is_dir($directory))
+		{
+			@mkdir($directory, 0755, TRUE);
+		}
+		$payload = json_encode($normalized, JSON_PRETTY_PRINT);
+		@file_put_contents($file_path, $payload);
+	}
+
 	private function load_attendance_records()
 	{
 		if ($this->attendance_records_cache_loaded === TRUE && is_array($this->attendance_records_cache))
@@ -18279,6 +20582,13 @@ class Home extends CI_Controller {
 		return $this->resolve_employee_id_from_book($username, $this->employee_id_book());
 	}
 
+	private function resolve_employee_id_from_username($username)
+	{
+		$employee_id = $this->get_employee_id($username);
+		$employee_id = trim((string) $employee_id);
+		return $employee_id !== '' ? $employee_id : '-';
+	}
+
 	private function attendance_photo_upload_dir()
 	{
 		return 'uploads/attendance_photo';
@@ -18448,6 +20758,7 @@ class Home extends CI_Controller {
 		{
 			return '';
 		}
+		$is_data_image = strpos($photo_text, 'data:image/') === 0;
 
 		$upload_directory_relative = trim($this->attendance_photo_upload_dir(), '/\\');
 		$upload_directory_absolute = rtrim((string) FCPATH, '/\\').DIRECTORY_SEPARATOR.
@@ -18458,7 +20769,7 @@ class Home extends CI_Controller {
 		}
 		if (!is_dir($upload_directory_absolute) || !is_writable($upload_directory_absolute))
 		{
-			return $photo_text;
+			return $is_data_image ? '' : $photo_text;
 		}
 
 		$username_safe = preg_replace('/[^a-z0-9_]+/i', '', strtolower(trim((string) $username_key)));
@@ -18539,7 +20850,7 @@ class Home extends CI_Controller {
 		$matches = array();
 		if (!preg_match('/^data:image\/([a-z0-9.+-]+);base64,(.+)$/is', $photo_text, $matches))
 		{
-			return $photo_text;
+			return '';
 		}
 
 		$mime_ext = strtolower(trim((string) (isset($matches[1]) ? $matches[1] : '')));
@@ -18551,25 +20862,25 @@ class Home extends CI_Controller {
 		);
 		if (!isset($extension_map[$mime_ext]))
 		{
-			return $photo_text;
+			return '';
 		}
 
 		$base64_payload = isset($matches[2]) ? preg_replace('/\s+/', '', (string) $matches[2]) : '';
 		if (!is_string($base64_payload) || $base64_payload === '')
 		{
-			return $photo_text;
+			return '';
 		}
 		$binary = base64_decode($base64_payload, TRUE);
 		if (!is_string($binary) || $binary === '')
 		{
-			return $photo_text;
+			return '';
 		}
 
 		$binary_size = strlen($binary);
 		$max_bytes = 8 * 1024 * 1024;
 		if ($binary_size <= 0 || $binary_size > $max_bytes)
 		{
-			return $photo_text;
+			return '';
 		}
 
 		$photo_hash = substr(sha1($binary), 0, 20);
@@ -18586,7 +20897,7 @@ class Home extends CI_Controller {
 			);
 			if (!$saved_webp)
 			{
-				return $photo_text;
+				return '';
 			}
 		}
 
@@ -21362,6 +23673,93 @@ class Home extends CI_Controller {
 			"https://absenpanha.com/home/day_off_swap_requests";
 	}
 
+	private function build_new_emergency_attendance_submission_admin_whatsapp_message($request_row)
+	{
+		$request_row = is_array($request_row) ? $request_row : array();
+		$username = isset($request_row['username']) ? trim((string) $request_row['username']) : '';
+		$display_name = $this->resolve_requestor_display_name($username);
+		$request_id = isset($request_row['id']) ? trim((string) $request_row['id']) : '-';
+		$date_key = isset($request_row['date']) ? trim((string) $request_row['date']) : '';
+		$date_label = isset($request_row['date_label']) ? trim((string) $request_row['date_label']) : '';
+		if ($date_label === '' && $date_key !== '')
+		{
+			$date_label = $this->format_user_dashboard_date_label($date_key);
+		}
+		if ($date_label === '')
+		{
+			$date_label = '-';
+		}
+
+		$action_key = strtolower(trim((string) (isset($request_row['action']) ? $request_row['action'] : 'masuk')));
+		$action_label = $action_key === 'pulang' ? 'Absen Pulang Darurat' : 'Absen Masuk Darurat';
+		$check_time = isset($request_row['check_time']) ? trim((string) $request_row['check_time']) : '-';
+		if ($check_time === '')
+		{
+			$check_time = '-';
+		}
+
+		$distance_text = isset($request_row['check_in_distance_m']) && trim((string) $request_row['check_in_distance_m']) !== ''
+			? trim((string) $request_row['check_in_distance_m'])
+			: trim((string) (isset($request_row['check_out_distance_m']) ? $request_row['check_out_distance_m'] : ''));
+		if ($distance_text === '')
+		{
+			$distance_text = '-';
+		}
+		else
+		{
+			$distance_text .= ' m';
+		}
+
+		$accuracy_text = isset($request_row['check_in_accuracy_m']) && trim((string) $request_row['check_in_accuracy_m']) !== ''
+			? trim((string) $request_row['check_in_accuracy_m'])
+			: trim((string) (isset($request_row['check_out_accuracy_m']) ? $request_row['check_out_accuracy_m'] : ''));
+		if ($accuracy_text === '')
+		{
+			$accuracy_text = '-';
+		}
+		else
+		{
+			$accuracy_text .= ' m';
+		}
+
+		$reason = isset($request_row['emergency_reason']) ? trim((string) $request_row['emergency_reason']) : '';
+		if ($reason === '')
+		{
+			$reason = '-';
+		}
+		$late_reason = isset($request_row['late_reason']) ? trim((string) $request_row['late_reason']) : '';
+		if ($late_reason === '')
+		{
+			$late_reason = '-';
+		}
+		$branch_attendance = isset($request_row['branch_attendance']) ? trim((string) $request_row['branch_attendance']) : '';
+		if ($branch_attendance === '')
+		{
+			$branch_attendance = '-';
+		}
+		$office_label = isset($request_row['office_label']) ? trim((string) $request_row['office_label']) : '';
+		if ($office_label === '')
+		{
+			$office_label = '-';
+		}
+
+		return "Notifikasi Pengajuan Baru\n".
+			"Jenis: ".$action_label."\n".
+			"ID: ".$request_id."\n".
+			"Karyawan: ".$display_name." (".$username.")\n".
+			"Tanggal: ".$date_label."\n".
+			"Jam absen: ".$check_time."\n".
+			"Cabang absen: ".$branch_attendance."\n".
+			"Titik kantor terdekat: ".$office_label."\n".
+			"Jarak: ".$distance_text."\n".
+			"Akurasi: ".$accuracy_text."\n".
+			"Keterangan darurat: ".$reason."\n".
+			"Alasan telat: ".$late_reason."\n".
+			"Waktu submit: ".date('d-m-Y H:i:s')." WIB\n".
+			"Silakan buka web admin untuk proses pengajuan.\n".
+			"https://absenpanha.com/home/employee_data_emergency";
+	}
+
 	private function notify_admin_new_submission($submission_type, $request_row)
 	{
 		if ($this->submission_notify_enabled() !== TRUE)
@@ -21385,6 +23783,10 @@ class Home extends CI_Controller {
 		if ($type_key === 'loan')
 		{
 			$message = $this->build_new_loan_submission_admin_whatsapp_message($request_row);
+		}
+		elseif ($type_key === 'attendance_emergency' || $type_key === 'emergency_attendance')
+		{
+			$message = $this->build_new_emergency_attendance_submission_admin_whatsapp_message($request_row);
 		}
 		elseif ($type_key === 'day_off_swap' || $type_key === 'swap_day_off' || $type_key === 'day_off_swap_request')
 		{
@@ -21484,6 +23886,67 @@ class Home extends CI_Controller {
 			"Libur pengganti (jadi libur): ".$offday_label."\n".
 			"Alasan/catatan: ".$note."\n".
 			"Catatan admin: ".$review_note."\n".
+			"Terima kasih.";
+	}
+
+	private function build_emergency_attendance_status_whatsapp_message($request_row)
+	{
+		$request_row = is_array($request_row) ? $request_row : array();
+		$username_key = $this->normalize_username_key(isset($request_row['username']) ? (string) $request_row['username'] : '');
+		$display_name = $this->resolve_requestor_display_name($username_key);
+		if ($display_name === '')
+		{
+			$display_name = $username_key !== '' ? $username_key : 'karyawan';
+		}
+
+		$status_key = $this->normalize_emergency_attendance_status_key(
+			isset($request_row['status']) ? (string) $request_row['status'] : 'pending'
+		);
+		$status_label = $status_key === 'approved'
+			? 'DISETUJUI'
+			: ($status_key === 'rejected' ? 'DITOLAK' : 'MENUNGGU');
+		$action_key = strtolower(trim((string) (isset($request_row['action']) ? $request_row['action'] : 'masuk')));
+		$action_label = $action_key === 'pulang' ? 'ABSEN PULANG DARURAT' : 'ABSEN MASUK DARURAT';
+
+		$date_key = isset($request_row['date']) ? trim((string) $request_row['date']) : '';
+		$date_label = isset($request_row['date_label']) ? trim((string) $request_row['date_label']) : '';
+		if ($date_label === '' && $date_key !== '')
+		{
+			$date_label = $this->format_user_dashboard_date_label($date_key);
+		}
+		if ($date_label === '')
+		{
+			$date_label = '-';
+		}
+
+		$check_time = isset($request_row['check_time']) ? trim((string) $request_row['check_time']) : '';
+		if ($check_time === '')
+		{
+			$check_time = $action_key === 'pulang'
+				? trim((string) (isset($request_row['check_out_time']) ? $request_row['check_out_time'] : ''))
+				: trim((string) (isset($request_row['check_in_time']) ? $request_row['check_in_time'] : ''));
+		}
+		if ($check_time === '')
+		{
+			$check_time = '-';
+		}
+
+		$reason = isset($request_row['emergency_reason']) ? trim((string) $request_row['emergency_reason']) : '';
+		if ($reason === '')
+		{
+			$reason = '-';
+		}
+		$admin_note = isset($request_row['status_note']) ? trim((string) $request_row['status_note']) : '';
+		if ($admin_note === '')
+		{
+			$admin_note = '-';
+		}
+
+		return "Halo ".$display_name.", pengajuan ".$action_label." kamu ".$status_label." oleh admin.\n".
+			"Tanggal: ".$date_label."\n".
+			"Jam absen: ".$check_time."\n".
+			"Keterangan darurat: ".$reason."\n".
+			"Catatan admin: ".$admin_note."\n".
 			"Terima kasih.";
 	}
 
@@ -23597,6 +26060,7 @@ class Home extends CI_Controller {
 	private function should_bypass_attendance_time_window($username)
 	{
 		$username_key = strtolower(trim((string) $username));
+		$username_key_normalized = $this->normalize_username_key($username_key);
 		if ($username_key === '')
 		{
 			return FALSE;
@@ -23611,11 +26075,15 @@ class Home extends CI_Controller {
 		for ($i = 0; $i < count($bypass_usernames); $i += 1)
 		{
 			$candidate = strtolower(trim((string) $bypass_usernames[$i]));
+			$candidate_normalized = $this->normalize_username_key($candidate);
 			if ($candidate === '')
 			{
 				continue;
 			}
-			if ($username_key === $candidate)
+			if (
+				$username_key === $candidate ||
+				($username_key_normalized !== '' && $candidate_normalized !== '' && $username_key_normalized === $candidate_normalized)
+			)
 			{
 				return TRUE;
 			}
@@ -25631,6 +28099,97 @@ class Home extends CI_Controller {
 		$c = 2 * atan2(sqrt($a), sqrt(1 - $a));
 
 		return $earth_radius * $c;
+	}
+
+	// -------------------------------------------------------------------
+	// Phase 3: Integrity attestation endpoints
+	// -------------------------------------------------------------------
+
+	/**
+	 * Issue a server nonce for client attestation challenge.
+	 * POST /home/attestation_nonce
+	 */
+	public function attestation_nonce()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			$this->json_response(array('success' => FALSE, 'message' => 'Sesi login sudah habis.'), 401);
+			return;
+		}
+
+		if ($this->input->method(TRUE) !== 'POST')
+		{
+			$this->json_response(array('success' => FALSE, 'message' => 'Metode request tidak valid.'), 405);
+			return;
+		}
+
+		if (!function_exists('antifraud_generate_nonce'))
+		{
+			$this->json_response(array('success' => FALSE, 'message' => 'Fitur belum tersedia.'), 501);
+			return;
+		}
+
+		$result = antifraud_generate_nonce();
+		$this->json_response(array(
+			'success' => TRUE,
+			'nonce'   => $result['nonce'],
+			'ttl_s'   => $result['ttl_s']
+		));
+	}
+
+	/**
+	 * Receive and verify attestation payload from client.
+	 * POST /home/verify_attestation
+	 */
+	public function verify_attestation()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			$this->json_response(array('success' => FALSE, 'message' => 'Sesi login sudah habis.'), 401);
+			return;
+		}
+
+		if ($this->input->method(TRUE) !== 'POST')
+		{
+			$this->json_response(array('success' => FALSE, 'message' => 'Metode request tidak valid.'), 405);
+			return;
+		}
+
+		if (!function_exists('antifraud_verify_attestation'))
+		{
+			$this->json_response(array('success' => FALSE, 'message' => 'Fitur belum tersedia.'), 501);
+			return;
+		}
+
+		$nonce = trim((string) $this->input->post('nonce', TRUE));
+		$integrity_token = trim((string) $this->input->post('integrity_token', TRUE));
+		$payload_signature = trim((string) $this->input->post('payload_signature', TRUE));
+
+		$result = antifraud_verify_attestation(array(
+			'nonce' => $nonce,
+			'integrity_token' => $integrity_token,
+			'payload_signature' => $payload_signature
+		));
+
+		$username = (string) $this->session->userdata('absen_username');
+
+		// Log attestation attempt
+		if (function_exists('antifraud_audit_log'))
+		{
+			antifraud_audit_log(array(
+				'event'    => 'attestation_verify',
+				'username' => $username,
+				'verdict'  => $result['verdict'],
+				'reason'   => $result['reason'],
+				'ip'       => function_exists('antifraud_client_ip') ? antifraud_client_ip() : $this->input->ip_address()
+			));
+		}
+
+		$this->json_response(array(
+			'success' => TRUE,
+			'verdict' => $result['verdict'],
+			'reason'  => $result['reason']
+		));
 	}
 
 	private function json_response($payload, $status_code = 200)

@@ -12,7 +12,15 @@ $loan_current_page = isset($loan_pagination['current_page']) ? (int) $loan_pagin
 $loan_total_pages = isset($loan_pagination['total_pages']) ? (int) $loan_pagination['total_pages'] : 1;
 $loan_start_page = isset($loan_pagination['start_page']) ? (int) $loan_pagination['start_page'] : 1;
 $loan_end_page = isset($loan_pagination['end_page']) ? (int) $loan_pagination['end_page'] : 1;
-$loan_current_date_label = isset($loan_pagination['current_date_label']) ? (string) $loan_pagination['current_date_label'] : '-';
+$loan_mode = isset($loan_pagination['mode']) ? strtolower(trim((string) $loan_pagination['mode'])) : 'daily';
+if ($loan_mode !== 'monthly')
+{
+	$loan_mode = 'daily';
+}
+$loan_group_label_prefix = isset($loan_pagination['group_label_prefix']) ? (string) $loan_pagination['group_label_prefix'] : 'Tanggal aktif';
+$loan_current_date_label = isset($loan_pagination['current_group_label'])
+	? (string) $loan_pagination['current_group_label']
+	: (isset($loan_pagination['current_date_label']) ? (string) $loan_pagination['current_date_label'] : '-');
 $loan_current_page_total = isset($loan_pagination['current_page_total']) ? (int) $loan_pagination['current_page_total'] : count($requests);
 $loan_total_records = isset($loan_pagination['total_records']) ? (int) $loan_pagination['total_records'] : count($requests);
 if ($loan_current_page < 1)
@@ -43,9 +51,19 @@ if ($loan_end_page > $loan_total_pages)
 {
 	$loan_end_page = $loan_total_pages;
 }
-$build_loan_page_url = function ($page_number) {
+$build_loan_page_url = function ($page_number, $mode = 'daily') {
 	$page_value = max(1, (int) $page_number);
-	return site_url('home/loan_requests').'?page='.$page_value;
+	$mode_value = strtolower(trim((string) $mode));
+	if ($mode_value !== 'monthly')
+	{
+		$mode_value = 'daily';
+	}
+	$query_parts = array('page='.$page_value);
+	if ($mode_value !== 'daily')
+	{
+		$query_parts[] = 'mode='.$mode_value;
+	}
+	return site_url('home/loan_requests').'?'.implode('&', $query_parts);
 };
 ?>
 <?php
@@ -163,6 +181,36 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 
 		.table-tools {
 			padding: 0.75rem 0.85rem 0;
+		}
+
+		.view-mode-tabs {
+			display: flex;
+			align-items: center;
+			gap: 0.55rem;
+			margin-bottom: 0.72rem;
+			padding-bottom: 0.72rem;
+			border-bottom: 1px solid #e5eef8;
+		}
+
+		.view-mode-tab {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			padding: 0.58rem 1rem;
+			border-radius: 999px;
+			border: 1px solid #2f5e8b;
+			color: #e9f3ff;
+			background: #10345a;
+			font-size: 0.82rem;
+			font-weight: 700;
+			text-decoration: none;
+		}
+
+		.view-mode-tab.active {
+			background: linear-gradient(180deg, #1f6fbd 0%, #0f5c93 100%);
+			border-color: #0f5c93;
+			color: #ffffff;
+			box-shadow: 0 9px 20px rgba(42, 130, 213, 0.34);
 		}
 
 		.search-input {
@@ -335,6 +383,22 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 			border-top: 1px solid #35516b !important;
 		}
 
+		html.theme-dark .view-mode-tabs {
+			border-bottom-color: rgba(109, 145, 182, 0.2);
+		}
+
+		html.theme-dark .view-mode-tab {
+			background: #173149 !important;
+			border-color: #486985 !important;
+			color: #e4effd !important;
+		}
+
+		html.theme-dark .view-mode-tab.active {
+			background: linear-gradient(180deg, #2f79c1 0%, #1b588f 100%) !important;
+			border-color: #4f89c1 !important;
+			color: #ffffff !important;
+		}
+
 		.pager {
 			display: flex;
 			align-items: center;
@@ -505,6 +569,17 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 				padding: 0.62rem 0.72rem 0;
 			}
 
+			.view-mode-tabs {
+				margin-bottom: 0.6rem;
+				padding-bottom: 0.6rem;
+				gap: 0.4rem;
+			}
+
+			.view-mode-tab {
+				padding: 0.48rem 0.78rem;
+				font-size: 0.75rem;
+			}
+
 			.search-input {
 				width: 100%;
 				max-width: 100%;
@@ -668,8 +743,12 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 				<div class="empty">Belum ada pengajuan pinjaman dari karyawan.</div>
 			<?php else: ?>
 				<div class="table-tools">
+					<div class="view-mode-tabs">
+						<a href="<?php echo htmlspecialchars($build_loan_page_url(1, 'daily'), ENT_QUOTES, 'UTF-8'); ?>" class="view-mode-tab<?php echo $loan_mode === 'daily' ? ' active' : ''; ?>">Data Terbaru</a>
+						<a href="<?php echo htmlspecialchars($build_loan_page_url(1, 'monthly'), ENT_QUOTES, 'UTF-8'); ?>" class="view-mode-tab<?php echo $loan_mode === 'monthly' ? ' active' : ''; ?>">Data Bulanan</a>
+					</div>
 					<input id="loanSearchInput" type="text" class="search-input" placeholder="Cari ID, nama, atau no telp karyawan...">
-					<p class="search-help">Pencarian berlaku untuk data tanggal aktif di halaman ini (ID, Nama, Telp).</p>
+					<p class="search-help">Saat mengetik, pencarian akan memindai semua halaman pada mode aktif (ID, Nama, Telp).</p>
 				</div>
 				<div class="table-wrap">
 					<table>
@@ -686,109 +765,39 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 								<th>Alasan Pinjaman</th>
 								<th>Rincian Pinjaman</th>
 								<th>Status</th>
+								<th>Status Lunas</th>
 								<th>Aksi Admin</th>
 							</tr>
 						</thead>
 						<tbody id="loanRequestTableBody">
-							<?php $no = 1; ?>
-							<?php foreach ($requests as $row): ?>
-								<?php
-								$status_raw = isset($row['status']) ? strtolower(trim((string) $row['status'])) : 'menunggu';
-								$status_class = 'waiting';
-								if ($status_raw === 'disetujui' || $status_raw === 'approved' || $status_raw === 'diterima')
-								{
-									$status_class = 'approved';
-								}
-								elseif ($status_raw === 'ditolak' || $status_raw === 'rejected')
-								{
-									$status_class = 'rejected';
-								}
-								$status_label = isset($row['status']) && trim((string) $row['status']) !== '' ? (string) $row['status'] : 'Menunggu';
-								$phone_value = isset($row['phone']) && trim((string) $row['phone']) !== '' ? (string) $row['phone'] : '-';
-								$employee_id_value = isset($row['employee_id']) && trim((string) $row['employee_id']) !== '' ? (string) $row['employee_id'] : '-';
-								$profile_photo_value = isset($row['profile_photo']) && trim((string) $row['profile_photo']) !== ''
-									? (string) $row['profile_photo']
-									: (is_file(FCPATH.'src/assets/fotoku.webp') ? '/src/assets/fotoku.webp' : '/src/assets/fotoku.JPG');
-								$profile_photo_url = $profile_photo_value;
-								if (strpos($profile_photo_url, 'data:') !== 0 && preg_match('/^https?:\/\//i', $profile_photo_url) !== 1)
-								{
-									$profile_photo_relative = ltrim($profile_photo_url, '/\\');
-									$profile_photo_info = pathinfo($profile_photo_relative);
-									$profile_photo_thumb_relative = '';
-									if (isset($profile_photo_info['filename']) && trim((string) $profile_photo_info['filename']) !== '')
-									{
-										$profile_photo_dir = isset($profile_photo_info['dirname']) ? (string) $profile_photo_info['dirname'] : '';
-										$profile_photo_thumb_relative = $profile_photo_dir !== '' && $profile_photo_dir !== '.'
-											? $profile_photo_dir.'/'.$profile_photo_info['filename'].'_thumb.webp'
-											: $profile_photo_info['filename'].'_thumb.webp';
-									}
-									if ($profile_photo_thumb_relative !== '' &&
-										is_file(FCPATH.str_replace(array('/', '\\'), DIRECTORY_SEPARATOR, $profile_photo_thumb_relative)))
-									{
-										$profile_photo_relative = $profile_photo_thumb_relative;
-									}
-									$profile_photo_url = base_url(ltrim($profile_photo_relative, '/'));
-								}
-								$job_title_value = isset($row['job_title']) && trim((string) $row['job_title']) !== '' ? (string) $row['job_title'] : 'Teknisi';
-								$request_id = isset($row['id']) ? (string) $row['id'] : '';
-								$is_waiting = $status_raw === 'menunggu' || $status_raw === 'pending' || $status_raw === 'waiting';
-								?>
-								<tr class="loan-row" data-id="<?php echo htmlspecialchars(strtolower($employee_id_value), ENT_QUOTES, 'UTF-8'); ?>" data-name="<?php echo htmlspecialchars(strtolower((string) (isset($row['username']) ? $row['username'] : '')), ENT_QUOTES, 'UTF-8'); ?>" data-phone="<?php echo htmlspecialchars(strtolower($phone_value), ENT_QUOTES, 'UTF-8'); ?>">
-									<td class="row-no"><?php echo $no; ?></td>
-									<td><?php echo htmlspecialchars($employee_id_value, ENT_QUOTES, 'UTF-8'); ?></td>
-									<td>
-										<img class="profile-avatar" src="<?php echo htmlspecialchars($profile_photo_url, ENT_QUOTES, 'UTF-8'); ?>" alt="PP <?php echo htmlspecialchars(isset($row['username']) ? (string) $row['username'] : 'Karyawan', ENT_QUOTES, 'UTF-8'); ?>" loading="lazy" decoding="async">
-									</td>
-									<td><?php echo htmlspecialchars(isset($row['username']) ? (string) $row['username'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
-									<td><span class="phone"><?php echo htmlspecialchars($phone_value, ENT_QUOTES, 'UTF-8'); ?></span></td>
-									<td><?php echo htmlspecialchars($job_title_value, ENT_QUOTES, 'UTF-8'); ?></td>
-									<td><?php echo htmlspecialchars(isset($row['request_date_label']) ? (string) $row['request_date_label'] : '-', ENT_QUOTES, 'UTF-8'); ?></td>
-									<td><span class="amount"><?php echo htmlspecialchars(isset($row['amount_label']) ? (string) $row['amount_label'] : 'Rp 0', ENT_QUOTES, 'UTF-8'); ?></span></td>
-									<td><span class="reason"><?php echo htmlspecialchars(isset($row['reason']) ? (string) $row['reason'] : '-', ENT_QUOTES, 'UTF-8'); ?></span></td>
-									<td><span class="reason"><?php echo htmlspecialchars(isset($row['transparency']) ? (string) $row['transparency'] : '-', ENT_QUOTES, 'UTF-8'); ?></span></td>
-									<td><span class="status-chip <?php echo htmlspecialchars($status_class, ENT_QUOTES, 'UTF-8'); ?>"><?php echo htmlspecialchars($status_label, ENT_QUOTES, 'UTF-8'); ?></span></td>
-									<td>
-										<div class="admin-actions">
-											<?php if ($can_process_loan_requests && $is_waiting && $request_id !== ''): ?>
-												<form method="post" action="<?php echo site_url('home/update_loan_request_status'); ?>" class="admin-action-form">
-													<input type="hidden" name="request_id" value="<?php echo htmlspecialchars($request_id, ENT_QUOTES, 'UTF-8'); ?>">
-													<input type="hidden" name="return_page" value="<?php echo (int) $loan_current_page; ?>">
-													<button type="submit" name="status" value="diterima" class="admin-btn approve">Terima</button>
-													<button type="submit" name="status" value="ditolak" class="admin-btn reject">Tolak</button>
-												</form>
-											<?php else: ?>
-												<span class="processed-label"><?php echo $is_waiting ? 'Akses dibatasi' : 'Sudah diproses'; ?></span>
-											<?php endif; ?>
-											<?php if ($can_delete_loan_requests && $request_id !== ''): ?>
-												<form method="post" action="<?php echo site_url('home/delete_loan_request'); ?>" class="admin-action-form" onsubmit="return window.confirm('Hapus data pinjaman ini?');">
-													<input type="hidden" name="request_id" value="<?php echo htmlspecialchars($request_id, ENT_QUOTES, 'UTF-8'); ?>">
-													<input type="hidden" name="return_page" value="<?php echo (int) $loan_current_page; ?>">
-													<button type="submit" class="admin-btn delete">Hapus</button>
-												</form>
-											<?php endif; ?>
-										</div>
-									</td>
-								</tr>
-								<?php $no += 1; ?>
-							<?php endforeach; ?>
+							<?php
+							$this->load->view('home/_loan_request_rows', array(
+								'requests_for_render' => $requests,
+								'render_start_no' => 1,
+								'loan_current_page_for_render' => $loan_current_page,
+								'loan_mode_for_render' => $loan_mode,
+								'can_process_loan_requests' => $can_process_loan_requests,
+								'can_delete_loan_requests' => $can_delete_loan_requests
+							));
+							?>
 						</tbody>
 					</table>
 				</div>
 				<div id="loanSearchEmpty" class="empty" style="display:none;">Data pengajuan tidak ditemukan.</div>
 				<div id="loanPageMeta" class="table-meta">
-					<span><?php echo htmlspecialchars('Tanggal aktif: '.$loan_current_date_label.' | Halaman '.$loan_current_page.' dari '.$loan_total_pages, ENT_QUOTES, 'UTF-8'); ?></span>
-					<span><?php echo htmlspecialchars('Data tanggal ini: '.$loan_current_page_total.' | Total data: '.$loan_total_records, ENT_QUOTES, 'UTF-8'); ?></span>
+					<span><?php echo htmlspecialchars($loan_group_label_prefix.': '.$loan_current_date_label.' | Halaman '.$loan_current_page.' dari '.$loan_total_pages, ENT_QUOTES, 'UTF-8'); ?></span>
+					<span><?php echo htmlspecialchars('Data halaman ini: '.$loan_current_page_total.' | Total data: '.$loan_total_records, ENT_QUOTES, 'UTF-8'); ?></span>
 				</div>
 				<?php if ($loan_total_pages > 1): ?>
 					<div id="loanPager" class="pager">
 						<?php if ($loan_current_page > 1): ?>
-							<a href="<?php echo htmlspecialchars($build_loan_page_url($loan_current_page - 1), ENT_QUOTES, 'UTF-8'); ?>" class="pager-btn wide">Sebelumnya</a>
+							<a href="<?php echo htmlspecialchars($build_loan_page_url($loan_current_page - 1, $loan_mode), ENT_QUOTES, 'UTF-8'); ?>" class="pager-btn wide">Sebelumnya</a>
 						<?php endif; ?>
 						<?php for ($page_number = $loan_start_page; $page_number <= $loan_end_page; $page_number += 1): ?>
-							<a href="<?php echo htmlspecialchars($build_loan_page_url($page_number), ENT_QUOTES, 'UTF-8'); ?>" class="pager-btn<?php echo $page_number === $loan_current_page ? ' active' : ''; ?>"><?php echo (int) $page_number; ?></a>
+							<a href="<?php echo htmlspecialchars($build_loan_page_url($page_number, $loan_mode), ENT_QUOTES, 'UTF-8'); ?>" class="pager-btn<?php echo $page_number === $loan_current_page ? ' active' : ''; ?>"><?php echo (int) $page_number; ?></a>
 						<?php endfor; ?>
 						<?php if ($loan_current_page < $loan_total_pages): ?>
-							<a href="<?php echo htmlspecialchars($build_loan_page_url($loan_current_page + 1), ENT_QUOTES, 'UTF-8'); ?>" class="pager-btn wide">Selanjutnya</a>
+							<a href="<?php echo htmlspecialchars($build_loan_page_url($loan_current_page + 1, $loan_mode), ENT_QUOTES, 'UTF-8'); ?>" class="pager-btn wide">Selanjutnya</a>
 						<?php endif; ?>
 					</div>
 				<?php endif; ?>
@@ -799,39 +808,159 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 		(function () {
 			var searchInput = document.getElementById('loanSearchInput');
 			var emptyInfo = document.getElementById('loanSearchEmpty');
-			var rows = document.querySelectorAll('#loanRequestTableBody .loan-row');
+			var tableBody = document.getElementById('loanRequestTableBody');
+			var pager = document.getElementById('loanPager');
+			var metaBox = document.getElementById('loanPageMeta');
+			var searchEndpoint = <?php echo json_encode(site_url('home/loan_requests')); ?>;
+			var currentPage = <?php echo (int) $loan_current_page; ?>;
+			var modeValue = <?php echo json_encode($loan_mode); ?>;
+			var modeLabel = <?php echo json_encode(isset($loan_pagination['mode_label']) ? (string) $loan_pagination['mode_label'] : 'Data Terbaru'); ?>;
 
-			if (!searchInput || !rows.length) {
+			if (!searchInput || !tableBody) {
 				return;
 			}
 
-			var applySearch = function () {
-				var keyword = String(searchInput.value || '').toLowerCase().trim();
-				var visibleCount = 0;
+			var metaSpans = metaBox ? metaBox.querySelectorAll('span') : [];
+			var baseMetaTextLeft = metaSpans.length > 0 ? String(metaSpans[0].textContent || '') : '';
+			var baseMetaTextRight = metaSpans.length > 1 ? String(metaSpans[1].textContent || '') : '';
+			var initialTableHtml = String(tableBody.innerHTML || '');
+			var searchToken = 0;
+			var debounceTimer = null;
+			var activeAbortController = null;
 
-				for (var i = 0; i < rows.length; i += 1) {
-					var row = rows[i];
-					var idValue = String(row.getAttribute('data-id') || '');
-					var nameValue = String(row.getAttribute('data-name') || '');
-					var phoneValue = String(row.getAttribute('data-phone') || '');
-					var matched = keyword === '' || idValue.indexOf(keyword) !== -1 || nameValue.indexOf(keyword) !== -1 || phoneValue.indexOf(keyword) !== -1;
-					row.style.display = matched ? '' : 'none';
-					if (matched) {
-						visibleCount += 1;
-						var noCell = row.querySelector('.row-no');
-						if (noCell) {
-							noCell.textContent = String(visibleCount);
-						}
-					}
+			var setMetaText = function (left, right) {
+				if (!metaSpans.length) {
+					return;
 				}
-
-				if (emptyInfo) {
-					emptyInfo.style.display = visibleCount > 0 ? 'none' : 'block';
+				metaSpans[0].textContent = left;
+				if (metaSpans.length > 1) {
+					metaSpans[1].textContent = right;
 				}
 			};
 
-			searchInput.addEventListener('input', applySearch);
-			applySearch();
+			var setSearchState = function (isActive) {
+				if (pager) {
+					pager.style.display = isActive ? 'none' : '';
+				}
+				if (!isActive && metaSpans.length) {
+					setMetaText(baseMetaTextLeft, baseMetaTextRight);
+				}
+			};
+
+			var restoreInitialRows = function () {
+				tableBody.innerHTML = initialTableHtml;
+				if (emptyInfo) {
+					emptyInfo.style.display = 'none';
+				}
+			};
+
+			var buildSearchUrl = function (keyword) {
+				var params = new URLSearchParams();
+				params.set('ajax', '1');
+				params.set('mode', modeValue);
+				params.set('page', String(currentPage));
+				params.set('keyword', keyword);
+				return searchEndpoint + '?' + params.toString();
+			};
+
+			var fetchWithTimeout = function (url, timeoutMs) {
+				var controller = null;
+				if (typeof AbortController !== 'undefined') {
+					controller = new AbortController();
+					activeAbortController = controller;
+				}
+
+				var options = { credentials: 'same-origin' };
+				if (controller) {
+					options.signal = controller.signal;
+				}
+
+				var timer = window.setTimeout(function () {
+					if (controller) {
+						controller.abort();
+					}
+				}, timeoutMs);
+
+				return fetch(url, options).then(function (response) {
+					window.clearTimeout(timer);
+					return response;
+				}).catch(function (error) {
+					window.clearTimeout(timer);
+					throw error;
+				});
+			};
+
+			var applySearch = function (token) {
+				var keyword = String(searchInput.value || '').toLowerCase().trim();
+				if (keyword === '') {
+					if (activeAbortController && typeof activeAbortController.abort === 'function') {
+						activeAbortController.abort();
+					}
+					activeAbortController = null;
+					setSearchState(false);
+					restoreInitialRows();
+					return;
+				}
+
+				setSearchState(true);
+				setMetaText('Pencarian server: memuat data...', 'Mode: ' + modeLabel);
+
+				fetchWithTimeout(buildSearchUrl(keyword), 15000)
+					.then(function (response) {
+						if (!response.ok) {
+							throw new Error('HTTP ' + response.status);
+						}
+						return response.json();
+					})
+					.then(function (payload) {
+						if (token !== searchToken) {
+							return;
+						}
+
+						var rowsHtml = payload && typeof payload.rows_html === 'string' ? payload.rows_html : '';
+						var matchedCount = payload && typeof payload.count === 'number'
+							? payload.count
+							: 0;
+
+						tableBody.innerHTML = rowsHtml;
+						if (emptyInfo) {
+							emptyInfo.style.display = matchedCount > 0 ? 'none' : 'block';
+						}
+						setMetaText(
+							matchedCount > 0
+								? ('Pencarian semua halaman: menampilkan ' + matchedCount + ' data')
+								: 'Pencarian semua halaman: data tidak ditemukan.',
+							'Mode: ' + modeLabel + ' | Source: server'
+						);
+					})
+					.catch(function (error) {
+						if (token !== searchToken) {
+							return;
+						}
+						if (error && error.name === 'AbortError') {
+							return;
+						}
+						console.error('Pencarian server gagal', error);
+						setMetaText('Pencarian server gagal. Coba lagi.', 'Mode: ' + modeLabel);
+					})
+					.then(function () {
+						activeAbortController = null;
+					});
+			};
+
+			searchInput.addEventListener('input', function () {
+				searchToken += 1;
+				var activeToken = searchToken;
+				if (debounceTimer !== null) {
+					window.clearTimeout(debounceTimer);
+				}
+				debounceTimer = window.setTimeout(function () {
+					applySearch(activeToken);
+				}, 220);
+			});
+
+			restoreInitialRows();
+			setSearchState(false);
 		})();
 
 		(function () {

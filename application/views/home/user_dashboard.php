@@ -217,11 +217,71 @@ if ($theme_global_js_version === '')
 {
 	$theme_global_js_version = '1';
 }
+$index_page_config = trim((string) config_item('index_page'));
+$endpoint_prefix = $index_page_config !== '' ? '/'.trim($index_page_config, '/') : '';
+$normalize_dashboard_endpoint = static function ($path_value, $fallback_uri = '') {
+	$path = is_string($path_value) ? trim($path_value) : '';
+	if ($path === '' && $fallback_uri !== '')
+	{
+		$path = trim((string) $fallback_uri);
+	}
+	if (preg_match('#^https?://#i', $path) === 1)
+	{
+		$parsed_path = parse_url($path, PHP_URL_PATH);
+		$path = is_string($parsed_path) ? trim($parsed_path) : '';
+	}
+	$path = str_replace('\\', '/', $path);
+	if (strpos($path, '//') === 0)
+	{
+		$path = '/'.ltrim($path, '/');
+	}
+	if ($path !== '' && $path[0] !== '/')
+	{
+		$path = '/'.$path;
+	}
+	$path = preg_replace('#/+#', '/', $path);
+	if (!is_string($path) || trim($path) === '')
+	{
+		$path = '/';
+	}
+	return $path;
+};
+$submit_endpoint_path = $normalize_dashboard_endpoint(
+	parse_url(site_url('home/submit_attendance'), PHP_URL_PATH),
+	$endpoint_prefix.'/home/submit_attendance'
+);
+$emergency_submit_endpoint_path = $normalize_dashboard_endpoint(
+	parse_url(site_url('home/submit_emergency_attendance'), PHP_URL_PATH),
+	$endpoint_prefix.'/home/submit_emergency_attendance'
+);
+$leave_request_endpoint_path = $normalize_dashboard_endpoint(
+	parse_url(site_url('home/submit_leave_request'), PHP_URL_PATH),
+	$endpoint_prefix.'/home/submit_leave_request'
+);
+$loan_request_endpoint_path = $normalize_dashboard_endpoint(
+	parse_url(site_url('home/submit_loan_request'), PHP_URL_PATH),
+	$endpoint_prefix.'/home/submit_loan_request'
+);
+$dashboard_summary_endpoint_path = $normalize_dashboard_endpoint(
+	parse_url(site_url('home/user_dashboard_live_data'), PHP_URL_PATH),
+	$endpoint_prefix.'/home/user_dashboard_live_data'
+);
+$attestation_nonce_endpoint_path = $normalize_dashboard_endpoint(
+	parse_url(site_url('home/attestation_nonce'), PHP_URL_PATH),
+	$endpoint_prefix.'/home/attestation_nonce'
+);
+$verify_attestation_endpoint_path = $normalize_dashboard_endpoint(
+	parse_url(site_url('home/verify_attestation'), PHP_URL_PATH),
+	$endpoint_prefix.'/home/verify_attestation'
+);
 $user_dashboard_config_json = json_encode(array(
-	'submitEndpoint' => parse_url(site_url('home/submit_attendance'), PHP_URL_PATH),
-	'leaveRequestEndpoint' => parse_url(site_url('home/submit_leave_request'), PHP_URL_PATH),
-	'loanRequestEndpoint' => parse_url(site_url('home/submit_loan_request'), PHP_URL_PATH),
-	'dashboardSummaryEndpoint' => parse_url(site_url('home/user_dashboard_live_data'), PHP_URL_PATH),
+	'submitEndpoint' => $submit_endpoint_path,
+	'emergencySubmitEndpoint' => $emergency_submit_endpoint_path,
+	'leaveRequestEndpoint' => $leave_request_endpoint_path,
+	'loanRequestEndpoint' => $loan_request_endpoint_path,
+	'dashboardSummaryEndpoint' => $dashboard_summary_endpoint_path,
+	'attestationNonceEndpoint' => $attestation_nonce_endpoint_path,
+	'verifyAttestationEndpoint' => $verify_attestation_endpoint_path,
 	'loanConfig' => array(
 		'minPrincipal' => isset($loan_config['min_principal']) ? (int) $loan_config['min_principal'] : 500000,
 		'maxPrincipal' => isset($loan_config['max_principal']) ? (int) $loan_config['max_principal'] : 10000000,
@@ -351,6 +411,10 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 					<button type="button" class="action-btn checkin" data-attendance-open="true">
 						<p class="action-title">Absen</p>
 						<p class="action-text">Tap untuk pilih absen masuk atau pulang.</p>
+					</button>
+					<button type="button" class="action-btn emergency" data-emergency-open="true">
+						<p class="action-title">Absen Darurat</p>
+						<p class="action-text">Absen di luar radius kantor. Wajib isi keterangan darurat, menunggu approval admin.</p>
 					</button>
 					<button type="button" class="action-btn leave is-coming-soon" disabled aria-disabled="true" title="COMING SOON">
 						<span class="coming-soon-badge">COMING SOON</span>
@@ -590,6 +654,73 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 		</section>
 	</div>
 
+	<div id="emergencyAttendanceModal" class="attendance-modal" aria-hidden="true">
+		<div class="modal-overlay" data-emergency-close></div>
+		<section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="emergencyAttendanceTitle">
+			<div class="modal-head">
+				<h2 id="emergencyAttendanceTitle" class="modal-title">Proses Absen Darurat</h2>
+				<button type="button" class="modal-close" id="closeEmergencyAttendanceModal" aria-label="Tutup popup absen darurat">&times;</button>
+			</div>
+			<div class="modal-body">
+				<div class="modal-grid">
+					<div class="preview-card">
+						<p class="card-label">Preview Kamera</p>
+						<div class="video-wrap">
+							<video id="emergencyCameraPreview" class="camera-video" autoplay muted playsinline></video>
+							<div id="emergencyCameraPlaceholder" class="camera-placeholder">Meminta akses kamera...</div>
+						</div>
+						<div class="control-row">
+							<select id="emergencyCameraSelect" class="camera-select" aria-label="Pilih kamera absen darurat">
+								<option value="">Memuat daftar kamera...</option>
+							</select>
+							<button type="button" id="emergencyCapturePhotoButton" class="capture-btn" disabled>Ambil Foto</button>
+						</div>
+						<canvas id="emergencyCaptureCanvas" width="1280" height="720" hidden></canvas>
+					</div>
+					<div class="info-card">
+						<p class="card-label">Informasi Absen Darurat</p>
+						<div class="info-item">
+							<p class="info-title">Jenis Absensi (Wajib Pilih)</p>
+							<select id="emergencyAttendanceTypeSelect" class="request-input" aria-label="Pilih jenis absensi darurat">
+								<option value="" selected>Pilih jenis absensi</option>
+								<option value="masuk">Absen Masuk</option>
+								<option value="pulang">Absen Pulang</option>
+							</select>
+						</div>
+						<div class="info-item">
+							<p class="info-title">Shift</p>
+							<p id="emergencyShiftValue" class="info-value"><?php echo htmlspecialchars($shift_name.' ('.$shift_time.')', ENT_QUOTES, 'UTF-8'); ?></p>
+							<?php if (!empty($attendance_shift_detail_lines)): ?>
+								<ul class="shift-detail-list">
+									<?php foreach ($attendance_shift_detail_lines as $shift_detail_line): ?>
+										<li><?php echo htmlspecialchars((string) $shift_detail_line, ENT_QUOTES, 'UTF-8'); ?></li>
+									<?php endforeach; ?>
+								</ul>
+							<?php endif; ?>
+						</div>
+						<div class="info-item">
+							<p class="info-title">GPS</p>
+							<p id="emergencyGpsValue" class="info-value">Meminta lokasi...</p>
+						</div>
+						<div class="info-item">
+							<p class="info-title">Waktu</p>
+							<p id="emergencyTimeValue" class="info-value">-</p>
+						</div>
+						<div class="info-item">
+							<p class="info-title">Keterangan Darurat (Wajib)</p>
+							<textarea id="emergencyReasonInput" class="late-reason-input" placeholder="Tulis alasan kenapa harus absen darurat..." required></textarea>
+						</div>
+					</div>
+				</div>
+				<div id="emergencyCaptureResult" class="capture-result">
+					<h3>Hasil Foto Absen Darurat</h3>
+					<img id="emergencyCapturedImage" class="capture-image" src="" alt="Hasil foto absen darurat">
+					<p id="emergencyResultMeta" class="result-meta"></p>
+				</div>
+			</div>
+		</section>
+	</div>
+
 	<div id="requestModal" class="request-modal" aria-hidden="true">
 		<div class="modal-overlay" data-request-close></div>
 		<section class="request-panel" role="dialog" aria-modal="true" aria-labelledby="requestTitle">
@@ -804,6 +935,165 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 	<script>
 		window.__USER_DASHBOARD_RECENT_LOANS = <?php echo json_encode($recent_loans, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
 		window.__USER_DASHBOARD_CONFIG = <?php echo $user_dashboard_config_json; ?>;
+		(function () {
+			if (window.__USER_DASHBOARD_FETCH_GUARD_APPLIED === true) {
+				return;
+			}
+			if (typeof window.fetch !== 'function') {
+				return;
+			}
+			var nativeFetch = window.fetch.bind(window);
+			var normalizeFetchPath = function (rawValue) {
+				var value = String(rawValue || '').trim();
+				if (value === '') {
+					return value;
+				}
+				if (value.indexOf('//') === 0) {
+					// Prevent protocol-relative host resolution when endpoint should be a local path.
+					var singleSlashPath = '/' + value.replace(/^\/+/, '');
+					if (
+						singleSlashPath.indexOf('/home/') === 0 ||
+						singleSlashPath.indexOf('/index.php/') === 0 ||
+						singleSlashPath.indexOf('/uploads/') === 0
+					) {
+						return singleSlashPath;
+					}
+				}
+				return value;
+			};
+			window.fetch = function (input, init) {
+				var requestInput = input;
+				if (typeof requestInput === 'string') {
+					requestInput = normalizeFetchPath(requestInput);
+				}
+				var requestInit = init;
+				var requestPath = typeof requestInput === 'string' ? requestInput : '';
+				var toText = function (value) {
+					return String(value == null ? '' : value).trim();
+				};
+				var parseJsonResponse = function (response) {
+					if (!response || typeof response.json !== 'function') {
+						return Promise.resolve({});
+					}
+					return response.json().catch(function () {
+						return {};
+					});
+				};
+				if (requestPath !== '' && requestPath.indexOf('submit_attendance') !== -1) {
+					var mergedInit = Object.assign({}, init || {});
+					var headers = null;
+					if (typeof Headers === 'function') {
+						headers = new Headers((init && init.headers) ? init.headers : undefined);
+						headers.set('X-Requested-With', 'XMLHttpRequest');
+					}
+					else
+					{
+						headers = Object.assign({}, (init && init.headers && typeof init.headers === 'object') ? init.headers : {});
+						headers['X-Requested-With'] = 'XMLHttpRequest';
+					}
+					mergedInit.headers = headers;
+					if (!mergedInit.credentials) {
+						mergedInit.credentials = 'same-origin';
+					}
+
+					var body = mergedInit.body;
+					if (typeof FormData === 'function' && body instanceof FormData) {
+						if (!body.has('client_timestamp') || toText(body.get('client_timestamp')) === '') {
+							body.set('client_timestamp', String(Math.floor(Date.now() / 1000)));
+						}
+
+						var bridgeValues = {
+							device_id: toText(window.__ABSEN_DEVICE_ID),
+							is_mock_suspected: toText(window.__ABSEN_IS_MOCK_SUSPECTED || 'false'),
+							is_dev_options_on: toText(window.__ABSEN_IS_DEV_OPTIONS_ON || 'false'),
+							is_rooted_suspected: toText(window.__ABSEN_IS_ROOTED_SUSPECTED || 'false'),
+							integrity_token: toText(window.__ABSEN_INTEGRITY_TOKEN),
+							payload_signature: toText(window.__ABSEN_PAYLOAD_SIGNATURE),
+							attestation_nonce: toText(window.__ABSEN_ATTESTATION_NONCE),
+							attestation_verdict: toText(window.__ABSEN_ATTESTATION_VERDICT),
+							attestation_reason: toText(window.__ABSEN_ATTESTATION_REASON)
+						};
+
+						var bridgeKeys = Object.keys(bridgeValues);
+						for (var i = 0; i < bridgeKeys.length; i += 1) {
+							var key = bridgeKeys[i];
+							var current = toText(body.get(key));
+							if (current === '' && bridgeValues[key] !== '') {
+								body.set(key, bridgeValues[key]);
+							}
+						}
+
+						var cfg = window.__USER_DASHBOARD_CONFIG && typeof window.__USER_DASHBOARD_CONFIG === 'object'
+							? window.__USER_DASHBOARD_CONFIG
+							: {};
+						var nonceEndpoint = normalizeFetchPath(toText(cfg.attestationNonceEndpoint || ''));
+						var verifyEndpoint = normalizeFetchPath(toText(cfg.verifyAttestationEndpoint || ''));
+						var integrityToken = toText(body.get('integrity_token'));
+						var hasAttestationVerdict = toText(body.get('attestation_verdict')) !== '';
+
+						if (!hasAttestationVerdict && integrityToken !== '' && nonceEndpoint !== '' && verifyEndpoint !== '') {
+							return nativeFetch(nonceEndpoint, {
+								method: 'POST',
+								headers: headers,
+								credentials: mergedInit.credentials
+							})
+								.then(function (nonceResponse) {
+									return parseJsonResponse(nonceResponse).then(function (nonceJson) {
+										if (!nonceResponse || !nonceResponse.ok || !nonceJson || nonceJson.success !== true) {
+											throw new Error('nonce_unavailable');
+										}
+										var nonceValue = toText(nonceJson.nonce);
+										if (nonceValue === '') {
+											throw new Error('nonce_empty');
+										}
+										body.set('attestation_nonce', nonceValue);
+										var verifyBody = new FormData();
+										verifyBody.append('nonce', nonceValue);
+										verifyBody.append('integrity_token', integrityToken);
+										verifyBody.append('payload_signature', toText(body.get('payload_signature')));
+										return nativeFetch(verifyEndpoint, {
+											method: 'POST',
+											headers: headers,
+											credentials: mergedInit.credentials,
+											body: verifyBody
+										});
+									});
+								})
+								.then(function (verifyResponse) {
+									return parseJsonResponse(verifyResponse).then(function (verifyJson) {
+										var verdict = verifyJson && verifyJson.verdict ? toText(verifyJson.verdict).toUpperCase() : 'UNKNOWN';
+										var reason = verifyJson && verifyJson.reason ? toText(verifyJson.reason) : '';
+										body.set('attestation_verdict', verdict === '' ? 'UNKNOWN' : verdict);
+										if (reason !== '') {
+											body.set('attestation_reason', reason);
+										}
+										return nativeFetch(requestInput, mergedInit);
+									});
+								})
+								.catch(function () {
+									return nativeFetch(requestInput, mergedInit);
+								})
+								.catch(function (error) {
+									var message = error && error.message ? String(error.message) : '';
+									if (/failed to fetch/i.test(message)) {
+										throw new Error('Koneksi ke server gagal (Failed to fetch). Cek internet/SSL lalu coba lagi.');
+									}
+									throw error;
+								});
+						}
+					}
+					requestInit = mergedInit;
+				}
+				return nativeFetch(requestInput, requestInit).catch(function (error) {
+					var message = error && error.message ? String(error.message) : '';
+					if (/failed to fetch/i.test(message)) {
+						throw new Error('Koneksi ke server gagal (Failed to fetch). Cek internet/SSL lalu coba lagi.');
+					}
+					throw error;
+				});
+			};
+			window.__USER_DASHBOARD_FETCH_GUARD_APPLIED = true;
+		}());
 		(function (cfg) {
 			if (!cfg || typeof cfg !== 'object') {
 				window.__USER_DASHBOARD_CONFIG = {};
@@ -1786,6 +2076,596 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 		}
 		else if (initialError) {
 			showToast(initialError);
+		}
+	}());
+	</script>
+	<script>
+	(function () {
+		var modal = document.getElementById('emergencyAttendanceModal');
+		if (!modal) {
+			return;
+		}
+
+		var toast = document.getElementById('toastMessage');
+		var openButtons = document.querySelectorAll('[data-emergency-open]');
+		var closeButton = document.getElementById('closeEmergencyAttendanceModal');
+		var overlayClose = modal.querySelector('[data-emergency-close]');
+		var modalBody = modal.querySelector('.modal-body');
+		var cameraPreview = document.getElementById('emergencyCameraPreview');
+		var cameraPlaceholder = document.getElementById('emergencyCameraPlaceholder');
+		var cameraSelect = document.getElementById('emergencyCameraSelect');
+		var captureButton = document.getElementById('emergencyCapturePhotoButton');
+		var captureCanvas = document.getElementById('emergencyCaptureCanvas');
+		var attendanceTypeSelect = document.getElementById('emergencyAttendanceTypeSelect');
+		var gpsValue = document.getElementById('emergencyGpsValue');
+		var timeValue = document.getElementById('emergencyTimeValue');
+		var reasonInput = document.getElementById('emergencyReasonInput');
+		var resultWrap = document.getElementById('emergencyCaptureResult');
+		var resultImage = document.getElementById('emergencyCapturedImage');
+		var resultMeta = document.getElementById('emergencyResultMeta');
+		var defaultCaptureButtonText = captureButton ? String(captureButton.textContent || 'Ambil Foto') : 'Ambil Foto';
+
+		var config = window.__USER_DASHBOARD_CONFIG || {};
+		var endpoint = String(config.emergencySubmitEndpoint || '').trim();
+		var stream = null;
+		var selectedDeviceId = '';
+		var capturedPhoto = '';
+		var locationState = null;
+		var gpsTimer = null;
+		var clockTimer = null;
+		var toastTimer = null;
+		var emergencySubmitTimer = null;
+		var requestInFlight = false;
+
+		function showToast(message) {
+			if (!toast) {
+				return;
+			}
+			toast.textContent = String(message || '');
+			toast.classList.add('show');
+			if (toastTimer !== null) {
+				window.clearTimeout(toastTimer);
+			}
+			toastTimer = window.setTimeout(function () {
+				toast.classList.remove('show');
+			}, 7000);
+		}
+
+		function isModalOpen(id) {
+			var el = document.getElementById(id);
+			return !!(el && el.classList && el.classList.contains('show'));
+		}
+
+		function updateBodyOverflow() {
+			var hasModalOpen = modal.classList.contains('show')
+				|| isModalOpen('attendanceModal')
+				|| isModalOpen('requestModal')
+				|| isModalOpen('loanModal')
+				|| isModalOpen('swapDayOffModal')
+				|| isModalOpen('loanHistoryDetailModal');
+			document.body.style.overflow = hasModalOpen ? 'hidden' : '';
+		}
+
+		function closeOtherModalIfOpen(id) {
+			var el = document.getElementById(id);
+			if (!el || !el.classList || !el.classList.contains('show')) {
+				return;
+			}
+			el.classList.remove('show');
+			el.setAttribute('aria-hidden', 'true');
+		}
+
+		function stopCamera() {
+			if (!stream) {
+				return;
+			}
+			var tracks = stream.getTracks ? stream.getTracks() : [];
+			for (var i = 0; i < tracks.length; i += 1) {
+				tracks[i].stop();
+			}
+			stream = null;
+			if (cameraPreview) {
+				cameraPreview.srcObject = null;
+			}
+		}
+
+		function stopGpsClock() {
+			if (gpsTimer !== null) {
+				window.clearInterval(gpsTimer);
+				gpsTimer = null;
+			}
+			if (clockTimer !== null) {
+				window.clearInterval(clockTimer);
+				clockTimer = null;
+			}
+		}
+
+		function nowLabel() {
+			return new Intl.DateTimeFormat('id-ID', {
+				weekday: 'long',
+				day: '2-digit',
+				month: 'long',
+				year: 'numeric',
+				hour: '2-digit',
+				minute: '2-digit',
+				second: '2-digit',
+				hour12: false
+			}).format(new Date());
+		}
+
+		function officePoints() {
+			var points = Array.isArray(config.officePoints) ? config.officePoints : [];
+			var normalized = [];
+			for (var i = 0; i < points.length; i += 1) {
+				var row = points[i] && typeof points[i] === 'object' ? points[i] : {};
+				var lat = Number(row.lat);
+				var lng = Number(row.lng);
+				if (!isFinite(lat) || !isFinite(lng)) {
+					continue;
+				}
+				normalized.push({
+					label: String(row.label || 'Kantor'),
+					lat: lat,
+					lng: lng
+				});
+			}
+			if (!normalized.length) {
+				var fallbackLat = Number(config.officeLat);
+				var fallbackLng = Number(config.officeLng);
+				if (isFinite(fallbackLat) && isFinite(fallbackLng)) {
+					normalized.push({ label: 'Kantor', lat: fallbackLat, lng: fallbackLng });
+				}
+			}
+			return normalized;
+		}
+
+		function haversine(lat1, lng1, lat2, lng2) {
+			var toRad = Math.PI / 180;
+			var dLat = (lat2 - lat1) * toRad;
+			var dLng = (lng2 - lng1) * toRad;
+			var a = Math.sin(dLat / 2) * Math.sin(dLat / 2)
+				+ Math.cos(lat1 * toRad) * Math.cos(lat2 * toRad) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+			var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+			return 6371000 * c;
+		}
+
+		function nearestOffice(lat, lng) {
+			var points = officePoints();
+			var bestDistance = Infinity;
+			var bestLabel = 'Kantor';
+			for (var i = 0; i < points.length; i += 1) {
+				var row = points[i];
+				var distance = haversine(lat, lng, row.lat, row.lng);
+				if (distance < bestDistance) {
+					bestDistance = distance;
+					bestLabel = row.label || 'Kantor';
+				}
+			}
+			if (!isFinite(bestDistance)) {
+				bestDistance = 0;
+			}
+			return {
+				label: bestLabel,
+				distance: bestDistance
+			};
+		}
+
+		function setCameraPlaceholder(message, visible) {
+			if (!cameraPlaceholder) {
+				return;
+			}
+			cameraPlaceholder.textContent = String(message || '');
+			cameraPlaceholder.style.display = visible ? 'flex' : 'none';
+		}
+
+		function startCamera(deviceId) {
+			if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+				return Promise.reject(new Error('Browser tidak mendukung akses kamera.'));
+			}
+			stopCamera();
+			setCameraPlaceholder('Meminta akses kamera...', true);
+			var constraints = {
+				video: deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'user' },
+				audio: false
+			};
+			return navigator.mediaDevices.getUserMedia(constraints).then(function (mediaStream) {
+				stream = mediaStream;
+				if (cameraPreview) {
+					cameraPreview.srcObject = mediaStream;
+					cameraPreview.style.transform = 'scaleX(-1)';
+				}
+				setCameraPlaceholder('Kamera aktif.', false);
+				var tracks = mediaStream.getVideoTracks ? mediaStream.getVideoTracks() : [];
+				if (tracks.length && tracks[0].getSettings && tracks[0].getSettings().deviceId) {
+					selectedDeviceId = String(tracks[0].getSettings().deviceId || '');
+				}
+				return navigator.mediaDevices.enumerateDevices ? navigator.mediaDevices.enumerateDevices() : [];
+			}).then(function (devices) {
+				if (!cameraSelect) {
+					return;
+				}
+				var inputs = [];
+				for (var i = 0; i < devices.length; i += 1) {
+					if (devices[i] && devices[i].kind === 'videoinput') {
+						inputs.push(devices[i]);
+					}
+				}
+				cameraSelect.innerHTML = '';
+				if (!inputs.length) {
+					var fallbackOption = document.createElement('option');
+					fallbackOption.value = '';
+					fallbackOption.textContent = 'Kamera tidak ditemukan';
+					cameraSelect.appendChild(fallbackOption);
+					return;
+				}
+				for (var j = 0; j < inputs.length; j += 1) {
+					var option = document.createElement('option');
+					option.value = String(inputs[j].deviceId || '');
+					option.textContent = inputs[j].label || ('Camera ' + (j + 1));
+					cameraSelect.appendChild(option);
+				}
+				if (selectedDeviceId !== '') {
+					cameraSelect.value = selectedDeviceId;
+				} else {
+					selectedDeviceId = String(cameraSelect.value || '');
+				}
+			});
+		}
+
+		function updateLocationLabel() {
+			if (!gpsValue) {
+				return;
+			}
+			if (!locationState) {
+				gpsValue.textContent = 'Meminta lokasi...';
+				return;
+			}
+			gpsValue.textContent = locationState.lat.toFixed(6) + ', ' + locationState.lng.toFixed(6)
+				+ ' | Jarak ' + locationState.distance.toFixed(2) + 'm dari ' + locationState.officeLabel
+				+ ' | Akurasi ' + Math.round(locationState.accuracy) + 'm';
+		}
+
+		function pollLocation() {
+			if (!navigator.geolocation) {
+				return Promise.reject(new Error('Browser tidak mendukung GPS.'));
+			}
+			return new Promise(function (resolve, reject) {
+				navigator.geolocation.getCurrentPosition(function (position) {
+					var lat = Number(position.coords.latitude);
+					var lng = Number(position.coords.longitude);
+					var accuracy = Number(position.coords.accuracy);
+					var nearest = nearestOffice(lat, lng);
+					locationState = {
+						lat: lat,
+						lng: lng,
+						accuracy: accuracy,
+						officeLabel: nearest.label,
+						distance: nearest.distance
+					};
+					updateLocationLabel();
+					resolve(locationState);
+				}, function (error) {
+					locationState = null;
+					updateLocationLabel();
+					var message = 'Gagal membaca GPS.';
+					if (error && typeof error.code === 'number') {
+						if (error.code === error.PERMISSION_DENIED) {
+							message = 'Izin lokasi ditolak.';
+						} else if (error.code === error.POSITION_UNAVAILABLE) {
+							message = 'Lokasi tidak tersedia.';
+						} else if (error.code === error.TIMEOUT) {
+							message = 'Permintaan GPS timeout.';
+						}
+					}
+					reject(new Error(message));
+				}, {
+					enableHighAccuracy: true,
+					timeout: 10000,
+					maximumAge: 0
+				});
+			});
+		}
+
+		function updateClock() {
+			if (timeValue) {
+				timeValue.textContent = nowLabel();
+			}
+		}
+
+		function resetCaptureResult() {
+			capturedPhoto = '';
+			if (emergencySubmitTimer !== null) {
+				window.clearTimeout(emergencySubmitTimer);
+				emergencySubmitTimer = null;
+			}
+			if (resultImage) {
+				resultImage.src = '';
+			}
+			if (resultWrap) {
+				resultWrap.classList.remove('show');
+			}
+			if (resultMeta) {
+				resultMeta.textContent = '';
+			}
+		}
+
+		function scrollToEmergencyPreview() {
+			if (!resultWrap || !resultWrap.classList.contains('show')) {
+				return;
+			}
+			var doScroll = function () {
+				try {
+					if (modalBody && typeof modalBody.scrollTo === 'function') {
+						var bodyRect = modalBody.getBoundingClientRect();
+						var wrapRect = resultWrap.getBoundingClientRect();
+						var targetTop = modalBody.scrollTop + (wrapRect.top - bodyRect.top) - 12;
+						if (targetTop < 0) {
+							targetTop = 0;
+						}
+						modalBody.scrollTo({
+							top: targetTop,
+							behavior: 'smooth'
+						});
+						return;
+					}
+					if (typeof resultWrap.scrollIntoView === 'function') {
+						resultWrap.scrollIntoView({
+							behavior: 'smooth',
+							block: 'start',
+							inline: 'nearest'
+						});
+					}
+				} catch (error) {
+					if (modalBody) {
+						var fallbackTop = resultWrap.offsetTop - 12;
+						modalBody.scrollTop = fallbackTop > 0 ? fallbackTop : 0;
+					}
+				}
+			};
+			if (typeof window.requestAnimationFrame === 'function') {
+				window.requestAnimationFrame(function () {
+					window.requestAnimationFrame(doScroll);
+				});
+				return;
+			}
+			window.setTimeout(doScroll, 30);
+		}
+
+		function openModal() {
+			closeOtherModalIfOpen('attendanceModal');
+			closeOtherModalIfOpen('requestModal');
+			closeOtherModalIfOpen('loanModal');
+			closeOtherModalIfOpen('swapDayOffModal');
+
+			modal.classList.add('show');
+			modal.setAttribute('aria-hidden', 'false');
+			updateBodyOverflow();
+
+			if (attendanceTypeSelect) {
+				attendanceTypeSelect.value = '';
+			}
+			if (reasonInput) {
+				reasonInput.value = '';
+			}
+			if (modalBody) {
+				modalBody.scrollTop = 0;
+			}
+			if (captureButton) {
+				captureButton.disabled = false;
+				captureButton.textContent = defaultCaptureButtonText;
+			}
+			requestInFlight = false;
+			locationState = null;
+			updateLocationLabel();
+			resetCaptureResult();
+			updateClock();
+			stopGpsClock();
+			clockTimer = window.setInterval(updateClock, 1000);
+			pollLocation().catch(function (error) {
+				showToast(error.message || 'Gagal membaca GPS.');
+			});
+			gpsTimer = window.setInterval(function () {
+				pollLocation().catch(function () {});
+			}, 3000);
+			startCamera(selectedDeviceId).catch(function (error) {
+				setCameraPlaceholder(error.message || 'Kamera tidak dapat diakses.', true);
+				showToast(error.message || 'Kamera tidak dapat diakses.');
+			});
+		}
+
+		function closeModal() {
+			if (emergencySubmitTimer !== null) {
+				window.clearTimeout(emergencySubmitTimer);
+				emergencySubmitTimer = null;
+			}
+			modal.classList.remove('show');
+			modal.setAttribute('aria-hidden', 'true');
+			stopGpsClock();
+			stopCamera();
+			setCameraPlaceholder('Meminta akses kamera...', true);
+			updateBodyOverflow();
+		}
+
+		function capturePhoto() {
+			if (requestInFlight) {
+				return;
+			}
+			if (!cameraPreview || !captureCanvas) {
+				showToast('Komponen kamera tidak tersedia.');
+				return;
+			}
+			if (!stream) {
+				showToast('Kamera belum aktif. Izinkan akses kamera terlebih dahulu.');
+				return;
+			}
+			if (!locationState) {
+				showToast('Lokasi GPS belum tersedia. Tunggu sampai GPS terbaca.');
+				return;
+			}
+			var emergencyReason = reasonInput ? String(reasonInput.value || '').trim() : '';
+			if (emergencyReason === '') {
+				showToast('Keterangan darurat wajib diisi sebelum ambil foto.');
+				if (reasonInput) {
+					reasonInput.focus();
+				}
+				return;
+			}
+			var width = cameraPreview.videoWidth;
+			var height = cameraPreview.videoHeight;
+			if (!width || !height) {
+				showToast('Preview kamera belum siap.');
+				return;
+			}
+
+			var square = Math.max(width, height);
+			var drawWidth = width;
+			var drawHeight = height;
+			var offsetX = (square - drawWidth) / 2;
+			var offsetY = (square - drawHeight) / 2;
+
+			captureCanvas.width = square;
+			captureCanvas.height = square;
+			var context = captureCanvas.getContext('2d');
+			context.fillStyle = '#132b4a';
+			context.fillRect(0, 0, square, square);
+			context.save();
+			context.translate(offsetX + drawWidth, offsetY);
+			context.scale(-1, 1);
+			context.drawImage(cameraPreview, 0, 0, width, height, 0, 0, drawWidth, drawHeight);
+			context.restore();
+
+			capturedPhoto = captureCanvas.toDataURL('image/jpeg', 0.92);
+			if (resultImage) {
+				resultImage.src = capturedPhoto;
+			}
+			if (resultWrap) {
+				resultWrap.classList.add('show');
+				window.setTimeout(scrollToEmergencyPreview, 80);
+			}
+			if (resultMeta) {
+				var actionText = attendanceTypeSelect && attendanceTypeSelect.value === 'pulang' ? 'Absen Pulang' : 'Absen Masuk';
+				resultMeta.textContent = actionText + ' Darurat'
+					+ ' | Jarak ' + locationState.distance.toFixed(2) + 'm'
+					+ ' | ' + locationState.lat.toFixed(6) + ', ' + locationState.lng.toFixed(6)
+					+ ' | ' + nowLabel();
+			}
+			if (emergencySubmitTimer !== null) {
+				window.clearTimeout(emergencySubmitTimer);
+			}
+			emergencySubmitTimer = window.setTimeout(function () {
+				emergencySubmitTimer = null;
+				submitEmergencyAttendance();
+			}, 220);
+		}
+
+		function submitEmergencyAttendance() {
+			if (requestInFlight) {
+				return;
+			}
+			if (endpoint === '') {
+				showToast('Endpoint absen darurat belum tersedia.');
+				return;
+			}
+			var action = attendanceTypeSelect ? String(attendanceTypeSelect.value || '').trim() : '';
+			if (action !== 'masuk' && action !== 'pulang') {
+				showToast('Pilih jenis absensi darurat terlebih dahulu.');
+				return;
+			}
+			if (!capturedPhoto) {
+				showToast('Ambil foto absen darurat terlebih dahulu.');
+				return;
+			}
+			if (!locationState) {
+				showToast('Lokasi GPS belum terbaca.');
+				return;
+			}
+			var emergencyReason = reasonInput ? String(reasonInput.value || '').trim() : '';
+			if (emergencyReason === '') {
+				showToast('Keterangan darurat wajib diisi.');
+				if (reasonInput) {
+					reasonInput.focus();
+				}
+				return;
+			}
+
+			var payload = new FormData();
+			payload.append('action', action);
+			payload.append('photo', capturedPhoto);
+			payload.append('latitude', String(locationState.lat));
+			payload.append('longitude', String(locationState.lng));
+			payload.append('accuracy', String(locationState.accuracy));
+			payload.append('emergency_reason', emergencyReason);
+
+			requestInFlight = true;
+			if (captureButton) {
+				captureButton.disabled = true;
+				captureButton.textContent = 'Mengirim...';
+			}
+
+			fetch(endpoint, {
+				method: 'POST',
+				body: payload,
+				headers: {
+					'X-Requested-With': 'XMLHttpRequest'
+				}
+			}).then(function (response) {
+				return response.json().catch(function () {
+					return {
+						success: false,
+						message: 'Respons server tidak valid.'
+					};
+				}).then(function (json) {
+					if (!response.ok || !json || json.success !== true) {
+						throw new Error(json && json.message ? json.message : 'Gagal kirim pengajuan absen darurat.');
+					}
+					return json;
+				});
+			}).then(function (json) {
+				showToast(json.message || 'Pengajuan absen darurat berhasil dikirim.');
+				closeModal();
+			}).catch(function (error) {
+				showToast(error && error.message ? error.message : 'Gagal kirim pengajuan absen darurat.');
+			}).finally(function () {
+				requestInFlight = false;
+				if (captureButton) {
+					captureButton.disabled = false;
+					captureButton.textContent = defaultCaptureButtonText;
+				}
+			});
+		}
+
+		for (var i = 0; i < openButtons.length; i += 1) {
+			openButtons[i].addEventListener('click', function (event) {
+				event.preventDefault();
+				openModal();
+			});
+		}
+		if (closeButton) {
+			closeButton.addEventListener('click', closeModal);
+		}
+		if (overlayClose) {
+			overlayClose.addEventListener('click', closeModal);
+		}
+		if (cameraSelect) {
+			cameraSelect.addEventListener('change', function () {
+				selectedDeviceId = String(cameraSelect.value || '');
+				startCamera(selectedDeviceId).catch(function (error) {
+					setCameraPlaceholder(error.message || 'Kamera tidak dapat diakses.', true);
+					showToast(error.message || 'Kamera tidak dapat diakses.');
+				});
+			});
+		}
+		if (captureButton) {
+			captureButton.addEventListener('click', capturePhoto);
+		}
+		document.addEventListener('keydown', function (event) {
+			if (event.key === 'Escape' && modal.classList.contains('show')) {
+				closeModal();
+			}
+		});
+
+		if (cameraSelect && captureButton) {
+			captureButton.disabled = false;
 		}
 	}());
 	</script>

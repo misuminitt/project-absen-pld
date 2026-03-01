@@ -1095,6 +1095,52 @@ if (!function_exists('absen_sanitize_account_book'))
 			}
 		}
 
+		if (!isset($sanitized['akuntesting']) || !is_array($sanitized['akuntesting']))
+		{
+			$test_shift = isset($shift_profiles['pagi']) && is_array($shift_profiles['pagi'])
+				? $shift_profiles['pagi']
+				: array('shift_name' => 'Shift Pagi - Sore', 'shift_time' => '08:00 - 17:00');
+			$test_salary = isset($salary_profiles['A']) && is_array($salary_profiles['A'])
+				? $salary_profiles['A']
+				: array('salary_tier' => 'A', 'salary_monthly' => 1000000, 'work_days' => 28);
+			$test_password_hash = absen_hash_password('123');
+			if ($test_password_hash === '')
+			{
+				$test_password_hash = '123';
+			}
+			$sanitized['akuntesting'] = array(
+				'role' => 'user',
+				'password' => $test_password_hash,
+				'password_hash' => $test_password_hash,
+				'force_password_change' => 0,
+				'password_changed_at' => '',
+				'login_alias' => '',
+				'display_name' => 'akuntesting',
+				'branch' => absen_default_employee_branch(),
+				'cross_branch_enabled' => 0,
+				'employee_id' => '',
+				'phone' => '6280000000000',
+				'shift_name' => isset($test_shift['shift_name']) ? (string) $test_shift['shift_name'] : 'Shift Pagi - Sore',
+				'shift_time' => isset($test_shift['shift_time']) ? (string) $test_shift['shift_time'] : '08:00 - 17:00',
+				'salary_tier' => isset($test_salary['salary_tier']) ? (string) $test_salary['salary_tier'] : 'A',
+				'salary_monthly' => isset($test_salary['salary_monthly']) ? (int) $test_salary['salary_monthly'] : 1000000,
+				'work_days' => isset($test_salary['work_days']) ? (int) $test_salary['work_days'] : 28,
+				'weekly_day_off' => 1,
+				'custom_allowed_weekdays' => array(),
+				'custom_off_ranges' => array(),
+				'custom_work_ranges' => array(),
+				'job_title' => 'Teknisi',
+				'address' => 'Akun testing',
+				'profile_photo' => '',
+				'coordinate_point' => '',
+				'employee_status' => 'Aktif',
+				'feature_permissions' => array(),
+				'sheet_row' => 0,
+				'sheet_sync_source' => 'web',
+				'sheet_last_sync_at' => ''
+			);
+		}
+
 		$usernames = array_keys($sanitized);
 		sort($usernames, SORT_STRING);
 		$used_employee_ids = array();

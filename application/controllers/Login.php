@@ -3,6 +3,9 @@ defined('BASEPATH') OR exit('No direct script access allowed');
 
 class Login extends CI_Controller {
 	const COLLAB_STATE_STORE_KEY = 'admin_collab_state';
+	const WEB_MAINTENANCE_BYPASS_SESSION_KEY = 'web_maintenance_bypass_access';
+	const WEB_MAINTENANCE_BYPASS_SESSION_TTL_SECONDS = 43200;
+	const WEB_MAINTENANCE_BYPASS_QUERY_KEY = 'devgate';
 
 	public function __construct()
 	{
@@ -11,6 +14,17 @@ class Login extends CI_Controller {
 		$this->load->library('absen_sheet_sync');
 		$this->load->helper('absen_account_store');
 		$this->load->helper('absen_data_store');
+		$web_maintenance_helper = APPPATH.'helpers/absen_web_maintenance_helper.php';
+		if (is_file($web_maintenance_helper) && !is_readable($web_maintenance_helper))
+		{
+			@chmod($web_maintenance_helper, 0644);
+			clearstatcache(TRUE, $web_maintenance_helper);
+		}
+		if (is_file($web_maintenance_helper) && is_readable($web_maintenance_helper))
+		{
+			$this->load->helper('absen_web_maintenance');
+		}
+		$this->enforce_web_maintenance_mode();
 	}
 
 	public function index()
@@ -215,6 +229,168 @@ class Login extends CI_Controller {
 	private function collab_state_file_path()
 	{
 		return APPPATH.'cache/admin_collab_state.json';
+	}
+
+	private function web_maintenance_bypass_query_key()
+	{
+		return self::WEB_MAINTENANCE_BYPASS_QUERY_KEY;
+	}
+
+	private function web_maintenance_bypass_session_data()
+	{
+		$state = $this->session->userdata(self::WEB_MAINTENANCE_BYPASS_SESSION_KEY);
+		return is_array($state) ? $state : array();
+	}
+
+	private function clear_web_maintenance_bypass_session()
+	{
+		$this->session->unset_userdata(self::WEB_MAINTENANCE_BYPASS_SESSION_KEY);
+	}
+
+	private function grant_web_maintenance_bypass_session($source = '')
+	{
+		$actor = strtolower(trim((string) $this->session->userdata('absen_username')));
+		$state = array(
+			'granted' => TRUE,
+			'source' => trim((string) $source),
+			'actor' => $actor,
+			'granted_at' => date('Y-m-d H:i:s'),
+			'granted_ts' => time()
+		);
+		$this->session->set_userdata(self::WEB_MAINTENANCE_BYPASS_SESSION_KEY, $state);
+	}
+
+	private function has_web_maintenance_bypass_session()
+	{
+		$state = $this->web_maintenance_bypass_session_data();
+		$granted = isset($state['granted']) && $state['granted'] ? TRUE : FALSE;
+		if (!$granted)
+		{
+			return FALSE;
+		}
+
+		$granted_ts = isset($state['granted_ts']) ? (int) $state['granted_ts'] : 0;
+		$ttl = (int) self::WEB_MAINTENANCE_BYPASS_SESSION_TTL_SECONDS;
+		if ($granted_ts <= 0 || $ttl <= 0)
+		{
+			return TRUE;
+		}
+		if ((time() - $granted_ts) > $ttl)
+		{
+			$this->clear_web_maintenance_bypass_session();
+			return FALSE;
+		}
+
+		return TRUE;
+	}
+
+	private function read_web_maintenance_bypass_token_from_request()
+	{
+		$query_key = $this->web_maintenance_bypass_query_key();
+		$token = $this->input->get($query_key, TRUE);
+		if ($token !== NULL && trim((string) $token) !== '')
+		{
+			return trim((string) $token);
+		}
+
+		$token = $this->input->post($query_key, TRUE);
+		if ($token !== NULL && trim((string) $token) !== '')
+		{
+			return trim((string) $token);
+		}
+
+		return '';
+	}
+
+	private function apply_web_maintenance_bypass_from_request()
+	{
+		$token = $this->read_web_maintenance_bypass_token_from_request();
+		if ($token === '')
+		{
+			return FALSE;
+		}
+		if (!function_exists('absen_web_maintenance_verify_bypass_token'))
+		{
+			return FALSE;
+		}
+		if (!absen_web_maintenance_verify_bypass_token($token))
+		{
+			return FALSE;
+		}
+
+		$this->grant_web_maintenance_bypass_session('query');
+		return TRUE;
+	}
+
+	private function render_web_maintenance_page()
+	{
+		$image_relative = 'src/assets/maintenance.png';
+		$image_file_path = FCPATH.$image_relative;
+		$image_url = is_file($image_file_path)
+			? base_url($image_relative).'?v='.rawurlencode((string) @filemtime($image_file_path))
+			: '';
+		$image_data_uri = '';
+		if (is_file($image_file_path) && is_readable($image_file_path))
+		{
+			$binary = @file_get_contents($image_file_path);
+			if ($binary !== FALSE && $binary !== '')
+			{
+				$image_data_uri = 'data:image/png;base64,'.base64_encode($binary);
+			}
+		}
+		$image_src = $image_data_uri !== '' ? $image_data_uri : $image_url;
+		$image_html = '';
+		if ($image_src !== '')
+		{
+			$image_html = '<img class="maintenance-image" src="'.htmlspecialchars($image_src, ENT_QUOTES, 'UTF-8').'" alt="Website Under Development">';
+		}
+		else
+		{
+			$image_html = '<div class="maintenance-fallback"><h1>Website Under Development</h1><p>Maintenance mode aktif. Mohon bersabar yaa.</p></div>';
+		}
+		$html = '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Website Sedang Maintenance</title><style>'
+			.'html,body{margin:0;padding:0;width:100%;height:100%;background:#0d3ea8;}'
+			.'body{display:flex;align-items:center;justify-content:center;font-family:Segoe UI,Arial,sans-serif;color:#fff;}'
+			.'.maintenance-wrap{width:100%;height:100%;display:flex;align-items:center;justify-content:center;padding:18px;box-sizing:border-box;}'
+			.'.maintenance-image{display:block;max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain;user-select:none;-webkit-user-drag:none;}'
+			.'.maintenance-fallback{text-align:center;max-width:560px;}'
+			.'.maintenance-fallback h1{margin:0 0 12px;font-size:clamp(1.6rem,3.5vw,2.4rem);}'
+			.'.maintenance-fallback p{margin:0;font-size:clamp(1rem,2.3vw,1.2rem);opacity:.92;}'
+			.'</style></head><body><div class="maintenance-wrap">'.$image_html.'</div></body></html>';
+
+		// Use 200 to avoid host/server-level 503 override pages replacing this custom maintenance view.
+		$this->output->set_status_header(200);
+		$this->output->set_content_type('text/html', 'utf-8');
+		$this->output->set_header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+		$this->output->set_header('Pragma: no-cache');
+		$this->output->set_header('X-Robots-Tag: noindex, nofollow');
+		$this->output->set_output($html);
+	}
+
+	private function enforce_web_maintenance_mode()
+	{
+		if (is_cli())
+		{
+			return;
+		}
+
+		if (!function_exists('absen_web_maintenance_enabled') || !absen_web_maintenance_enabled())
+		{
+			return;
+		}
+
+		$this->apply_web_maintenance_bypass_from_request();
+		if ($this->has_web_maintenance_bypass_session())
+		{
+			return;
+		}
+
+		$this->render_web_maintenance_page();
+		if (isset($this->output) && is_object($this->output) && method_exists($this->output, '_display'))
+		{
+			$this->output->_display();
+		}
+		exit;
 	}
 
 	private function collab_load_state()

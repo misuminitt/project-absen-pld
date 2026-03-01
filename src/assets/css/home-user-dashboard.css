@@ -622,6 +622,24 @@ html.theme-dark .info-value{
 	color:#edf5ff !important;
 }
 
+html.theme-dark .capture-result{
+	background:#102437 !important;
+	border-color:#35516b !important;
+}
+
+html.theme-dark .capture-result h3{
+	color:#ddebf8 !important;
+}
+
+html.theme-dark .capture-image{
+	border-color:#35516b !important;
+	background:#0f2233 !important;
+}
+
+html.theme-dark .result-meta{
+	color:#c0d3e6 !important;
+}
+
 html.theme-dark .shift-detail-list,
 html.theme-dark .shift-detail-list li{
 	color:#c0d3e6 !important;
@@ -1006,3 +1024,5 @@ html.theme-dark .loan-payment-status.belum-lunas{
 		grid-template-columns:1fr;
 	}
 }
+
+.action-btn.emergency{background:linear-gradient(145deg,#8b2338 0,#d44a61 100%);color:#fff}

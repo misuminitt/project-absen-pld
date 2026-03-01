@@ -63,6 +63,15 @@ $can_manage_accounts = isset($can_manage_accounts) && $can_manage_accounts === T
 $can_process_day_off_swap_requests = isset($can_process_day_off_swap_requests) && $can_process_day_off_swap_requests === TRUE;
 $can_sync_sheet_accounts = isset($can_sync_sheet_accounts) && $can_sync_sheet_accounts === TRUE;
 $can_manage_feature_accounts = isset($can_manage_feature_accounts) && $can_manage_feature_accounts === TRUE;
+$can_toggle_web_maintenance = isset($can_toggle_web_maintenance) && $can_toggle_web_maintenance === TRUE;
+$web_maintenance_enabled = isset($web_maintenance_enabled) && $web_maintenance_enabled === TRUE;
+$web_maintenance_updated_at = isset($web_maintenance_updated_at) ? trim((string) $web_maintenance_updated_at) : '';
+$web_maintenance_updated_by = isset($web_maintenance_updated_by) ? trim((string) $web_maintenance_updated_by) : '';
+$web_maintenance_toggle_url = isset($web_maintenance_toggle_url) && trim((string) $web_maintenance_toggle_url) !== ''
+	? trim((string) $web_maintenance_toggle_url)
+	: site_url('home/toggle_web_maintenance_mode');
+$web_maintenance_bypass_url = isset($web_maintenance_bypass_url) ? trim((string) $web_maintenance_bypass_url) : '';
+$web_maintenance_query_key = isset($web_maintenance_query_key) ? trim((string) $web_maintenance_query_key) : 'devgate';
 $sync_backup_ready = isset($sync_backup_ready) && $sync_backup_ready === TRUE;
 $sync_backup_status_text = isset($sync_backup_status_text) ? trim((string) $sync_backup_status_text) : '';
 $sync_backup_required_directions = array(
@@ -71,28 +80,31 @@ $sync_backup_required_directions = array(
 	'web_to_sheet_loan',
 	'sheet_loan_to_web'
 );
-$loan_sync_last_report = isset($loan_sync_last_report) && is_array($loan_sync_last_report)
-	? $loan_sync_last_report
+$sync_last_report = isset($sync_last_report) && is_array($sync_last_report)
+	? $sync_last_report
+	: (isset($loan_sync_last_report) && is_array($loan_sync_last_report) ? $loan_sync_last_report : array());
+$sync_last_action = isset($sync_last_report['action']) ? strtolower(trim((string) $sync_last_report['action'])) : '';
+$sync_last_status = isset($sync_last_report['status']) ? strtolower(trim((string) $sync_last_report['status'])) : '';
+$sync_last_message = isset($sync_last_report['message']) ? trim((string) $sync_last_report['message']) : '';
+$sync_last_created_at = isset($sync_last_report['created_at']) ? trim((string) $sync_last_report['created_at']) : '';
+$sync_last_meta = isset($sync_last_report['meta']) && is_array($sync_last_report['meta'])
+	? $sync_last_report['meta']
 	: array();
-$loan_sync_last_action = isset($loan_sync_last_report['action']) ? strtolower(trim((string) $loan_sync_last_report['action'])) : '';
-$loan_sync_last_status = isset($loan_sync_last_report['status']) ? strtolower(trim((string) $loan_sync_last_report['status'])) : '';
-$loan_sync_last_message = isset($loan_sync_last_report['message']) ? trim((string) $loan_sync_last_report['message']) : '';
-$loan_sync_last_created_at = isset($loan_sync_last_report['created_at']) ? trim((string) $loan_sync_last_report['created_at']) : '';
-$loan_sync_last_meta = isset($loan_sync_last_report['meta']) && is_array($loan_sync_last_report['meta'])
-	? $loan_sync_last_report['meta']
-	: array();
-$loan_sync_last_action_label_map = array(
+$sync_last_action_label_map = array(
+	'sync_accounts_from_sheet' => 'Sync Akun dari Sheet',
+	'sync_attendance_from_sheet' => 'Sync Data Absen dari Sheet',
+	'sync_web_to_sheet' => 'Sync Data Web ke Sheet',
 	'sync_web_to_loan_sheet' => 'Sync Data Web ke Pinjaman',
 	'sync_loan_sheet_to_web' => 'Sync Data Pinjaman ke Web'
 );
-$loan_sync_last_action_label = isset($loan_sync_last_action_label_map[$loan_sync_last_action])
-	? $loan_sync_last_action_label_map[$loan_sync_last_action]
-	: ($loan_sync_last_action !== '' ? str_replace('_', ' ', $loan_sync_last_action) : '-');
-$loan_sync_last_detail_text = '';
-if (isset($loan_sync_last_meta['payload']) && is_array($loan_sync_last_meta['payload']))
+$sync_last_action_label = isset($sync_last_action_label_map[$sync_last_action])
+	? $sync_last_action_label_map[$sync_last_action]
+	: ($sync_last_action !== '' ? str_replace('_', ' ', $sync_last_action) : '-');
+$sync_last_detail_text = '';
+if (isset($sync_last_meta['payload']) && is_array($sync_last_meta['payload']))
 {
-	$payload_meta = $loan_sync_last_meta['payload'];
-	$loan_sync_last_detail_text .= 'payload='.
+	$payload_meta = $sync_last_meta['payload'];
+	$sync_last_detail_text .= 'payload='.
 		'prepared='.(int) (isset($payload_meta['prepared']) ? $payload_meta['prepared'] : 0).
 		', status_skip='.(int) (isset($payload_meta['skipped_status_not_accepted']) ? $payload_meta['skipped_status_not_accepted'] : 0).
 		', sheet_skip='.(int) (isset($payload_meta['skipped_sheet_origin']) ? $payload_meta['skipped_sheet_origin'] : 0).
@@ -100,29 +112,78 @@ if (isset($loan_sync_last_meta['payload']) && is_array($loan_sync_last_meta['pay
 		', scope_skip='.(int) (isset($payload_meta['skipped_out_of_scope']) ? $payload_meta['skipped_out_of_scope'] : 0).
 		', nominal_skip='.(int) (isset($payload_meta['skipped_amount_invalid']) ? $payload_meta['skipped_amount_invalid'] : 0);
 }
-if (isset($loan_sync_last_meta['written_rows']) || isset($loan_sync_last_meta['skipped_rows']))
+if (isset($sync_last_meta['created']) || isset($sync_last_meta['updated']))
 {
-	$loan_sync_last_detail_text .= ($loan_sync_last_detail_text !== '' ? ' | ' : '').
+	$sync_last_detail_text .= ($sync_last_detail_text !== '' ? ' | ' : '').
 		'result='.
-		'written='.(int) (isset($loan_sync_last_meta['written_rows']) ? $loan_sync_last_meta['written_rows'] : 0).
-		', skipped='.(int) (isset($loan_sync_last_meta['skipped_rows']) ? $loan_sync_last_meta['skipped_rows'] : 0);
+		'created='.(int) (isset($sync_last_meta['created']) ? $sync_last_meta['created'] : 0).
+		', updated='.(int) (isset($sync_last_meta['updated']) ? $sync_last_meta['updated'] : 0);
 }
-if (isset($loan_sync_last_meta['skip_reasons']) && is_array($loan_sync_last_meta['skip_reasons']) && !empty($loan_sync_last_meta['skip_reasons']))
+if (isset($sync_last_meta['created_accounts']) || isset($sync_last_meta['updated_accounts']) || isset($sync_last_meta['created_attendance']) || isset($sync_last_meta['updated_attendance']))
+{
+	$sync_last_detail_text .= ($sync_last_detail_text !== '' ? ' | ' : '').
+		'result='.
+		'account_created='.(int) (isset($sync_last_meta['created_accounts']) ? $sync_last_meta['created_accounts'] : 0).
+		', account_updated='.(int) (isset($sync_last_meta['updated_accounts']) ? $sync_last_meta['updated_accounts'] : 0).
+		', attendance_created='.(int) (isset($sync_last_meta['created_attendance']) ? $sync_last_meta['created_attendance'] : 0).
+		', attendance_updated='.(int) (isset($sync_last_meta['updated_attendance']) ? $sync_last_meta['updated_attendance'] : 0).
+		', skipped='.(int) (isset($sync_last_meta['skipped_rows']) ? $sync_last_meta['skipped_rows'] : 0);
+}
+if (isset($sync_last_meta['processed_users']) || isset($sync_last_meta['updated_rows']) || isset($sync_last_meta['appended_rows']) || isset($sync_last_meta['pruned_rows']))
+{
+	$sync_last_detail_text .= ($sync_last_detail_text !== '' ? ' | ' : '').
+		'result='.
+		'month='.(isset($sync_last_meta['month']) ? (string) $sync_last_meta['month'] : '-').
+		', processed='.(int) (isset($sync_last_meta['processed_users']) ? $sync_last_meta['processed_users'] : 0).
+		', updated='.(int) (isset($sync_last_meta['updated_rows']) ? $sync_last_meta['updated_rows'] : 0).
+		', appended='.(int) (isset($sync_last_meta['appended_rows']) ? $sync_last_meta['appended_rows'] : 0).
+		', pruned='.(int) (isset($sync_last_meta['pruned_rows']) ? $sync_last_meta['pruned_rows'] : 0);
+}
+if (isset($sync_last_meta['written_rows']) || isset($sync_last_meta['skipped_rows']))
+{
+	$sync_last_detail_text .= ($sync_last_detail_text !== '' ? ' | ' : '').
+		'result='.
+		'written='.(int) (isset($sync_last_meta['written_rows']) ? $sync_last_meta['written_rows'] : 0).
+		', skipped='.(int) (isset($sync_last_meta['skipped_rows']) ? $sync_last_meta['skipped_rows'] : 0);
+}
+if (isset($sync_last_meta['imported_count']) || isset($sync_last_meta['skipped_count']) || isset($sync_last_meta['deduplicated_count']))
+{
+	$sync_last_detail_text .= ($sync_last_detail_text !== '' ? ' | ' : '').
+		'result='.
+		'imported='.(int) (isset($sync_last_meta['imported_count']) ? $sync_last_meta['imported_count'] : 0).
+		', skipped='.(int) (isset($sync_last_meta['skipped_count']) ? $sync_last_meta['skipped_count'] : 0).
+		', tenor_update='.(int) (isset($sync_last_meta['rebuilt_updated_count']) ? $sync_last_meta['rebuilt_updated_count'] : 0).
+		', tenor_merge='.(int) (isset($sync_last_meta['rebuilt_removed_count']) ? $sync_last_meta['rebuilt_removed_count'] : 0).
+		', deduped='.(int) (isset($sync_last_meta['deduplicated_count']) ? $sync_last_meta['deduplicated_count'] : 0);
+}
+if (isset($sync_last_meta['skip_reasons']) && is_array($sync_last_meta['skip_reasons']) && !empty($sync_last_meta['skip_reasons']))
 {
 	$skip_reason_text_rows = array();
-	foreach ($loan_sync_last_meta['skip_reasons'] as $skip_reason_key => $skip_reason_count)
+	foreach ($sync_last_meta['skip_reasons'] as $skip_reason_key => $skip_reason_count)
 	{
 		$skip_reason_text_rows[] = str_replace('_', ' ', (string) $skip_reason_key).'='.(int) $skip_reason_count;
 	}
-	$loan_sync_last_detail_text .= ($loan_sync_last_detail_text !== '' ? ' | ' : '').'skip_reason=['.implode(', ', $skip_reason_text_rows).']';
+	$sync_last_detail_text .= ($sync_last_detail_text !== '' ? ' | ' : '').'skip_reason=['.implode(', ', $skip_reason_text_rows).']';
 }
-if (isset($loan_sync_last_meta['spreadsheet_id']) || isset($loan_sync_last_meta['sheet_gid']) || isset($loan_sync_last_meta['sheet']))
+if (isset($sync_last_meta['lock_owner']) || isset($sync_last_meta['lock_wait_seconds']))
 {
-	$loan_sync_last_detail_text .= ($loan_sync_last_detail_text !== '' ? ' | ' : '').
+	$sync_last_detail_text .= ($sync_last_detail_text !== '' ? ' | ' : '').
+		'lock='.
+		'owner='.(isset($sync_last_meta['lock_owner']) ? (string) $sync_last_meta['lock_owner'] : '-').
+		', wait='.(int) (isset($sync_last_meta['lock_wait_seconds']) ? $sync_last_meta['lock_wait_seconds'] : 0).'s';
+}
+if (isset($sync_last_meta['exception_class']) && trim((string) $sync_last_meta['exception_class']) !== '')
+{
+	$sync_last_detail_text .= ($sync_last_detail_text !== '' ? ' | ' : '').
+		'exception='.(string) $sync_last_meta['exception_class'];
+}
+if (isset($sync_last_meta['spreadsheet_id']) || isset($sync_last_meta['sheet_gid']) || isset($sync_last_meta['sheet']))
+{
+	$sync_last_detail_text .= ($sync_last_detail_text !== '' ? ' | ' : '').
 		'target='.
-		'id='.(isset($loan_sync_last_meta['spreadsheet_id']) ? (string) $loan_sync_last_meta['spreadsheet_id'] : '-').
-		', gid='.(isset($loan_sync_last_meta['sheet_gid']) ? (int) $loan_sync_last_meta['sheet_gid'] : 0).
-		', title='.(isset($loan_sync_last_meta['sheet']) ? (string) $loan_sync_last_meta['sheet'] : '-');
+		'id='.(isset($sync_last_meta['spreadsheet_id']) ? (string) $sync_last_meta['spreadsheet_id'] : '-').
+		', gid='.(isset($sync_last_meta['sheet_gid']) ? (int) $sync_last_meta['sheet_gid'] : 0).
+		', title='.(isset($sync_last_meta['sheet']) ? (string) $sync_last_meta['sheet'] : '-');
 }
 $sync_backup_required_button_attrs = $sync_backup_ready
 	? ''
@@ -287,7 +348,8 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 				})();
 			</script>
 		<style>
-			.theme-toggle-btn {
+			.theme-toggle-btn,
+			.maintenance-toggle-btn {
 				border: 0;
 				background: transparent;
 				padding: 0;
@@ -340,6 +402,69 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 			.theme-toggle-btn:focus-visible .theme-toggle-track {
 				outline: none;
 				box-shadow: 0 0 0 3px rgba(160, 210, 255, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+			}
+			.maintenance-toggle-track {
+				position: relative;
+				width: 62px;
+				height: 34px;
+				border-radius: 999px;
+				border: 2px solid rgba(255, 255, 255, 0.5);
+				background: rgba(21, 165, 106, 0.34);
+				box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+				display: inline-flex;
+				align-items: center;
+				justify-content: space-between;
+				padding: 0 9px;
+				transition: background-color 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+			}
+			.maintenance-toggle-icon {
+				font-size: 14px;
+				line-height: 1;
+				transition: transform 0.25s ease, opacity 0.25s ease, color 0.25s ease;
+			}
+			.maintenance-toggle-icon.unlock {
+				color: #d3f7e7;
+				opacity: 1;
+				transform: scale(1);
+			}
+			.maintenance-toggle-icon.lock {
+				color: #ffe7e7;
+				opacity: 0.44;
+				transform: scale(0.88);
+			}
+			.maintenance-toggle-knob {
+				position: absolute;
+				top: 2px;
+				left: 2px;
+				width: 26px;
+				height: 26px;
+				border-radius: 999px;
+				background: #ffffff;
+				box-shadow: 0 3px 8px rgba(0, 0, 0, 0.28);
+				transition: transform 0.25s ease, background-color 0.25s ease, box-shadow 0.25s ease;
+			}
+			.maintenance-toggle-btn:focus-visible .maintenance-toggle-track {
+				outline: none;
+				box-shadow: 0 0 0 3px rgba(255, 188, 188, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+			}
+			.maintenance-toggle-btn.is-blocked .maintenance-toggle-track {
+				background: rgba(176, 35, 35, 0.7);
+				border-color: rgba(255, 210, 210, 0.74);
+				box-shadow: inset 0 0 10px rgba(255, 122, 122, 0.34);
+			}
+			.maintenance-toggle-btn.is-blocked .maintenance-toggle-knob {
+				transform: translateX(28px);
+				background: #ffe8e8;
+				box-shadow: 0 3px 8px rgba(0, 0, 0, 0.4);
+			}
+			.maintenance-toggle-btn.is-blocked .maintenance-toggle-icon.unlock {
+				opacity: 0.4;
+				transform: scale(0.88);
+			}
+			.maintenance-toggle-btn.is-blocked .maintenance-toggle-icon.lock {
+				opacity: 1;
+				color: #ffffff;
+				transform: scale(1);
 			}
 			html.theme-dark body,
 			body.theme-dark {
@@ -605,6 +730,28 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 						<span class="brand-text"><?php echo htmlspecialchars($dashboard_navbar_title, ENT_QUOTES, 'UTF-8'); ?></span>
 						</a>
 						<div class="nav-right">
+							<?php if ($can_toggle_web_maintenance): ?>
+								<button
+									type="button"
+									class="maintenance-toggle-btn<?php echo $web_maintenance_enabled ? ' is-blocked' : ''; ?>"
+									id="maintenanceToggleButton"
+									aria-label="<?php echo $web_maintenance_enabled ? 'Nonaktifkan block web' : 'Aktifkan block web'; ?>"
+									aria-pressed="<?php echo $web_maintenance_enabled ? 'true' : 'false'; ?>"
+									title="<?php echo $web_maintenance_enabled ? 'Block Web aktif' : 'Block Web nonaktif'; ?>"
+									data-enabled="<?php echo $web_maintenance_enabled ? '1' : '0'; ?>"
+									data-endpoint="<?php echo htmlspecialchars($web_maintenance_toggle_url, ENT_QUOTES, 'UTF-8'); ?>"
+									data-bypass-url="<?php echo htmlspecialchars($web_maintenance_bypass_url, ENT_QUOTES, 'UTF-8'); ?>"
+									data-query-key="<?php echo htmlspecialchars($web_maintenance_query_key, ENT_QUOTES, 'UTF-8'); ?>"
+									data-updated-at="<?php echo htmlspecialchars($web_maintenance_updated_at, ENT_QUOTES, 'UTF-8'); ?>"
+									data-updated-by="<?php echo htmlspecialchars($web_maintenance_updated_by, ENT_QUOTES, 'UTF-8'); ?>"
+								>
+									<span class="maintenance-toggle-track" aria-hidden="true">
+										<i class="fa fa-unlock-alt maintenance-toggle-icon unlock"></i>
+										<i class="fa fa-lock maintenance-toggle-icon lock"></i>
+										<span class="maintenance-toggle-knob"></span>
+									</span>
+								</button>
+							<?php endif; ?>
 							<button type="button" class="theme-toggle-btn" id="themeToggleButton" aria-label="Aktifkan mode malam" aria-pressed="false" title="Ganti ke mode malam">
 								<span class="theme-toggle-track" aria-hidden="true">
 									<i class="fa fa-sun-o theme-toggle-icon sun"></i>
@@ -783,15 +930,15 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 								</form>
 							</div>
 							<p class="text-secondary mb-0 mt-2"><?php echo htmlspecialchars($sync_backup_status_text !== '' ? $sync_backup_status_text : 'Belum ada backup lokal aktif. Klik "Backup Local Dulu (Wajib)" sebelum sync.', ENT_QUOTES, 'UTF-8'); ?></p>
-							<?php if ($loan_sync_last_message !== '' || $loan_sync_last_action !== ''): ?>
+							<?php if ($sync_last_message !== '' || $sync_last_action !== ''): ?>
 								<div class="account-divider"></div>
-								<p class="account-help mb-1"><strong>Log Sync Pinjaman Terakhir</strong></p>
+								<p class="account-help mb-1"><strong>Log Sync Terakhir</strong></p>
 								<p class="account-help mb-0">
-									<?php echo htmlspecialchars('Waktu: '.($loan_sync_last_created_at !== '' ? $loan_sync_last_created_at : '-'), ENT_QUOTES, 'UTF-8'); ?><br>
-									<?php echo htmlspecialchars('Aksi: '.$loan_sync_last_action_label, ENT_QUOTES, 'UTF-8'); ?><br>
-									<?php echo htmlspecialchars('Status: '.($loan_sync_last_status !== '' ? strtoupper($loan_sync_last_status) : '-'), ENT_QUOTES, 'UTF-8'); ?><br>
-									<?php echo htmlspecialchars('Pesan: '.($loan_sync_last_message !== '' ? $loan_sync_last_message : '-'), ENT_QUOTES, 'UTF-8'); ?>
-									<?php if ($loan_sync_last_detail_text !== ''): ?><br><?php echo htmlspecialchars('Detail: '.$loan_sync_last_detail_text, ENT_QUOTES, 'UTF-8'); ?><?php endif; ?>
+									<?php echo htmlspecialchars('Waktu: '.($sync_last_created_at !== '' ? $sync_last_created_at : '-'), ENT_QUOTES, 'UTF-8'); ?><br>
+									<?php echo htmlspecialchars('Aksi: '.$sync_last_action_label, ENT_QUOTES, 'UTF-8'); ?><br>
+									<?php echo htmlspecialchars('Status: '.($sync_last_status !== '' ? strtoupper($sync_last_status) : '-'), ENT_QUOTES, 'UTF-8'); ?><br>
+									<?php echo htmlspecialchars('Pesan: '.($sync_last_message !== '' ? $sync_last_message : '-'), ENT_QUOTES, 'UTF-8'); ?>
+									<?php if ($sync_last_detail_text !== ''): ?><br><?php echo htmlspecialchars('Detail: '.$sync_last_detail_text, ENT_QUOTES, 'UTF-8'); ?><?php endif; ?>
 								</p>
 							<?php endif; ?>
 						</article>
@@ -2361,6 +2508,100 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 				toggle.addEventListener('click', function () {
 					var activeDark = body.classList.contains('theme-dark') || root.classList.contains('theme-dark');
 					applyTheme(activeDark ? 'light' : 'dark', true);
+				});
+			})();
+		</script>
+		<script>
+			(function () {
+				var button = document.getElementById('maintenanceToggleButton');
+				if (!button) {
+					return;
+				}
+
+				var endpoint = String(button.getAttribute('data-endpoint') || '').trim();
+				var requestInFlight = false;
+				var blocked = String(button.getAttribute('data-enabled') || '0') === '1';
+
+				var updateButtonUi = function () {
+					button.classList.toggle('is-blocked', blocked);
+					button.setAttribute('data-enabled', blocked ? '1' : '0');
+					button.setAttribute('aria-pressed', blocked ? 'true' : 'false');
+					button.setAttribute('aria-label', blocked ? 'Nonaktifkan block web' : 'Aktifkan block web');
+					button.title = blocked ? 'Block Web aktif' : 'Block Web nonaktif';
+				};
+
+				var showMessage = function (message) {
+					window.alert(String(message || 'Terjadi gangguan server.'));
+				};
+
+				var sendToggleRequest = function (nextState) {
+					if (endpoint === '') {
+						showMessage('Endpoint block web tidak tersedia.');
+						return;
+					}
+					requestInFlight = true;
+					button.disabled = true;
+
+					fetch(endpoint, {
+						method: 'POST',
+						headers: {
+							'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+							'X-Requested-With': 'XMLHttpRequest'
+						},
+						body: 'enabled=' + encodeURIComponent(nextState ? '1' : '0')
+					}).then(function (response) {
+						return response.json().catch(function () {
+							return {
+								success: false,
+								message: 'Respons server tidak valid.'
+							};
+						}).then(function (payload) {
+							if (!response.ok || !payload || payload.success !== true) {
+								throw new Error(payload && payload.message ? payload.message : 'Gagal menyimpan status block web.');
+							}
+							return payload;
+						});
+					}).then(function (payload) {
+						blocked = !!payload.enabled;
+						updateButtonUi();
+
+						if (blocked) {
+							var bypassLink = String(payload.bypass_url || button.getAttribute('data-bypass-url') || '').trim();
+							var notice = String(payload.message || 'Block web aktif.');
+							if (bypassLink !== '') {
+								notice += '\n\nLink bypass developer:\n' + bypassLink;
+								if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+									navigator.clipboard.writeText(bypassLink).then(function () {}).catch(function () {});
+								}
+							}
+							showMessage(notice);
+							return;
+						}
+
+						showMessage(payload.message || 'Block web nonaktif.');
+					}).catch(function (error) {
+						showMessage(error && error.message ? error.message : 'Gagal menyimpan status block web.');
+					}).finally(function () {
+						requestInFlight = false;
+						button.disabled = false;
+					});
+				};
+
+				updateButtonUi();
+				button.addEventListener('click', function () {
+					if (requestInFlight) {
+						return;
+					}
+
+					var targetState = !blocked;
+					var confirmText = targetState
+						? 'Aktifkan Block Web sekarang?\nSemua user lain akan melihat halaman maintenance.'
+						: 'Nonaktifkan Block Web sekarang?';
+					if (!window.confirm(confirmText)) {
+						return;
+					}
+
+					sendToggleRequest(targetState);
 				});
 			})();
 		</script>

@@ -4,6 +4,10 @@ $records = isset($records) && is_array($records) ? $records : array();
 $notice_success = $this->session->flashdata('attendance_notice_success');
 $notice_error = $this->session->flashdata('attendance_notice_error');
 $can_process_emergency_attendance = isset($can_process_emergency_attendance) && $can_process_emergency_attendance === TRUE;
+$can_edit_attendance_records = isset($can_edit_attendance_records) && $can_edit_attendance_records === TRUE;
+$can_delete_attendance_records = isset($can_delete_attendance_records) && $can_delete_attendance_records === TRUE;
+$can_partial_delete_attendance_records = isset($can_partial_delete_attendance_records) && $can_partial_delete_attendance_records === TRUE;
+$can_edit_attendance_datetime = isset($can_edit_attendance_datetime) && $can_edit_attendance_datetime === TRUE;
 $has_real_time = function ($value) {
 	$text = trim((string) $value);
 	if ($text === '' || $text === '-' || $text === '--')
@@ -139,6 +143,185 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 		}
 		.approve-btn { background: #1f8b4f; color: #ffffff; }
 		.reject-btn { background: #ba3434; color: #ffffff; }
+		.edit-btn {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			border: 0;
+			border-radius: 8px;
+			padding: 0.38rem 0.58rem;
+			font-size: 0.72rem;
+			font-weight: 700;
+			cursor: pointer;
+			color: #ffffff;
+			background: linear-gradient(145deg, #1d5ea2 0%, #2b82d5 100%);
+		}
+		.row-delete-form { margin: 0; }
+		.delete-btn {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			border: 0;
+			border-radius: 8px;
+			padding: 0.38rem 0.58rem;
+			font-size: 0.72rem;
+			font-weight: 700;
+			cursor: pointer;
+			color: #ffffff;
+			background: linear-gradient(145deg, #a72f2f 0%, #d34a4a 100%);
+		}
+		.delete-part-btn {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			border: 0;
+			border-radius: 8px;
+			padding: 0.38rem 0.58rem;
+			font-size: 0.72rem;
+			font-weight: 700;
+			cursor: pointer;
+			color: #ffffff;
+			background: linear-gradient(145deg, #8a5a1a 0%, #d5902d 100%);
+		}
+		.edit-modal {
+			position: fixed;
+			inset: 0;
+			z-index: 120;
+			display: none;
+			overflow-y: auto;
+			padding: 0.9rem;
+		}
+		.edit-modal.show { display: block; }
+		.modal-overlay {
+			position: absolute;
+			inset: 0;
+			background: rgba(7, 20, 36, 0.6);
+		}
+		.edit-panel {
+			position: relative;
+			width: min(100%, 560px);
+			max-width: 560px;
+			margin: min(8vh, 56px) auto;
+			background: #ffffff;
+			border-radius: 16px;
+			box-shadow: 0 24px 42px rgba(4, 24, 50, 0.28);
+			overflow: hidden;
+		}
+		.edit-head {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 0.8rem;
+			padding: 0.9rem 1rem;
+			background: linear-gradient(120deg, #0d2c55 0%, #1d5ea2 100%);
+			color: #ffffff;
+		}
+		.edit-title { margin: 0; font-size: 1rem; font-weight: 800; }
+		.edit-close {
+			width: 36px;
+			height: 36px;
+			border-radius: 999px;
+			border: 0;
+			background: rgba(255, 255, 255, 0.16);
+			color: #ffffff;
+			font-size: 1.3rem;
+			line-height: 1;
+			cursor: pointer;
+		}
+		.edit-body { padding: 0.95rem 1rem 1rem; }
+		.edit-info {
+			border: 1px dashed #c4d8ec;
+			border-radius: 10px;
+			padding: 0.62rem 0.7rem;
+			background: #f5faff;
+			margin-bottom: 0.65rem;
+		}
+		.edit-info-title {
+			margin: 0;
+			font-size: 0.68rem;
+			font-weight: 700;
+			letter-spacing: 0.08em;
+			text-transform: uppercase;
+			color: #5f7591;
+		}
+		.edit-info-value { margin: 0.28rem 0 0; font-size: 0.9rem; font-weight: 700; color: #0e3158; }
+		.edit-field { display: grid; gap: 0.38rem; margin-top: 0.4rem; }
+		.edit-label {
+			margin: 0;
+			font-size: 0.72rem;
+			font-weight: 700;
+			letter-spacing: 0.06em;
+			text-transform: uppercase;
+			color: #5f7591;
+		}
+		.edit-input {
+			width: 100%;
+			border: 1px solid #bfd2e6;
+			border-radius: 10px;
+			padding: 0.56rem 0.62rem;
+			font-family: inherit;
+			font-size: 0.84rem;
+			color: #1b3552;
+			background: #ffffff;
+		}
+		.edit-input:focus {
+			outline: none;
+			border-color: #2b82d5;
+			box-shadow: 0 0 0 3px rgba(43, 130, 213, 0.14);
+		}
+		.edit-help { margin: 0; font-size: 0.74rem; color: #617991; font-weight: 600; }
+		.edit-actions { margin-top: 0.85rem; display: flex; gap: 0.5rem; flex-wrap: wrap; }
+		.edit-submit {
+			border: 0;
+			border-radius: 10px;
+			padding: 0.62rem 0.9rem;
+			background: linear-gradient(145deg, #1d5ea2 0%, #2b82d5 100%);
+			color: #ffffff;
+			font-size: 0.82rem;
+			font-weight: 700;
+			cursor: pointer;
+		}
+		.edit-clear {
+			border: 1px solid #c8dbee;
+			border-radius: 10px;
+			padding: 0.62rem 0.9rem;
+			background: #ffffff;
+			color: #23466a;
+			font-size: 0.82rem;
+			font-weight: 700;
+			cursor: pointer;
+		}
+		html.theme-dark .edit-info,
+		body.theme-dark .edit-info {
+			background: #162b3f !important;
+			border-color: #3d5c77 !important;
+		}
+		html.theme-dark .edit-info-title,
+		body.theme-dark .edit-info-title { color: #abc2d8 !important; }
+		html.theme-dark .edit-info-value,
+		body.theme-dark .edit-info-value { color: #edf5ff !important; }
+		html.theme-dark .edit-label,
+		body.theme-dark .edit-label { color: #abc2d8 !important; }
+		html.theme-dark .edit-help,
+		body.theme-dark .edit-help { color: #c8d9ea !important; }
+		html.theme-dark .edit-input,
+		body.theme-dark .edit-input {
+			background: #0f2436 !important;
+			border-color: #3e5974 !important;
+			color: #e6eef8 !important;
+			color-scheme: dark;
+		}
+		html.theme-dark .edit-input:focus,
+		body.theme-dark .edit-input:focus {
+			border-color: #69aae8 !important;
+			box-shadow: 0 0 0 3px rgba(97, 168, 232, 0.22) !important;
+		}
+		html.theme-dark .edit-clear,
+		body.theme-dark .edit-clear {
+			background: #173149 !important;
+			border-color: #446887 !important;
+			color: #eaf4ff !important;
+		}
 		.muted { color: #8aa0b8; font-weight: 600; }
 		.empty { padding: 1rem 0.9rem; font-size: 0.82rem; color: #5a728c; font-weight: 600; }
 		.table-meta { padding: 0.62rem 0.85rem 0.2rem; font-size: 0.78rem; color: #516b86; font-weight: 700; }
@@ -163,6 +346,12 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 			.head { flex-direction: column; align-items: flex-start; }
 			.actions { flex-wrap: wrap; }
 			.btn { min-width: 124px; }
+			.edit-modal { padding: 0.7rem; }
+			.edit-panel { width: min(100%, 96vw); margin: max(0.5rem, env(safe-area-inset-top)) auto; }
+			.edit-body { padding: 0.8rem; }
+			.edit-actions { flex-direction: column; }
+			.edit-submit,
+			.edit-clear { width: 100%; }
 		}
 	</style>
 	<script>
@@ -281,8 +470,6 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 
 								$row_check_in_raw = isset($row['check_in_time']) ? (string) $row['check_in_time'] : '';
 								$row_check_out_raw = isset($row['check_out_time']) ? (string) $row['check_out_time'] : '';
-								$row_check_in_display = $has_real_time($row_check_in_raw) ? substr($row_check_in_raw, 0, 5) : '-';
-								$row_check_out_display = $has_real_time($row_check_out_raw) ? substr($row_check_out_raw, 0, 5) : '-';
 								$row_late_display = isset($row['check_in_late']) && trim((string) $row['check_in_late']) !== '' && (string) $row['check_in_late'] !== '00:00:00'
 									? (string) $row['check_in_late']
 									: '-';
@@ -299,6 +486,20 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 								$row_status_badge_class = isset($row['status_badge_class']) ? (string) $row['status_badge_class'] : 'pending';
 								$row_request_id = isset($row['id']) ? (string) $row['id'] : '';
 								$row_can_review = isset($row['can_review']) && $row['can_review'] === TRUE;
+								$row_record_version = isset($row['record_version']) ? (int) $row['record_version'] : 1;
+								if ($row_record_version <= 0) { $row_record_version = 1; }
+								$row_attendance_exists = isset($row['attendance_record_exists']) && $row['attendance_record_exists'] === TRUE;
+								$row_can_edit_record = isset($row['can_edit_record']) && $row['can_edit_record'] === TRUE;
+								$row_can_delete_record = isset($row['can_delete_record']) && $row['can_delete_record'] === TRUE;
+								$row_can_partial_delete_record = isset($row['can_partial_delete_record']) && $row['can_partial_delete_record'] === TRUE;
+								$row_manage_processed = !$row_can_review && ($row_can_edit_record || $row_can_delete_record || $row_can_partial_delete_record);
+								$row_modal_check_in = isset($row['attendance_check_in_time']) ? (string) $row['attendance_check_in_time'] : $row_check_in_raw;
+								$row_modal_check_out = isset($row['attendance_check_out_time']) ? (string) $row['attendance_check_out_time'] : $row_check_out_raw;
+								$row_modal_cut = isset($row['attendance_salary_cut_amount']) ? (int) $row['attendance_salary_cut_amount'] : $row_salary_cut;
+								$row_display_check_in_raw = (!$row_can_review && $row_attendance_exists) ? $row_modal_check_in : $row_check_in_raw;
+								$row_display_check_out_raw = (!$row_can_review && $row_attendance_exists) ? $row_modal_check_out : $row_check_out_raw;
+								$row_check_in_display = $has_real_time($row_display_check_in_raw) ? substr($row_display_check_in_raw, 0, 5) : '-';
+								$row_check_out_display = $has_real_time($row_display_check_out_raw) ? substr($row_display_check_out_raw, 0, 5) : '-';
 								?>
 								<tr class="emergency-attendance-row" data-id="<?php echo htmlspecialchars(strtolower($row_employee_id), ENT_QUOTES, 'UTF-8'); ?>" data-name="<?php echo htmlspecialchars(strtolower($row_username), ENT_QUOTES, 'UTF-8'); ?>" data-date-key="<?php echo htmlspecialchars($row_date_key, ENT_QUOTES, 'UTF-8'); ?>" data-date-label="<?php echo htmlspecialchars($row_date_label, ENT_QUOTES, 'UTF-8'); ?>">
 									<td class="row-no"><?php echo (int) $no; ?></td>
@@ -349,6 +550,58 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 													<input type="hidden" name="status" value="rejected">
 													<button type="submit" class="reject-btn">Tolak</button>
 												</form>
+											<?php elseif ($row_manage_processed): ?>
+												<?php if ($row_attendance_exists): ?>
+													<?php
+													$has_check_in_attendance = $has_real_time($row_display_check_in_raw);
+													$has_check_out_attendance = $has_real_time($row_display_check_out_raw);
+													?>
+													<?php if ($row_can_edit_record): ?>
+														<button
+															type="button"
+															class="edit-btn"
+															data-edit-row
+															data-username="<?php echo htmlspecialchars($row_username, ENT_QUOTES, 'UTF-8'); ?>"
+															data-date="<?php echo htmlspecialchars($row_date_key, ENT_QUOTES, 'UTF-8'); ?>"
+															data-date-label="<?php echo htmlspecialchars($row_date_label, ENT_QUOTES, 'UTF-8'); ?>"
+															data-check-in-time="<?php echo htmlspecialchars($row_modal_check_in, ENT_QUOTES, 'UTF-8'); ?>"
+															data-check-out-time="<?php echo htmlspecialchars($row_modal_check_out, ENT_QUOTES, 'UTF-8'); ?>"
+															data-current-cut="<?php echo htmlspecialchars((string) max(0, $row_modal_cut), ENT_QUOTES, 'UTF-8'); ?>"
+															data-record-version="<?php echo (int) $row_record_version; ?>"
+														>Edit</button>
+													<?php endif; ?>
+													<?php if ($row_can_delete_record && $has_check_in_attendance && $has_check_out_attendance): ?>
+														<form method="post" action="<?php echo site_url('home/delete_attendance_record'); ?>" class="row-delete-form" onsubmit="return window.confirm('Hapus data absensi ini (masuk + pulang)?');">
+															<input type="hidden" name="username" value="<?php echo htmlspecialchars($row_username, ENT_QUOTES, 'UTF-8'); ?>">
+															<input type="hidden" name="date" value="<?php echo htmlspecialchars($row_date_key, ENT_QUOTES, 'UTF-8'); ?>">
+															<input type="hidden" name="expected_version" value="<?php echo (int) $row_record_version; ?>">
+															<input type="hidden" name="return_to" value="home/employee_data_emergency">
+															<button type="submit" class="delete-btn">Hapus Full</button>
+														</form>
+													<?php endif; ?>
+													<?php if ($row_can_partial_delete_record && $has_check_in_attendance && !$has_check_out_attendance): ?>
+															<form method="post" action="<?php echo site_url('home/delete_attendance_record_partial'); ?>" class="row-delete-form" onsubmit="return window.confirm('Hapus absen masuk saja untuk data ini?');">
+																<input type="hidden" name="username" value="<?php echo htmlspecialchars($row_username, ENT_QUOTES, 'UTF-8'); ?>">
+																<input type="hidden" name="date" value="<?php echo htmlspecialchars($row_date_key, ENT_QUOTES, 'UTF-8'); ?>">
+																<input type="hidden" name="expected_version" value="<?php echo (int) $row_record_version; ?>">
+																<input type="hidden" name="delete_part" value="masuk">
+																<input type="hidden" name="return_to" value="home/employee_data_emergency">
+																<button type="submit" class="delete-part-btn">Hapus Masuk</button>
+															</form>
+													<?php endif; ?>
+													<?php if ($row_can_partial_delete_record && !$has_check_in_attendance && $has_check_out_attendance): ?>
+															<form method="post" action="<?php echo site_url('home/delete_attendance_record_partial'); ?>" class="row-delete-form" onsubmit="return window.confirm('Hapus absen pulang saja untuk data ini?');">
+																<input type="hidden" name="username" value="<?php echo htmlspecialchars($row_username, ENT_QUOTES, 'UTF-8'); ?>">
+																<input type="hidden" name="date" value="<?php echo htmlspecialchars($row_date_key, ENT_QUOTES, 'UTF-8'); ?>">
+																<input type="hidden" name="expected_version" value="<?php echo (int) $row_record_version; ?>">
+																<input type="hidden" name="delete_part" value="pulang">
+																<input type="hidden" name="return_to" value="home/employee_data_emergency">
+																<button type="submit" class="delete-part-btn">Hapus Pulang</button>
+															</form>
+													<?php endif; ?>
+												<?php else: ?>
+													<span class="muted">Data harian tidak ada</span>
+												<?php endif; ?>
 											<?php else: ?>
 												<span class="muted">-</span>
 											<?php endif; ?>
@@ -365,6 +618,57 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 				<div id="emergencyAttendancePager" class="pager"></div>
 			<?php endif; ?>
 		</div>
+	</div>
+
+	<div id="deductionModal" class="edit-modal" aria-hidden="true">
+		<div class="modal-overlay" data-edit-close></div>
+		<section class="edit-panel" role="dialog" aria-modal="true" aria-labelledby="deductionModalTitle">
+			<div class="edit-head">
+				<h2 id="deductionModalTitle" class="edit-title">Edit Data Absensi</h2>
+				<button type="button" class="edit-close" id="closeDeductionModal" aria-label="Tutup popup edit">&times;</button>
+			</div>
+			<div class="edit-body">
+				<div class="edit-info">
+					<p class="edit-info-title">Karyawan</p>
+					<p id="deductionEmployeeValue" class="edit-info-value">-</p>
+				</div>
+				<div class="edit-info">
+					<p class="edit-info-title">Tanggal Absensi</p>
+					<p id="deductionDateValue" class="edit-info-value">-</p>
+				</div>
+
+				<form id="deductionForm" method="post" action="<?php echo site_url('home/update_attendance_deduction'); ?>">
+					<input type="hidden" id="deductionUsernameInput" name="username" value="">
+					<input type="hidden" id="deductionDateInput" name="date" value="">
+					<input type="hidden" id="deductionExpectedVersionInput" name="expected_version" value="1">
+					<input type="hidden" name="return_to" value="home/employee_data_emergency">
+					<?php if ($can_edit_attendance_datetime): ?>
+						<div class="edit-field">
+							<label for="deductionEditDateInput" class="edit-label">Tanggal Absensi (Edit)</label>
+							<input id="deductionEditDateInput" class="edit-input" type="date" name="edit_date" autocomplete="off">
+							<p class="edit-help">Khusus bos/developer/adminbaros/admin_cadasari. Format tanggal: YYYY-MM-DD.</p>
+						</div>
+						<div class="edit-field">
+							<label for="deductionCheckInInput" class="edit-label">Jam Masuk (Edit)</label>
+							<input id="deductionCheckInInput" class="edit-input" type="time" name="edit_check_in_time" step="1" autocomplete="off">
+						</div>
+						<div class="edit-field">
+							<label for="deductionCheckOutInput" class="edit-label">Jam Pulang (Edit)</label>
+							<input id="deductionCheckOutInput" class="edit-input" type="time" name="edit_check_out_time" step="1" autocomplete="off">
+						</div>
+					<?php endif; ?>
+					<div class="edit-field">
+						<label for="deductionAmountInput" class="edit-label">Potongan Gaji (Rp)</label>
+						<input id="deductionAmountInput" class="edit-input" type="text" name="salary_cut_amount" inputmode="numeric" autocomplete="off" placeholder="Contoh: 25000">
+						<p class="edit-help">Isi `0` atau klik tombol hapus jika ingin memberi toleransi darurat.</p>
+					</div>
+					<div class="edit-actions">
+						<button type="button" id="clearDeductionButton" class="edit-clear">Hapus Potongan</button>
+						<button type="submit" class="edit-submit">Simpan Perubahan</button>
+					</div>
+				</form>
+			</div>
+		</section>
 	</div>
 
 	<script>
@@ -505,6 +809,140 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 				renderRows();
 			});
 			renderRows();
+		})();
+
+		(function () {
+			var modal = document.getElementById('deductionModal');
+			var openButtons = document.querySelectorAll('[data-edit-row]');
+			var closeTargets = document.querySelectorAll('[data-edit-close]');
+			var closeButton = document.getElementById('closeDeductionModal');
+			var form = document.getElementById('deductionForm');
+			var employeeValue = document.getElementById('deductionEmployeeValue');
+			var dateValue = document.getElementById('deductionDateValue');
+			var usernameInput = document.getElementById('deductionUsernameInput');
+			var dateInput = document.getElementById('deductionDateInput');
+			var expectedVersionInput = document.getElementById('deductionExpectedVersionInput');
+			var editDateInput = document.getElementById('deductionEditDateInput');
+			var checkInInput = document.getElementById('deductionCheckInInput');
+			var checkOutInput = document.getElementById('deductionCheckOutInput');
+			var amountInput = document.getElementById('deductionAmountInput');
+			var clearButton = document.getElementById('clearDeductionButton');
+
+			if (!modal || !openButtons.length || !form || !amountInput) {
+				return;
+			}
+
+			var toDigits = function (value) {
+				return String(value || '').replace(/[^\d]/g, '');
+			};
+
+			var formatThousands = function (value) {
+				var digits = toDigits(value);
+				if (digits === '') {
+					return '';
+				}
+				return digits.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+			};
+
+			var normalizeTimeForInput = function (value) {
+				var text = String(value || '').trim();
+				if (/^\d{2}:\d{2}:\d{2}$/.test(text) || /^\d{2}:\d{2}$/.test(text)) {
+					return text;
+				}
+				return '';
+			};
+
+			var openModal = function (button) {
+				var username = String(button.getAttribute('data-username') || '-');
+				var dateLabel = String(button.getAttribute('data-date-label') || '-');
+				var dateKey = String(button.getAttribute('data-date') || '');
+				var checkInTime = String(button.getAttribute('data-check-in-time') || '');
+				var checkOutTime = String(button.getAttribute('data-check-out-time') || '');
+				var currentCut = String(button.getAttribute('data-current-cut') || '0');
+				var recordVersion = parseInt(String(button.getAttribute('data-record-version') || '1'), 10);
+				if (!isFinite(recordVersion) || recordVersion <= 0) {
+					recordVersion = 1;
+				}
+
+				if (employeeValue) {
+					employeeValue.textContent = username;
+				}
+				if (dateValue) {
+					dateValue.textContent = dateLabel;
+				}
+				if (usernameInput) {
+					usernameInput.value = username;
+				}
+				if (dateInput) {
+					dateInput.value = dateKey;
+				}
+				if (editDateInput) {
+					editDateInput.value = dateKey;
+				}
+				if (checkInInput) {
+					checkInInput.value = normalizeTimeForInput(checkInTime);
+				}
+				if (checkOutInput) {
+					checkOutInput.value = normalizeTimeForInput(checkOutTime);
+				}
+				if (expectedVersionInput) {
+					expectedVersionInput.value = String(recordVersion);
+				}
+				amountInput.value = formatThousands(currentCut);
+
+				modal.classList.add('show');
+				modal.setAttribute('aria-hidden', 'false');
+				setTimeout(function () {
+					amountInput.focus();
+					amountInput.select();
+				}, 30);
+			};
+
+			var closeModal = function () {
+				modal.classList.remove('show');
+				modal.setAttribute('aria-hidden', 'true');
+			};
+
+			for (var i = 0; i < openButtons.length; i += 1) {
+				openButtons[i].addEventListener('click', function () {
+					openModal(this);
+				});
+			}
+
+			for (var j = 0; j < closeTargets.length; j += 1) {
+				closeTargets[j].addEventListener('click', closeModal);
+			}
+
+			if (closeButton) {
+				closeButton.addEventListener('click', closeModal);
+			}
+
+			if (clearButton) {
+				clearButton.addEventListener('click', function () {
+					amountInput.value = '0';
+					amountInput.focus();
+				});
+			}
+
+			amountInput.addEventListener('input', function () {
+				var start = amountInput.selectionStart;
+				var previousLength = amountInput.value.length;
+				amountInput.value = formatThousands(amountInput.value);
+				var currentLength = amountInput.value.length;
+				var nextPos = (start || 0) + (currentLength - previousLength);
+				amountInput.setSelectionRange(nextPos, nextPos);
+			});
+
+			form.addEventListener('submit', function () {
+				var raw = toDigits(amountInput.value);
+				amountInput.value = raw === '' ? '0' : raw;
+			});
+
+			window.addEventListener('keydown', function (event) {
+				if (event.key === 'Escape' && modal.classList.contains('show')) {
+					closeModal();
+				}
+			});
 		})();
 
 		(function () {

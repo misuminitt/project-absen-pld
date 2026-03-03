@@ -282,6 +282,7 @@ $user_dashboard_config_json = json_encode(array(
 	'dashboardSummaryEndpoint' => $dashboard_summary_endpoint_path,
 	'attestationNonceEndpoint' => $attestation_nonce_endpoint_path,
 	'verifyAttestationEndpoint' => $verify_attestation_endpoint_path,
+	'guardBuild' => 'AF-20260301-2',
 	'loanConfig' => array(
 		'minPrincipal' => isset($loan_config['min_principal']) ? (int) $loan_config['min_principal'] : 500000,
 		'maxPrincipal' => isset($loan_config['max_principal']) ? (int) $loan_config['max_principal'] : 10000000,
@@ -961,6 +962,68 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 				}
 				return value;
 			};
+
+			var collectGpsSample = function (position) {
+				if (!position || !position.coords) {
+					return;
+				}
+				var lat = Number(position.coords.latitude);
+				var lng = Number(position.coords.longitude);
+				var accuracy = Number(position.coords.accuracy);
+				if (!isFinite(lat) || !isFinite(lng) || !isFinite(accuracy)) {
+					return;
+				}
+				var ts = Math.floor(Date.now() / 1000);
+				var store = Array.isArray(window.__ABSEN_GPS_SAMPLES) ? window.__ABSEN_GPS_SAMPLES : [];
+				store.push({
+					lat: lat,
+					lng: lng,
+					accuracy: accuracy,
+					timestamp: ts
+				});
+				if (store.length > 8) {
+					store = store.slice(store.length - 8);
+				}
+				window.__ABSEN_GPS_SAMPLES = store;
+			};
+
+			if (window.__ABSEN_GEO_COLLECTOR_APPLIED !== true
+				&& typeof navigator === 'object'
+				&& navigator
+				&& navigator.geolocation) {
+				try {
+					var geo = navigator.geolocation;
+					if (typeof geo.getCurrentPosition === 'function') {
+						var nativeGetCurrentPosition = geo.getCurrentPosition.bind(geo);
+						geo.getCurrentPosition = function (success, error, options) {
+							var wrappedSuccess = function (position) {
+								collectGpsSample(position);
+								if (typeof success === 'function') {
+									success(position);
+								}
+							};
+							return nativeGetCurrentPosition(wrappedSuccess, error, options);
+						};
+					}
+					if (typeof geo.watchPosition === 'function') {
+						var nativeWatchPosition = geo.watchPosition.bind(geo);
+						geo.watchPosition = function (success, error, options) {
+							var wrappedSuccess = function (position) {
+								collectGpsSample(position);
+								if (typeof success === 'function') {
+									success(position);
+								}
+							};
+							return nativeWatchPosition(wrappedSuccess, error, options);
+						};
+					}
+					window.__ABSEN_GEO_COLLECTOR_APPLIED = true;
+				}
+				catch (geoPatchError) {
+					// Keep attendance flow running even if browser blocks geolocation monkey patching.
+				}
+			}
+
 			window.fetch = function (input, init) {
 				var requestInput = input;
 				if (typeof requestInput === 'string') {
@@ -1000,6 +1063,61 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 					if (typeof FormData === 'function' && body instanceof FormData) {
 						if (!body.has('client_timestamp') || toText(body.get('client_timestamp')) === '') {
 							body.set('client_timestamp', String(Math.floor(Date.now() / 1000)));
+						}
+
+						var browserTimezone = '';
+						var browserLocale = '';
+						var browserOffsetMin = '';
+						try {
+							if (typeof Intl === 'object' && Intl && typeof Intl.DateTimeFormat === 'function') {
+								var resolved = Intl.DateTimeFormat().resolvedOptions();
+								browserTimezone = toText(resolved && resolved.timeZone ? resolved.timeZone : '');
+								browserLocale = toText(resolved && resolved.locale ? resolved.locale : '');
+							}
+						}
+						catch (timezoneError) {
+							browserTimezone = '';
+						}
+						if (browserLocale === '' && typeof navigator === 'object' && navigator) {
+							browserLocale = toText(navigator.language || '');
+						}
+						try {
+							browserOffsetMin = String(new Date().getTimezoneOffset());
+						}
+						catch (offsetError) {
+							browserOffsetMin = '';
+						}
+						if ((!body.has('client_timezone') || toText(body.get('client_timezone')) === '') && browserTimezone !== '') {
+							body.set('client_timezone', browserTimezone);
+						}
+						if ((!body.has('client_locale') || toText(body.get('client_locale')) === '') && browserLocale !== '') {
+							body.set('client_locale', browserLocale);
+						}
+						if ((!body.has('client_tz_offset_min') || toText(body.get('client_tz_offset_min')) === '') && browserOffsetMin !== '') {
+							body.set('client_tz_offset_min', browserOffsetMin);
+						}
+
+						var currentLat = Number(toText(body.get('latitude')));
+						var currentLng = Number(toText(body.get('longitude')));
+						var currentAcc = Number(toText(body.get('accuracy')));
+						if (isFinite(currentLat) && isFinite(currentLng) && isFinite(currentAcc)) {
+							collectGpsSample({
+								coords: {
+									latitude: currentLat,
+									longitude: currentLng,
+									accuracy: currentAcc
+								}
+							});
+						}
+
+						var gpsSamples = Array.isArray(window.__ABSEN_GPS_SAMPLES) ? window.__ABSEN_GPS_SAMPLES.slice(-5) : [];
+						if ((!body.has('gps_samples_json') || toText(body.get('gps_samples_json')) === '') && gpsSamples.length > 0) {
+							try {
+								body.set('gps_samples_json', JSON.stringify(gpsSamples));
+							}
+							catch (gpsSamplesError) {
+								// Ignore serialization issue; request should still continue.
+							}
 						}
 
 						var bridgeValues = {

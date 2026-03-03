@@ -40,6 +40,28 @@ $can_edit_attendance_records = isset($can_edit_attendance_records) && $can_edit_
 $can_delete_attendance_records = isset($can_delete_attendance_records) && $can_delete_attendance_records === TRUE;
 $can_partial_delete_attendance_records = isset($can_partial_delete_attendance_records) && $can_partial_delete_attendance_records === TRUE;
 $can_edit_attendance_datetime = isset($can_edit_attendance_datetime) && $can_edit_attendance_datetime === TRUE;
+$selected_month = isset($selected_month) ? (string) $selected_month : date('Y-m');
+$selected_month_label = isset($selected_month_label) ? (string) $selected_month_label : date('F Y');
+$daily_self_url = site_url('home/employee_data');
+$daily_monthly_url = site_url('home/employee_data_monthly').'?month='.rawurlencode($selected_month);
+$daily_emergency_url = site_url('home/employee_data_emergency');
+$selected_month_key = preg_match('/^\d{4}\-\d{2}$/', $selected_month) === 1 ? $selected_month : date('Y-m');
+$records_month_filtered = array();
+for ($monthly_i = 0; $monthly_i < count($records); $monthly_i += 1)
+{
+	$monthly_row = isset($records[$monthly_i]) && is_array($records[$monthly_i]) ? $records[$monthly_i] : array();
+	$monthly_date = isset($monthly_row['date']) ? trim((string) $monthly_row['date']) : '';
+	if (preg_match('/^\d{4}\-\d{2}\-\d{2}$/', $monthly_date) !== 1)
+	{
+		continue;
+	}
+	if (substr($monthly_date, 0, 7) !== $selected_month_key)
+	{
+		continue;
+	}
+	$records_month_filtered[] = $monthly_row;
+}
+$records = $records_month_filtered;
 ?>
 <?php
 $_home_theme_cookie_value = isset($_COOKIE['home_index_theme']) ? strtolower(trim((string) $_COOKIE['home_index_theme'])) : '';
@@ -202,6 +224,45 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 
 		.table-tools {
 			padding: 0.75rem 0.85rem 0;
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 0.7rem;
+			flex-wrap: wrap;
+		}
+		.table-tools-left {
+			flex: 1 1 320px;
+		}
+		.table-tools-right {
+			display: flex;
+			align-items: center;
+			gap: 0.5rem;
+			flex-wrap: wrap;
+		}
+		.month-form {
+			display: flex;
+			align-items: center;
+			gap: 0.5rem;
+		}
+		.month-input {
+			border: 1px solid #c5d8ea;
+			border-radius: 10px;
+			padding: 0.56rem 0.68rem;
+			font-family: inherit;
+			font-size: 0.82rem;
+			color: #183654;
+			background: #ffffff;
+		}
+		.month-submit {
+			border: 0;
+			border-radius: 10px;
+			padding: 0.58rem 0.78rem;
+			font-family: inherit;
+			font-size: 0.8rem;
+			font-weight: 700;
+			color: #ffffff;
+			background: linear-gradient(145deg, #1d5ea2 0%, #2b82d5 100%);
+			cursor: pointer;
 		}
 
 		.search-input {
@@ -613,6 +674,59 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 			font-weight: 700;
 			cursor: pointer;
 		}
+
+		html.theme-dark .edit-info,
+		body.theme-dark .edit-info {
+			background: #162b3f !important;
+			border-color: #3d5c77 !important;
+		}
+
+		html.theme-dark .edit-info-title,
+		body.theme-dark .edit-info-title {
+			color: #abc2d8 !important;
+		}
+
+		html.theme-dark .edit-info-value,
+		body.theme-dark .edit-info-value {
+			color: #edf5ff !important;
+		}
+
+		html.theme-dark .edit-label,
+		body.theme-dark .edit-label {
+			color: #abc2d8 !important;
+		}
+
+		html.theme-dark .edit-help,
+		body.theme-dark .edit-help {
+			color: #c8d9ea !important;
+		}
+
+		html.theme-dark .edit-input,
+		body.theme-dark .edit-input {
+			background: #0f2436 !important;
+			border-color: #3e5974 !important;
+			color: #e6eef8 !important;
+			color-scheme: dark;
+		}
+
+		html.theme-dark .edit-input:focus,
+		body.theme-dark .edit-input:focus {
+			border-color: #69aae8 !important;
+			box-shadow: 0 0 0 3px rgba(97, 168, 232, 0.22) !important;
+		}
+
+		html.theme-dark .edit-clear,
+		body.theme-dark .edit-clear {
+			background: #173149 !important;
+			border-color: #446887 !important;
+			color: #eaf4ff !important;
+		}
+		html.theme-dark .month-input,
+		body.theme-dark .month-input {
+			background: #0f2436 !important;
+			border-color: #3e5974 !important;
+			color: #e6eef8 !important;
+		}
 	
 		/* mobile-fix-20260219 */
 		@media (max-width: 860px) {
@@ -650,6 +764,17 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 
 			.table-tools {
 				padding: 0.62rem 0.72rem 0;
+			}
+			.table-tools-left,
+			.table-tools-right {
+				width: 100%;
+			}
+			.month-form {
+				width: 100%;
+			}
+			.month-input,
+			.month-submit {
+				width: 100%;
 			}
 
 			.search-input {
@@ -812,16 +937,32 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 
 		<div class="table-card">
 			<div class="mode-tabs">
-				<a href="<?php echo site_url('home/employee_data'); ?>" class="mode-link active">Data Harian</a>
-				<a href="<?php echo site_url('home/employee_data_monthly'); ?>" class="mode-link">Data Bulanan</a>
-				<a href="<?php echo site_url('home/employee_data_emergency'); ?>" class="mode-link">Absen Darurat</a>
+				<a href="<?php echo htmlspecialchars($daily_self_url.'?month='.rawurlencode($selected_month), ENT_QUOTES, 'UTF-8'); ?>" class="mode-link active">Data Harian</a>
+				<a href="<?php echo htmlspecialchars($daily_monthly_url, ENT_QUOTES, 'UTF-8'); ?>" class="mode-link">Data Bulanan</a>
+				<a href="<?php echo htmlspecialchars($daily_emergency_url, ENT_QUOTES, 'UTF-8'); ?>" class="mode-link">Absen Darurat</a>
 			</div>
 			<?php if (empty($records)): ?>
-				<div class="empty">Belum ada data absensi yang tersimpan.</div>
+				<div class="table-tools">
+					<div class="table-tools-right">
+						<form method="get" action="<?php echo htmlspecialchars($daily_self_url, ENT_QUOTES, 'UTF-8'); ?>" class="month-form">
+							<input type="month" name="month" class="month-input" value="<?php echo htmlspecialchars($selected_month, ENT_QUOTES, 'UTF-8'); ?>">
+							<button type="submit" class="month-submit">Terapkan</button>
+						</form>
+					</div>
+				</div>
+				<div class="empty">Belum ada data absensi yang tersimpan pada bulan <?php echo htmlspecialchars($selected_month_label, ENT_QUOTES, 'UTF-8'); ?>.</div>
 			<?php else: ?>
 				<div class="table-tools">
-					<input id="attendanceSearchInput" type="text" class="search-input" placeholder="Cari ID atau nama karyawan...">
-					<p class="search-help">Pencarian berlaku untuk kolom ID dan Nama.</p>
+					<div class="table-tools-left">
+						<input id="attendanceSearchInput" type="text" class="search-input" placeholder="Cari ID atau nama karyawan...">
+						<p class="search-help">Pencarian berlaku untuk kolom ID dan Nama pada bulan <?php echo htmlspecialchars($selected_month_label, ENT_QUOTES, 'UTF-8'); ?>.</p>
+					</div>
+					<div class="table-tools-right">
+						<form method="get" action="<?php echo htmlspecialchars($daily_self_url, ENT_QUOTES, 'UTF-8'); ?>" class="month-form">
+							<input type="month" name="month" class="month-input" value="<?php echo htmlspecialchars($selected_month, ENT_QUOTES, 'UTF-8'); ?>">
+							<button type="submit" class="month-submit">Terapkan</button>
+						</form>
+					</div>
 				</div>
 				<div class="table-wrap">
 					<table>

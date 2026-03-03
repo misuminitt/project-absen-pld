@@ -3705,6 +3705,9 @@ class Absen_sheet_sync {
 		$dibayar_indexes = isset($context['dibayar_indexes']) && is_array($context['dibayar_indexes'])
 			? $context['dibayar_indexes']
 			: array();
+		$status_indexes = isset($context['status_indexes']) && is_array($context['status_indexes'])
+			? $context['status_indexes']
+			: array();
 		$column_letters = isset($context['column_letters']) && is_array($context['column_letters'])
 			? $context['column_letters']
 			: array();
@@ -3943,6 +3946,51 @@ class Absen_sheet_sync {
 				'majorDimension' => 'ROWS',
 				'values' => array(array((string) $amount))
 			);
+			$dibayar_values = $this->build_loan_sheet_dibayar_values($row, $amount);
+			$protected_column_indexes = array(
+				isset($column_indexes['date']) ? (int) $column_indexes['date'] : -1,
+				isset($column_indexes['name']) ? (int) $column_indexes['name'] : -1,
+				isset($column_indexes['purpose']) ? (int) $column_indexes['purpose'] : -1,
+				isset($column_indexes['kasbon']) ? (int) $column_indexes['kasbon'] : -1,
+				isset($column_indexes['total']) ? (int) $column_indexes['total'] : -1,
+				isset($column_indexes['keterangan']) ? (int) $column_indexes['keterangan'] : -1
+			);
+			$cleared_status_indexes = array();
+			for ($dibayar_no = 1; $dibayar_no <= 12; $dibayar_no += 1)
+			{
+				$dibayar_index = isset($dibayar_indexes[$dibayar_no]) ? (int) $dibayar_indexes[$dibayar_no] : -1;
+				if ($dibayar_index >= 0)
+				{
+					$dibayar_value = isset($dibayar_values[$dibayar_no]) ? $dibayar_values[$dibayar_no] : '';
+					$batch_updates[] = array(
+						'range' => $this->quote_sheet_title($sheet_title).'!'.$this->column_letter_from_index($dibayar_index).$target_row,
+						'majorDimension' => 'ROWS',
+						'values' => array(array($dibayar_value === '' ? '' : (string) ((int) $dibayar_value)))
+					);
+				}
+
+				$status_index = isset($status_indexes[$dibayar_no]) ? (int) $status_indexes[$dibayar_no] : -1;
+				if ($status_index < 0 && $dibayar_index >= 0)
+				{
+					$status_index = $dibayar_index + 1;
+				}
+				if (
+					$status_index < 0
+					|| $status_index > 32
+					|| isset($cleared_status_indexes[$status_index])
+					|| in_array($status_index, $protected_column_indexes, TRUE)
+				)
+				{
+					continue;
+				}
+
+				$batch_updates[] = array(
+					'range' => $this->quote_sheet_title($sheet_title).'!'.$this->column_letter_from_index($status_index).$target_row,
+					'majorDimension' => 'ROWS',
+					'values' => array(array(''))
+				);
+				$cleared_status_indexes[$status_index] = TRUE;
+			}
 			$batch_updates[] = array(
 				'range' => $this->quote_sheet_title($sheet_title).'!'.$column_letters['total'].$target_row,
 				'majorDimension' => 'ROWS',
@@ -4002,6 +4050,126 @@ class Absen_sheet_sync {
 			'synced' => $synced,
 			'skipped_items' => $skipped_items
 		);
+	}
+
+	protected function build_loan_sheet_dibayar_values($row, $fallback_total = 0)
+	{
+		$data = is_array($row) ? $row : array();
+		$dibayar_values = array();
+		for ($month = 1; $month <= 12; $month += 1)
+		{
+			$dibayar_values[$month] = '';
+		}
+
+		$tenor_months = isset($data['tenor_months']) ? (int) $data['tenor_months'] : 0;
+		if ($tenor_months <= 0 && isset($data['tenor']))
+		{
+			$tenor_months = (int) $data['tenor'];
+		}
+		if ($tenor_months > 12)
+		{
+			$tenor_months = 12;
+		}
+
+		$normalized_installments = array();
+		$installments_raw = isset($data['installments']) && is_array($data['installments'])
+			? $data['installments']
+			: array();
+		for ($i = 0; $i < count($installments_raw); $i += 1)
+		{
+			$installment_row = isset($installments_raw[$i]) && is_array($installments_raw[$i])
+				? $installments_raw[$i]
+				: array();
+			$month_number = isset($installment_row['month']) ? (int) $installment_row['month'] : ($i + 1);
+			if ($month_number < 1 || $month_number > 12)
+			{
+				continue;
+			}
+			$amount = $this->parse_money_to_int(isset($installment_row['amount']) ? $installment_row['amount'] : 0);
+			if ($amount <= 0)
+			{
+				continue;
+			}
+			$normalized_installments[$month_number] = (int) $amount;
+		}
+
+		if (empty($normalized_installments))
+		{
+			$total_amount = $this->parse_money_to_int(isset($data['total_payment']) ? $data['total_payment'] : 0);
+			if ($total_amount <= 0)
+			{
+				$total_amount = $this->parse_money_to_int(isset($data['amount']) ? $data['amount'] : 0);
+			}
+			if ($total_amount <= 0)
+			{
+				$total_amount = (int) $fallback_total;
+			}
+			if ($total_amount <= 0)
+			{
+				return $dibayar_values;
+			}
+
+			if ($tenor_months <= 0)
+			{
+				$monthly_estimate = $this->parse_money_to_int(
+					isset($data['monthly_installment_estimate']) ? $data['monthly_installment_estimate'] : 0
+				);
+				if ($monthly_estimate > 0)
+				{
+					$tenor_months = (int) ceil($total_amount / max(1, $monthly_estimate));
+				}
+			}
+			if ($tenor_months <= 0)
+			{
+				$tenor_months = 1;
+			}
+			if ($tenor_months > 12)
+			{
+				$tenor_months = 12;
+			}
+
+			$base_installment = (int) floor($total_amount / $tenor_months);
+			$remainder = (int) ($total_amount - ($base_installment * $tenor_months));
+			for ($month = 1; $month <= $tenor_months; $month += 1)
+			{
+				$amount = $base_installment;
+				if ($month === $tenor_months && $remainder > 0)
+				{
+					$amount += $remainder;
+				}
+				$normalized_installments[$month] = (int) max(0, $amount);
+			}
+		}
+
+		if ($tenor_months <= 0 && !empty($normalized_installments))
+		{
+			$tenor_months = max(array_keys($normalized_installments));
+		}
+		if ($tenor_months > 12)
+		{
+			$tenor_months = 12;
+		}
+
+		for ($month = 1; $month <= 12; $month += 1)
+		{
+			$installment_value = isset($normalized_installments[$month]) ? (int) $normalized_installments[$month] : 0;
+			if ($installment_value <= 0)
+			{
+				$dibayar_values[$month] = '';
+				continue;
+			}
+			$dibayar_values[$month] = $installment_value;
+		}
+
+		if ($tenor_months > 0 && $tenor_months < 12)
+		{
+			for ($month = $tenor_months + 1; $month <= 12; $month += 1)
+			{
+				$dibayar_values[$month] = '';
+			}
+		}
+
+		return $dibayar_values;
 	}
 
 	public function read_loans_from_sheet($options = array())
@@ -4200,6 +4368,7 @@ class Absen_sheet_sync {
 		$best_score = -1;
 		$best_columns = array();
 		$best_dibayar_columns = array();
+		$best_status_columns = array();
 
 		for ($row_index = 0; $row_index < count($header_rows); $row_index += 1)
 		{
@@ -4213,6 +4382,7 @@ class Absen_sheet_sync {
 				'keterangan' => -1
 			);
 			$dibayar_columns = array();
+			$status_columns = array();
 			for ($col_index = 0; $col_index < count($row); $col_index += 1)
 			{
 				$cell_raw = trim((string) $row[$col_index]);
@@ -4269,6 +4439,19 @@ class Absen_sheet_sync {
 					}
 				}
 			}
+			foreach ($dibayar_columns as $dibayar_no => $dibayar_index)
+			{
+				$candidate_status_index = ((int) $dibayar_index) + 1;
+				$candidate_raw = isset($row[$candidate_status_index]) ? trim((string) $row[$candidate_status_index]) : '';
+				$candidate_token = $this->normalize_attendance_header($candidate_raw);
+				if (
+					($candidate_token !== '' && strpos($candidate_token, 'status') !== FALSE)
+					|| ($candidate_raw !== '' && stripos($candidate_raw, 'status') !== FALSE)
+				)
+				{
+					$status_columns[(int) $dibayar_no] = (int) $candidate_status_index;
+				}
+			}
 
 			$score = 0;
 			foreach ($columns as $column_index)
@@ -4279,6 +4462,7 @@ class Absen_sheet_sync {
 				}
 			}
 			$score += count($dibayar_columns);
+			$score += count($status_columns);
 
 			if ($score > $best_score)
 			{
@@ -4286,6 +4470,7 @@ class Absen_sheet_sync {
 				$best_header_row = $row_index + 1;
 				$best_columns = $columns;
 				$best_dibayar_columns = $dibayar_columns;
+				$best_status_columns = $status_columns;
 			}
 		}
 
@@ -4329,6 +4514,38 @@ class Absen_sheet_sync {
 					: -1;
 			}
 		}
+		$status_fallback_indexes = array(
+			1 => 7,
+			2 => 9,
+			3 => 14,
+			4 => 16,
+			5 => 18,
+			6 => 20,
+			7 => 22,
+			8 => 24,
+			9 => 26,
+			10 => 28,
+			11 => 30,
+			12 => 32
+		);
+		for ($dibayar_no = 1; $dibayar_no <= 12; $dibayar_no += 1)
+		{
+			$current_status_index = isset($best_status_columns[$dibayar_no]) ? (int) $best_status_columns[$dibayar_no] : -1;
+			if ($current_status_index >= 0)
+			{
+				continue;
+			}
+			$dibayar_index = isset($best_dibayar_columns[$dibayar_no]) ? (int) $best_dibayar_columns[$dibayar_no] : -1;
+			$candidate_from_dibayar = $dibayar_index >= 0 ? ($dibayar_index + 1) : -1;
+			if ($candidate_from_dibayar >= 0 && $candidate_from_dibayar <= 32)
+			{
+				$best_status_columns[$dibayar_no] = (int) $candidate_from_dibayar;
+				continue;
+			}
+			$best_status_columns[$dibayar_no] = isset($status_fallback_indexes[$dibayar_no])
+				? (int) $status_fallback_indexes[$dibayar_no]
+				: -1;
+		}
 
 		$data_start_row = $best_header_row + 1;
 		if ($data_start_row < 2)
@@ -4355,6 +4572,7 @@ class Absen_sheet_sync {
 			'column_indexes' => $best_columns,
 			'column_letters' => $column_letters,
 			'dibayar_indexes' => $best_dibayar_columns,
+			'status_indexes' => $best_status_columns,
 			'date_format' => $date_format
 		);
 

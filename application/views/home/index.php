@@ -546,6 +546,134 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 			body.theme-dark .account-card p {
 				color: #b2c3d5;
 			}
+			/* Dark mode readability fix for summary/date/time cards */
+			html.theme-dark .clock-label,
+			body.theme-dark .clock-label {
+				color: #9ebad5 !important;
+			}
+			html.theme-dark .clock-value,
+			body.theme-dark .clock-value {
+				color: #dfeeff !important;
+			}
+			html.theme-dark .clock-box-link .clock-value,
+			body.theme-dark .clock-box-link .clock-value {
+				color: #9fcbff !important;
+			}
+			html.theme-dark .clock-help-text,
+			body.theme-dark .clock-help-text {
+				color: #b7cada !important;
+			}
+			html.theme-dark .mini-label,
+			body.theme-dark .mini-label {
+				color: #a9c1d8 !important;
+			}
+			html.theme-dark .mini-value,
+			body.theme-dark .mini-value {
+				color: #e4f0ff !important;
+			}
+			html.theme-dark .mini-hint,
+			body.theme-dark .mini-hint {
+				color: #b4c8dc !important;
+			}
+			html.theme-dark .hero-title,
+			body.theme-dark .hero-title {
+				color: #eef6ff !important;
+			}
+			html.theme-dark .hero-subtitle,
+			body.theme-dark .hero-subtitle {
+				color: #bfd3e6 !important;
+			}
+			.sync-layout {
+				display: grid;
+				gap: 0.8rem;
+			}
+			.sync-board {
+				display: grid;
+				grid-template-columns: repeat(2, minmax(280px, 1fr));
+				gap: 0.8rem;
+			}
+			.sync-group {
+				border: 1px solid #d6e4f3;
+				background: #f7fbff;
+				border-radius: 12px;
+				padding: 0.72rem;
+			}
+			.sync-group-title {
+				margin: 0 0 0.5rem;
+				font-size: 0.8rem;
+				font-weight: 800;
+				letter-spacing: 0.02em;
+				color: #183b5e;
+			}
+			.sync-actions-wrap {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 0.48rem;
+			}
+			.sync-more-toggle {
+				cursor: pointer;
+				list-style: none;
+				display: inline-flex;
+				align-items: center;
+				gap: 0.45rem;
+				font-size: 0.76rem;
+				font-weight: 700;
+				color: #2a5f8f;
+				user-select: none;
+			}
+			.sync-more-toggle::-webkit-details-marker {
+				display: none;
+			}
+			.sync-more-toggle::before {
+				content: ">";
+				display: inline-flex;
+				transform: rotate(0deg);
+				transition: transform 0.18s ease;
+				font-weight: 800;
+			}
+			details[open] > .sync-more-toggle::before {
+				transform: rotate(90deg);
+			}
+			.sync-danger-group {
+				border-color: #f0c1c1;
+				background: #fff5f5;
+			}
+			.sync-danger-group .sync-group-title {
+				color: #8f2630;
+			}
+			.sync-footer-row {
+				display: grid;
+				grid-template-columns: minmax(280px, 1fr) minmax(280px, 1fr);
+				gap: 0.8rem;
+			}
+			html.theme-dark .sync-group,
+			body.theme-dark .sync-group {
+				background: #112539;
+				border-color: #2d4b64;
+			}
+			html.theme-dark .sync-group-title,
+			body.theme-dark .sync-group-title {
+				color: #dce9f8;
+			}
+			html.theme-dark .sync-more-toggle,
+			body.theme-dark .sync-more-toggle {
+				color: #9fc4e7;
+			}
+			html.theme-dark .sync-danger-group,
+			body.theme-dark .sync-danger-group {
+				background: rgba(132, 35, 45, 0.12);
+				border-color: rgba(210, 98, 112, 0.5);
+			}
+			html.theme-dark .sync-danger-group .sync-group-title,
+			body.theme-dark .sync-danger-group .sync-group-title {
+				color: #ffd2d8;
+			}
+			@media (max-width: 920px) {
+				.sync-board,
+				.sync-footer-row {
+					grid-template-columns: 1fr;
+				}
+			}
 			html.theme-dark .account-input,
 			html.theme-dark .account-search-input,
 			body.theme-dark .account-input,
@@ -897,37 +1025,61 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 							<?php else: ?>
 								<p>Tarik data terbaru dari Google Sheet ke web (Data Absen).</p>
 							<?php endif; ?>
-							<div class="d-flex flex-wrap gap-2">
-								<form method="post" action="<?php echo site_url('home/prepare_sync_local_backup_now'); ?>" class="sync-backup-control-form" data-sync-backup-form="1" data-sync-label="Backup Local Dulu (Wajib)">
-									<button type="submit" class="account-submit">Backup Local Dulu (Wajib)</button>
-								</form>
-								<?php if ($can_sync_sheet_accounts): ?>
-									<form method="post" action="<?php echo site_url('home/sync_sheet_accounts_now'); ?>" class="sync-control-form" data-sync-direction="sheet_to_web_account" data-sync-label="Sync Akun dari Sheet">
-										<button type="submit" class="account-submit">Sync Akun dari Sheet</button>
-									</form>
-								<?php endif; ?>
-								<form method="post" action="<?php echo site_url('home/sync_sheet_attendance_now'); ?>" class="sync-control-form" data-sync-direction="sheet_to_web_attendance" data-sync-label="Sync Data Absen dari Sheet" data-requires-backup="1">
-									<button type="submit" class="account-submit"<?php echo $sync_backup_required_button_attrs; ?>>Sync Data Absen dari Sheet</button>
-								</form>
-								<form method="post" action="<?php echo site_url('home/sync_web_attendance_to_sheet_now'); ?>" class="sync-control-form" data-sync-direction="web_to_sheet" data-sync-label="Sync Data Web ke Sheet" data-requires-backup="1">
-									<button type="submit" class="account-submit"<?php echo $sync_backup_required_button_attrs; ?>>Sync Data Web ke Sheet</button>
-								</form>
-								<form method="post" action="<?php echo site_url('home/sync_web_loan_to_sheet_now'); ?>" class="sync-control-form" data-sync-direction="web_to_sheet_loan" data-sync-label="Sync Data Web ke Pinjaman" data-requires-backup="1">
-									<button type="submit" class="account-submit"<?php echo $sync_backup_required_button_attrs; ?>>Sync Data Web ke Pinjaman</button>
-								</form>
-								<form method="post" action="<?php echo site_url('home/sync_sheet_loan_to_web_now'); ?>" class="sync-control-form" data-sync-direction="sheet_loan_to_web" data-sync-label="Sync Data Pinjaman ke Web" data-requires-backup="1">
-									<button type="submit" class="account-submit"<?php echo $sync_backup_required_button_attrs; ?>>Sync Data Pinjaman ke Web</button>
-								</form>
-								<form
-									method="post"
-									action="<?php echo site_url('home/reset_total_alpha_now'); ?>"
-									class="sync-control-form"
-									data-sync-direction="reset_total_alpha"
-									data-sync-label="Reset Total Alpha"
-									onsubmit="return window.confirm('Reset total alpha bulan berjalan? Aksi ini akan mengosongkan hitungan alpha di dashboard/grafik untuk tanggal yang sudah berjalan bulan ini.');"
-								>
-									<button type="submit" class="account-submit delete">Reset Total Alpha</button>
-								</form>
+							<div class="sync-layout">
+								<div class="sync-footer-row">
+									<div class="sync-group">
+										<p class="sync-group-title">Langkah Wajib</p>
+										<div class="sync-actions-wrap">
+											<form method="post" action="<?php echo site_url('home/prepare_sync_local_backup_now'); ?>" class="sync-backup-control-form" data-sync-backup-form="1" data-sync-label="Backup Local Dulu (Wajib)">
+												<button type="submit" class="account-submit">Backup Local Dulu (Wajib)</button>
+											</form>
+										</div>
+									</div>
+									<div class="sync-group sync-danger-group">
+										<p class="sync-group-title">Zona Risiko</p>
+										<div class="sync-actions-wrap">
+											<form
+												method="post"
+												action="<?php echo site_url('home/reset_total_alpha_now'); ?>"
+												class="sync-control-form"
+												data-sync-direction="reset_total_alpha"
+												data-sync-label="Reset Total Alpha"
+												onsubmit="return window.confirm('Reset total alpha bulan berjalan? Aksi ini akan mengosongkan hitungan alpha di dashboard/grafik untuk tanggal yang sudah berjalan bulan ini.');"
+											>
+												<button type="submit" class="account-submit delete">Reset Total Alpha</button>
+											</form>
+										</div>
+									</div>
+								</div>
+								<div class="sync-board">
+									<div class="sync-group">
+										<p class="sync-group-title">Tarik Data ke Web (Sheet -> Web)</p>
+										<div class="sync-actions-wrap">
+											<?php if ($can_sync_sheet_accounts): ?>
+												<form method="post" action="<?php echo site_url('home/sync_sheet_accounts_now'); ?>" class="sync-control-form" data-sync-direction="sheet_to_web_account" data-sync-label="Sync Akun dari Sheet">
+													<button type="submit" class="account-submit">Sync Akun dari Sheet</button>
+												</form>
+											<?php endif; ?>
+											<form method="post" action="<?php echo site_url('home/sync_sheet_attendance_now'); ?>" class="sync-control-form" data-sync-direction="sheet_to_web_attendance" data-sync-label="Sync Data Absen dari Sheet" data-requires-backup="1">
+												<button type="submit" class="account-submit"<?php echo $sync_backup_required_button_attrs; ?>>Sync Data Absen dari Sheet</button>
+											</form>
+											<form method="post" action="<?php echo site_url('home/sync_sheet_loan_to_web_now'); ?>" class="sync-control-form" data-sync-direction="sheet_loan_to_web" data-sync-label="Sync Data Pinjaman ke Web" data-requires-backup="1">
+												<button type="submit" class="account-submit"<?php echo $sync_backup_required_button_attrs; ?>>Sync Data Pinjaman ke Web</button>
+											</form>
+										</div>
+									</div>
+									<div class="sync-group">
+										<p class="sync-group-title">Kirim Data dari Web (Web -> Sheet)</p>
+										<div class="sync-actions-wrap">
+											<form method="post" action="<?php echo site_url('home/sync_web_attendance_to_sheet_now'); ?>" class="sync-control-form" data-sync-direction="web_to_sheet" data-sync-label="Sync Data Web ke Sheet" data-requires-backup="1">
+												<button type="submit" class="account-submit"<?php echo $sync_backup_required_button_attrs; ?>>Sync Data Web ke Sheet</button>
+											</form>
+											<form method="post" action="<?php echo site_url('home/sync_web_loan_to_sheet_now'); ?>" class="sync-control-form" data-sync-direction="web_to_sheet_loan" data-sync-label="Sync Data Web ke Pinjaman" data-requires-backup="1">
+												<button type="submit" class="account-submit"<?php echo $sync_backup_required_button_attrs; ?>>Sync Data Web ke Pinjaman</button>
+											</form>
+										</div>
+									</div>
+								</div>
 							</div>
 							<p class="text-secondary mb-0 mt-2"><?php echo htmlspecialchars($sync_backup_status_text !== '' ? $sync_backup_status_text : 'Belum ada backup lokal aktif. Klik "Backup Local Dulu (Wajib)" sebelum sync.', ENT_QUOTES, 'UTF-8'); ?></p>
 							<?php if ($sync_last_message !== '' || $sync_last_action !== ''): ?>

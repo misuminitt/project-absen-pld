@@ -728,15 +728,17 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 			</div>
 		</div>
 
-		<?php if ($notice_success): ?>
-			<div class="notice success"><?php echo htmlspecialchars((string) $notice_success, ENT_QUOTES, 'UTF-8'); ?></div>
-		<?php endif; ?>
-		<?php if ($notice_warning): ?>
-			<div class="notice warning"><?php echo htmlspecialchars((string) $notice_warning, ENT_QUOTES, 'UTF-8'); ?></div>
-		<?php endif; ?>
-		<?php if ($notice_error): ?>
-			<div class="notice error"><?php echo htmlspecialchars((string) $notice_error, ENT_QUOTES, 'UTF-8'); ?></div>
-		<?php endif; ?>
+		<div id="loanNoticeStack">
+			<?php if ($notice_success): ?>
+				<div class="notice success"><?php echo htmlspecialchars((string) $notice_success, ENT_QUOTES, 'UTF-8'); ?></div>
+			<?php endif; ?>
+			<?php if ($notice_warning): ?>
+				<div class="notice warning"><?php echo htmlspecialchars((string) $notice_warning, ENT_QUOTES, 'UTF-8'); ?></div>
+			<?php endif; ?>
+			<?php if ($notice_error): ?>
+				<div class="notice error"><?php echo htmlspecialchars((string) $notice_error, ENT_QUOTES, 'UTF-8'); ?></div>
+			<?php endif; ?>
+		</div>
 
 		<div class="table-card">
 			<?php if ($loan_total_records <= 0): ?>
@@ -811,10 +813,11 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 			var tableBody = document.getElementById('loanRequestTableBody');
 			var pager = document.getElementById('loanPager');
 			var metaBox = document.getElementById('loanPageMeta');
+			var tableCard = document.querySelector('.table-card');
 			var searchEndpoint = <?php echo json_encode(site_url('home/loan_requests')); ?>;
 			var currentPage = <?php echo (int) $loan_current_page; ?>;
 			var modeValue = <?php echo json_encode($loan_mode); ?>;
-			var modeLabel = <?php echo json_encode(isset($loan_pagination['mode_label']) ? (string) $loan_pagination['mode_label'] : 'Data Terbaru'); ?>;
+			var modeLabel = modeValue === 'monthly' ? 'Data Bulanan' : 'Data Terbaru';
 
 			if (!searchInput || !tableBody) {
 				return;
@@ -827,6 +830,7 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 			var searchToken = 0;
 			var debounceTimer = null;
 			var activeAbortController = null;
+			var pageLoadToken = 0;
 
 			var setMetaText = function (left, right) {
 				if (!metaSpans.length) {
@@ -839,6 +843,7 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 			};
 
 			var setSearchState = function (isActive) {
+				pager = document.getElementById('loanPager');
 				if (pager) {
 					pager.style.display = isActive ? 'none' : '';
 				}
@@ -852,6 +857,104 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 				if (emptyInfo) {
 					emptyInfo.style.display = 'none';
 				}
+			};
+
+			var syncPageStateFromUrl = function (url) {
+				var stateMode = modeValue;
+				var statePage = currentPage;
+				try {
+					var parsed = new URL(url, window.location.origin);
+					var modeParam = String(parsed.searchParams.get('mode') || '').toLowerCase();
+					var pageParam = parseInt(String(parsed.searchParams.get('page') || ''), 10);
+					if (modeParam === 'monthly') {
+						stateMode = 'monthly';
+					} else {
+						stateMode = 'daily';
+					}
+					if (isFinite(pageParam) && pageParam > 0) {
+						statePage = pageParam;
+					} else {
+						statePage = 1;
+					}
+				} catch (error) {}
+				modeValue = stateMode;
+				currentPage = statePage;
+				modeLabel = modeValue === 'monthly' ? 'Data Bulanan' : 'Data Terbaru';
+			};
+
+			var replacePagerFromDoc = function (doc) {
+				if (!tableCard) {
+					return;
+				}
+				var incomingPager = doc.getElementById('loanPager');
+				var currentPager = document.getElementById('loanPager');
+				if (incomingPager && currentPager) {
+					currentPager.innerHTML = incomingPager.innerHTML;
+					currentPager.style.display = '';
+					return;
+				}
+				if (!incomingPager && currentPager) {
+					currentPager.parentNode.removeChild(currentPager);
+					return;
+				}
+				if (incomingPager && !currentPager && metaBox && metaBox.parentNode === tableCard) {
+					tableCard.insertBefore(incomingPager, metaBox.nextSibling);
+				}
+			};
+
+			var loadPageViaAjax = function (url) {
+				pageLoadToken += 1;
+				var activeToken = pageLoadToken;
+				var keyword = String(searchInput.value || '').trim();
+				if (keyword !== '') {
+					return;
+				}
+
+				fetch(url, {
+					credentials: 'same-origin',
+					headers: {
+						'X-Requested-With': 'XMLHttpRequest'
+					}
+				})
+					.then(function (response) {
+						if (!response.ok) {
+							throw new Error('HTTP ' + response.status);
+						}
+						return response.text();
+					})
+					.then(function (htmlText) {
+						if (activeToken !== pageLoadToken) {
+							return;
+						}
+						var parser = new DOMParser();
+						var doc = parser.parseFromString(htmlText, 'text/html');
+						var incomingTbody = doc.getElementById('loanRequestTableBody');
+						var incomingMeta = doc.getElementById('loanPageMeta');
+						if (!incomingTbody || !incomingMeta) {
+							throw new Error('Gagal memuat data halaman.');
+						}
+
+						tableBody.innerHTML = incomingTbody.innerHTML;
+						var incomingMetaSpans = incomingMeta.querySelectorAll('span');
+						if (metaSpans.length > 0 && incomingMetaSpans.length > 0) {
+							metaSpans[0].textContent = String(incomingMetaSpans[0].textContent || '');
+						}
+						if (metaSpans.length > 1 && incomingMetaSpans.length > 1) {
+							metaSpans[1].textContent = String(incomingMetaSpans[1].textContent || '');
+						}
+
+						baseMetaTextLeft = metaSpans.length > 0 ? String(metaSpans[0].textContent || '') : '';
+						baseMetaTextRight = metaSpans.length > 1 ? String(metaSpans[1].textContent || '') : '';
+						initialTableHtml = String(tableBody.innerHTML || '');
+						syncPageStateFromUrl(url);
+						replacePagerFromDoc(doc);
+						if (emptyInfo) {
+							emptyInfo.style.display = 'none';
+						}
+					})
+					.catch(function (error) {
+						console.error('Pagination AJAX gagal', error);
+					});
 			};
 
 			var buildSearchUrl = function (keyword) {
@@ -959,6 +1062,19 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 				}, 220);
 			});
 
+			document.addEventListener('click', function (event) {
+				var pagerLink = event.target && event.target.closest ? event.target.closest('#loanPager a.pager-btn') : null;
+				if (!pagerLink) {
+					return;
+				}
+				var targetUrl = String(pagerLink.getAttribute('href') || '').trim();
+				if (targetUrl === '') {
+					return;
+				}
+				event.preventDefault();
+				loadPageViaAjax(targetUrl);
+			});
+
 			restoreInitialRows();
 			setSearchState(false);
 		})();
@@ -1054,6 +1170,190 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 					}, true);
 				})(wraps[i]);
 			}
+		})();
+
+		(function () {
+			var tableBody = document.getElementById('loanRequestTableBody');
+			var noticeStack = document.getElementById('loanNoticeStack');
+			if (!tableBody) {
+				return;
+			}
+
+			var normalizeNoticeType = function (value) {
+				var text = String(value || '').toLowerCase();
+				if (text === 'error') {
+					return 'error';
+				}
+				if (text === 'warning') {
+					return 'warning';
+				}
+				return 'success';
+			};
+
+			var renderNotice = function (type, message) {
+				if (!noticeStack) {
+					return;
+				}
+				var safeType = normalizeNoticeType(type);
+				var text = String(message || '').trim();
+				if (text === '') {
+					return;
+				}
+				noticeStack.innerHTML = '';
+				var notice = document.createElement('div');
+				notice.className = 'notice ' + safeType;
+				notice.textContent = text;
+				noticeStack.appendChild(notice);
+			};
+
+			var buildProcessedLabel = function () {
+				var span = document.createElement('span');
+				span.className = 'processed-label';
+				span.textContent = 'Sudah diproses';
+				return span;
+			};
+
+			var applyStatusUpdateToRow = function (row, payload) {
+				if (!row) {
+					return;
+				}
+				var statusChip = row.querySelector('td:nth-child(11) .status-chip');
+				if (statusChip) {
+					var statusText = String(payload && payload.status_label ? payload.status_label : '').trim();
+					var statusKey = String(payload && payload.status_key ? payload.status_key : '').toLowerCase();
+					if (statusText !== '') {
+						statusChip.textContent = statusText;
+					}
+					statusChip.classList.remove('waiting', 'approved', 'rejected');
+					if (statusKey === 'diterima' || statusKey === 'approved') {
+						statusChip.classList.add('approved');
+					} else if (statusKey === 'ditolak' || statusKey === 'rejected') {
+						statusChip.classList.add('rejected');
+					} else {
+						statusChip.classList.add('waiting');
+					}
+				}
+				var processForm = row.querySelector('form.admin-action-form[action*="update_loan_request_status"]');
+				if (processForm && processForm.parentNode) {
+					processForm.parentNode.replaceChild(buildProcessedLabel(), processForm);
+				}
+			};
+
+			var refreshRowNumbers = function () {
+				var rows = tableBody.querySelectorAll('tr.loan-row');
+				for (var i = 0; i < rows.length; i += 1) {
+					var noCell = rows[i].querySelector('.row-no');
+					if (noCell) {
+						noCell.textContent = String(i + 1);
+					}
+				}
+			};
+
+			var ensureNotEmptyState = function () {
+				var rows = tableBody.querySelectorAll('tr.loan-row');
+				if (rows.length > 0) {
+					return;
+				}
+				var tr = document.createElement('tr');
+				var td = document.createElement('td');
+				tr.className = 'loan-row-empty';
+				td.colSpan = 13;
+				td.className = 'empty';
+				td.textContent = 'Belum ada pengajuan pinjaman dari karyawan.';
+				tr.appendChild(td);
+				tableBody.innerHTML = '';
+				tableBody.appendChild(tr);
+			};
+
+			document.addEventListener('submit', function (event) {
+				var form = event.target && event.target.closest ? event.target.closest('form.admin-action-form') : null;
+				if (!form || !tableBody.contains(form)) {
+					return;
+				}
+				if (event.defaultPrevented) {
+					return;
+				}
+				if (typeof window.fetch !== 'function' || typeof window.FormData !== 'function') {
+					return;
+				}
+
+				var actionUrl = String(form.getAttribute('action') || '').trim();
+				if (actionUrl === '') {
+					return;
+				}
+				var isDeleteAction = actionUrl.indexOf('delete_loan_request') !== -1;
+				if (isDeleteAction && window.confirm('Hapus data pinjaman ini?') !== true) {
+					event.preventDefault();
+					return;
+				}
+
+				event.preventDefault();
+
+				var formData;
+				try {
+					formData = typeof FormData === 'function' && event.submitter
+						? new FormData(form, event.submitter)
+						: new FormData(form);
+				} catch (error) {
+					formData = new FormData(form);
+				}
+				if (event.submitter && event.submitter.name && !formData.has(event.submitter.name)) {
+					formData.append(event.submitter.name, event.submitter.value || '');
+				}
+
+				var submitButtons = form.querySelectorAll('button[type="submit"]');
+				for (var i = 0; i < submitButtons.length; i += 1) {
+					submitButtons[i].disabled = true;
+				}
+
+				fetch(actionUrl, {
+					method: 'POST',
+					credentials: 'same-origin',
+					headers: {
+						'X-Requested-With': 'XMLHttpRequest',
+						'Accept': 'application/json'
+					},
+					body: formData
+				})
+					.then(function (response) {
+						return response.json().catch(function () {
+							return {};
+						}).then(function (payload) {
+							return {
+								ok: response.ok,
+								payload: payload
+							};
+						});
+					})
+					.then(function (result) {
+						var payload = result && result.payload ? result.payload : {};
+						if (!result.ok || payload.success !== true) {
+							var errorMessage = String(payload.message || 'Gagal memproses aksi pengajuan pinjaman.');
+							throw new Error(errorMessage);
+						}
+
+						var row = form.closest('tr.loan-row');
+						if (isDeleteAction) {
+							if (row && row.parentNode) {
+								row.parentNode.removeChild(row);
+							}
+							refreshRowNumbers();
+							ensureNotEmptyState();
+						} else {
+							applyStatusUpdateToRow(row, payload);
+						}
+
+						renderNotice(payload.notice_type || 'success', payload.message || 'Aksi berhasil diproses.');
+					})
+					.catch(function (error) {
+						renderNotice('error', error && error.message ? error.message : 'Gagal memproses aksi pengajuan pinjaman.');
+					})
+					.then(function () {
+						for (var i = 0; i < submitButtons.length; i += 1) {
+							submitButtons[i].disabled = false;
+						}
+					});
+			});
 		})();
 	</script>
 </body>

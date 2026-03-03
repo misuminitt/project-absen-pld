@@ -1104,6 +1104,9 @@
 		for (var i = 0; i < syncForms.length; i += 1) {
 			(function (form) {
 				form.addEventListener('submit', function (event) {
+					if (event.defaultPrevented) {
+						return;
+					}
 					if (form.getAttribute('data-sync-bypass') === '1') {
 						form.removeAttribute('data-sync-bypass');
 						return;

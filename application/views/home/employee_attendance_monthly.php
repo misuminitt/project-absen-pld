@@ -717,8 +717,8 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 
 		<div class="table-card">
 			<div class="mode-tabs">
-				<a href="<?php echo site_url('home/employee_data'); ?>" class="mode-link">Data Harian</a>
-				<a href="<?php echo site_url('home/employee_data_monthly'); ?>" class="mode-link active">Data Bulanan</a>
+				<a href="<?php echo htmlspecialchars(site_url('home/employee_data').'?month='.rawurlencode($selected_month), ENT_QUOTES, 'UTF-8'); ?>" class="mode-link">Data Harian</a>
+				<a href="<?php echo htmlspecialchars(site_url('home/employee_data_monthly').'?month='.rawurlencode($selected_month), ENT_QUOTES, 'UTF-8'); ?>" class="mode-link active">Data Bulanan</a>
 				<a href="<?php echo site_url('home/employee_data_emergency'); ?>" class="mode-link">Absen Darurat</a>
 			</div>
 			<?php if ($total_pages > 1): ?>
@@ -761,7 +761,7 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 						<a href="<?php echo htmlspecialchars($export_month_url, ENT_QUOTES, 'UTF-8'); ?>" class="btn excel">Export Excel</a>
 					</div>
 				</div>
-				<p class="search-help">Rumus bulanan: total telat + (alpha + izin), cuti tidak dipotong gaji.</p>
+				<p class="search-help">Rumus bulanan: total telat + (alpha + izin), cuti tidak dipotong gaji. Search hanya untuk bulan aktif.</p>
 				<div class="table-wrap">
 					<table>
 						<thead>
@@ -896,11 +896,8 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 			var searchInput = document.getElementById('monthlySearchInput');
 			var emptyInfo = document.getElementById('monthlySearchEmpty');
 			var tableBody = document.getElementById('monthlyTableBody');
-			var pager = document.querySelector('.month-pager');
 			var metaLine = document.querySelector('.meta-line');
 			var baseMetaText = metaLine ? String(metaLine.textContent || '') : '';
-			var monthPageTargets = <?php echo json_encode($month_page_urls, JSON_UNESCAPED_SLASHES); ?>;
-			var currentPage = <?php echo (int) $current_page; ?>;
 
 			if (!searchInput || !tableBody) {
 				return;
@@ -909,11 +906,7 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 			var initialRows = Array.prototype.slice.call(tableBody.querySelectorAll('.monthly-row')).map(function (row) {
 				return row.cloneNode(true);
 			});
-			var allRows = initialRows.slice();
-			var allRowsLoaded = false;
-			var loadingPromise = null;
 			var inputDelayTimer = null;
-			var searchToken = 0;
 
 			var setMetaText = function (text) {
 				if (metaLine) {
@@ -922,9 +915,6 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 			};
 
 			var setSearchState = function (isActive) {
-				if (pager) {
-					pager.style.display = isActive ? 'none' : '';
-				}
 				if (!isActive) {
 					setMetaText(baseMetaText);
 				}
@@ -945,72 +935,7 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 				}
 			};
 
-			var loadRowsFromAllMonths = function () {
-				if (allRowsLoaded) {
-					return Promise.resolve(allRows);
-				}
-				if (loadingPromise) {
-					return loadingPromise;
-				}
-
-				loadingPromise = new Promise(function (resolve) {
-					var targets = [];
-					for (var i = 0; i < monthPageTargets.length; i += 1) {
-						var target = monthPageTargets[i];
-						var pageNumber = parseInt(target.page, 10);
-						if (isNaN(pageNumber) || pageNumber === currentPage) {
-							continue;
-						}
-						targets.push(target);
-					}
-
-					if (!targets.length) {
-						allRowsLoaded = true;
-						loadingPromise = null;
-						resolve(allRows);
-						return;
-					}
-
-					var loadNext = function (targetIndex) {
-						if (targetIndex >= targets.length) {
-							allRowsLoaded = true;
-							loadingPromise = null;
-							resolve(allRows);
-							return;
-						}
-
-						var target = targets[targetIndex];
-						fetch(String(target.url || ''), {
-							credentials: 'same-origin'
-						})
-						.then(function (response) {
-							if (!response.ok) {
-								throw new Error('HTTP ' + response.status);
-							}
-							return response.text();
-						})
-						.then(function (html) {
-							var parser = new DOMParser();
-							var doc = parser.parseFromString(html, 'text/html');
-							var fetchedRows = doc.querySelectorAll('#monthlyTableBody .monthly-row');
-							for (var rowIndex = 0; rowIndex < fetchedRows.length; rowIndex += 1) {
-								allRows.push(fetchedRows[rowIndex].cloneNode(true));
-							}
-							loadNext(targetIndex + 1);
-						})
-						.catch(function (error) {
-							console.error('Gagal memuat data bulanan halaman ' + String(target.page || ''), error);
-							loadNext(targetIndex + 1);
-						});
-					};
-
-					loadNext(0);
-				});
-
-				return loadingPromise;
-			};
-
-			var filterRows = function (token) {
+			var filterRows = function () {
 				var keyword = String(searchInput.value || '').toLowerCase().trim();
 				if (keyword === '') {
 					setSearchState(false);
@@ -1019,38 +944,27 @@ $_home_theme_body_class = $_home_theme_is_dark ? ' class="theme-dark"' : '';
 				}
 
 				setSearchState(true);
-				setMetaText('Pencarian semua bulan: memuat data...');
-
-				loadRowsFromAllMonths().then(function (rows) {
-					if (token !== searchToken) {
-						return;
+				var filteredRows = [];
+				for (var i = 0; i < initialRows.length; i += 1) {
+					var row = initialRows[i];
+					var idValue = String(row.getAttribute('data-id') || '');
+					var nameValue = String(row.getAttribute('data-name') || '');
+					if (idValue.indexOf(keyword) !== -1 || nameValue.indexOf(keyword) !== -1) {
+						filteredRows.push(row);
 					}
-
-					var filteredRows = [];
-					for (var i = 0; i < rows.length; i += 1) {
-						var row = rows[i];
-						var idValue = String(row.getAttribute('data-id') || '');
-						var nameValue = String(row.getAttribute('data-name') || '');
-						if (idValue.indexOf(keyword) !== -1 || nameValue.indexOf(keyword) !== -1) {
-							filteredRows.push(row);
-						}
-					}
-
-					renderRows(filteredRows);
-					setMetaText(filteredRows.length > 0
-						? ('Pencarian semua bulan: menampilkan ' + filteredRows.length + ' data')
-						: 'Pencarian semua bulan: data tidak ditemukan.');
-				});
+				}
+				renderRows(filteredRows);
+				setMetaText(filteredRows.length > 0
+					? ('Pencarian bulan aktif: menampilkan ' + filteredRows.length + ' data')
+					: 'Pencarian bulan aktif: data tidak ditemukan.');
 			};
 
 			searchInput.addEventListener('input', function () {
-				searchToken += 1;
-				var activeToken = searchToken;
 				if (inputDelayTimer !== null) {
 					window.clearTimeout(inputDelayTimer);
 				}
 				inputDelayTimer = window.setTimeout(function () {
-					filterRows(activeToken);
+					filterRows();
 				}, 180);
 			});
 

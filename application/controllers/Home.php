@@ -16,7 +16,10 @@ class Home extends CI_Controller {
 	const MULTISHIFT_ONTIME_MORNING_END = '08:00:00';
 	const MULTISHIFT_ONTIME_AFTERNOON_START = '13:30:00';
 	const MULTISHIFT_ONTIME_AFTERNOON_END = '14:00:00';
-	const ATTENDANCE_TIME_BYPASS_USERS = array('akuntesting');
+	const ATTENDANCE_TIME_BYPASS_USERS = array(
+		'akunusertesting',
+		'akuntesting'
+	);
 	const ATTENDANCE_FORCE_LATE_USERS = array();
 	const ATTENDANCE_FORCE_LATE_DURATION = '00:30:00';
 	const ATTENDANCE_REMINDER_SLOTS = array('08:15', '14:15');
@@ -1954,6 +1957,26 @@ class Home extends CI_Controller {
 				$display_name = isset($profiles[$username_key]['display_name']) && trim((string) $profiles[$username_key]['display_name']) !== ''
 					? (string) $profiles[$username_key]['display_name']
 					: $username_key;
+				$tenor_months = isset($row['tenor_months']) ? (int) $row['tenor_months'] : (isset($row['tenor']) ? (int) $row['tenor'] : 0);
+				if ($tenor_months < 1)
+				{
+					$tenor_months = 1;
+				}
+				if ($tenor_months > 12)
+				{
+					$tenor_months = 12;
+				}
+				$total_payment = $this->parse_money_to_int(isset($row['total_payment']) ? $row['total_payment'] : 0);
+				if ($total_payment <= 0)
+				{
+					$total_payment = $amount;
+				}
+				$monthly_installment_estimate = $this->parse_money_to_int(
+					isset($row['monthly_installment_estimate']) ? $row['monthly_installment_estimate'] : 0
+				);
+				$installments = isset($row['installments']) && is_array($row['installments'])
+					? array_values($row['installments'])
+					: array();
 
 				$payload_rows[] = array(
 					'id' => isset($row['id']) ? (string) $row['id'] : 'loan_'.$i,
@@ -1964,6 +1987,10 @@ class Home extends CI_Controller {
 					'request_date_label' => isset($row['request_date_label']) ? (string) $row['request_date_label'] : '',
 					'reason' => $reason,
 					'amount' => $amount,
+					'tenor_months' => $tenor_months,
+					'total_payment' => $total_payment,
+					'monthly_installment_estimate' => $monthly_installment_estimate,
+					'installments' => $installments,
 					'keterangan' => $this->normalize_loan_sheet_keterangan_text(
 						isset($row['source_sheet_keterangan']) ? (string) $row['source_sheet_keterangan'] : ''
 					)
@@ -8459,6 +8486,17 @@ class Home extends CI_Controller {
 		return 'home#manajemen-karyawan';
 	}
 
+	private function resolve_attendance_record_redirect_target($return_to = '')
+	{
+		$return_key = strtolower(trim((string) $return_to));
+		if ($return_key === 'home/employee_data_emergency')
+		{
+			return 'home/employee_data_emergency';
+		}
+
+		return 'home/employee_data';
+	}
+
 	private function day_off_swap_request_notice_flash_key($redirect_target = '', $type = 'error')
 	{
 		$type_key = strtolower(trim((string) $type)) === 'success' ? 'success' : 'error';
@@ -9618,6 +9656,8 @@ class Home extends CI_Controller {
 
 	public function submit_attendance()
 	{
+		$this->output->set_header('X-Absen-Antifraud-Guard: AF-20260301-2');
+
 		if ($this->session->userdata('absen_logged_in') !== TRUE)
 		{
 			$this->json_response(array('success' => FALSE, 'message' => 'Sesi login sudah habis.'), 401);
@@ -9642,6 +9682,88 @@ class Home extends CI_Controller {
 		$longitude = trim((string) $this->input->post('longitude', TRUE));
 		$accuracy = trim((string) $this->input->post('accuracy', TRUE));
 		$late_reason_input = trim((string) $this->input->post('late_reason', TRUE));
+		$integrity_token_input = trim((string) $this->input->post('integrity_token', TRUE));
+		$attestation_nonce_input = trim((string) $this->input->post('attestation_nonce', TRUE));
+		$payload_signature_input = trim((string) $this->input->post('payload_signature', TRUE));
+		$strict_attestation_required = FALSE;
+		if (function_exists('antifraud_config'))
+		{
+			$strict_attestation_required = antifraud_config('require_attestation_pass') ? TRUE : FALSE;
+		}
+		else
+		{
+			$strict_env_raw = getenv('ANTIFRAUD_REQUIRE_ATTESTATION_PASS');
+			if ($strict_env_raw === FALSE || trim((string) $strict_env_raw) === '')
+			{
+				if (isset($_ENV['ANTIFRAUD_REQUIRE_ATTESTATION_PASS']))
+				{
+					$strict_env_raw = (string) $_ENV['ANTIFRAUD_REQUIRE_ATTESTATION_PASS'];
+				}
+				elseif (isset($_SERVER['ANTIFRAUD_REQUIRE_ATTESTATION_PASS']))
+				{
+					$strict_env_raw = (string) $_SERVER['ANTIFRAUD_REQUIRE_ATTESTATION_PASS'];
+				}
+				else
+				{
+					// Secure-by-default when env cannot be resolved.
+					$strict_env_raw = 'true';
+				}
+			}
+			$strict_env_value = strtolower(trim((string) $strict_env_raw));
+			$strict_attestation_required = in_array($strict_env_value, array('1', 'true', 'yes', 'on'), TRUE);
+		}
+		$server_attestation_verdict = '';
+		$server_attestation_reason = '';
+		$antifraud_enabled = function_exists('antifraud_config')
+			&& function_exists('antifraud_evaluate_risk')
+			&& antifraud_config('enabled');
+
+		if ($strict_attestation_required)
+		{
+			if ($integrity_token_input === '' || $attestation_nonce_input === '')
+			{
+				$this->json_response(array(
+					'success' => FALSE,
+					'message' => 'Absensi normal wajib verifikasi integritas perangkat (token/nonce). Silakan gunakan Absen Darurat.',
+					'force_emergency' => TRUE
+				), 422);
+				return;
+			}
+
+			if (!function_exists('antifraud_verify_attestation'))
+			{
+				$this->json_response(array(
+					'success' => FALSE,
+					'message' => 'Verifikasi integritas perangkat belum tersedia di server. Silakan gunakan Absen Darurat.',
+					'force_emergency' => TRUE
+				), 422);
+				return;
+			}
+
+			$attestation_check = antifraud_verify_attestation(array(
+				'nonce' => $attestation_nonce_input,
+				'integrity_token' => $integrity_token_input,
+				'payload_signature' => $payload_signature_input
+			));
+			$server_attestation_verdict = isset($attestation_check['verdict'])
+				? strtoupper(trim((string) $attestation_check['verdict']))
+				: '';
+			$server_attestation_reason = isset($attestation_check['reason'])
+				? trim((string) $attestation_check['reason'])
+				: '';
+
+			if ($server_attestation_verdict !== 'PASS')
+			{
+				$this->json_response(array(
+					'success' => FALSE,
+					'message' => 'Absensi normal ditolak karena integritas perangkat belum PASS'
+						.($server_attestation_reason !== '' ? ' ('.$server_attestation_reason.')' : '')
+						.'. Silakan gunakan Absen Darurat.',
+					'force_emergency' => TRUE
+				), 422);
+				return;
+			}
+		}
 
 		if ($action !== 'masuk' && $action !== 'pulang')
 		{
@@ -9699,9 +9821,6 @@ class Home extends CI_Controller {
 		$distance_m = isset($nearest_office['distance_m']) ? (float) $nearest_office['distance_m'] : 0.0;
 		$office_label = isset($nearest_office['label']) ? (string) $nearest_office['label'] : 'kantor';
 		$geofence_check = $this->evaluate_geofence($distance_m, $accuracy_m, $office_label);
-		$antifraud_enabled = function_exists('antifraud_config')
-			&& function_exists('antifraud_evaluate_risk')
-			&& antifraud_config('enabled');
 		$client_signals = array();
 		$client_ip = $this->input->ip_address();
 		$risk = NULL;
@@ -9715,13 +9834,20 @@ class Home extends CI_Controller {
 			$client_ip = function_exists('antifraud_client_ip')
 				? antifraud_client_ip()
 				: $client_ip;
+			$strict_attestation_required = function_exists('antifraud_config')
+				? (antifraud_config('require_attestation_pass') ? TRUE : FALSE)
+				: $strict_attestation_required;
 
-			$attestation_verdict = isset($client_signals['attestation_verdict'])
-				? strtoupper(trim((string) $client_signals['attestation_verdict']))
-				: '';
-			$attestation_reason = isset($client_signals['attestation_reason'])
-				? trim((string) $client_signals['attestation_reason'])
-				: '';
+			$attestation_verdict = $server_attestation_verdict !== ''
+				? $server_attestation_verdict
+				: (isset($client_signals['attestation_verdict'])
+					? strtoupper(trim((string) $client_signals['attestation_verdict']))
+					: '');
+			$attestation_reason = $server_attestation_reason !== ''
+				? $server_attestation_reason
+				: (isset($client_signals['attestation_reason'])
+					? trim((string) $client_signals['attestation_reason'])
+					: '');
 			$attestation_nonce = isset($client_signals['attestation_nonce'])
 				? trim((string) $client_signals['attestation_nonce'])
 				: '';
@@ -9731,6 +9857,22 @@ class Home extends CI_Controller {
 			$payload_signature = isset($client_signals['payload_signature'])
 				? trim((string) $client_signals['payload_signature'])
 				: '';
+
+			// In strict mode, never trust client-provided verdict. Reuse server verdict (if any).
+			if ($strict_attestation_required)
+			{
+				if ($server_attestation_verdict !== '')
+				{
+					$attestation_verdict = $server_attestation_verdict;
+					$attestation_reason = $server_attestation_reason;
+				}
+				else
+				{
+					$attestation_verdict = '';
+					$attestation_reason = '';
+				}
+			}
+
 			if ($attestation_verdict === ''
 				&& function_exists('antifraud_verify_attestation')
 				&& ($attestation_nonce !== '' || $integrity_token !== ''))
@@ -9767,6 +9909,46 @@ class Home extends CI_Controller {
 				'client_signals'  => $client_signals
 			));
 
+			$log_only_mode = function_exists('antifraud_config') ? antifraud_config('log_only_mode') : FALSE;
+			$risk_flags = isset($risk['flags']) && is_array($risk['flags']) ? $risk['flags'] : array();
+			$hard_block_flags = array(
+				'mock_location_suspected',
+				'impossible_travel',
+				'jump_distance'
+			);
+			$has_hard_block_flag = FALSE;
+			for ($i = 0; $i < count($risk_flags); $i += 1)
+			{
+				if (in_array((string) $risk_flags[$i], $hard_block_flags, TRUE))
+				{
+					$has_hard_block_flag = TRUE;
+					break;
+				}
+			}
+
+			// gps_static_pattern becomes hard-block only when accompanied by another suspicious device signal.
+			$has_static_pattern = in_array('gps_static_pattern', $risk_flags, TRUE);
+			if (!$has_hard_block_flag && $has_static_pattern)
+			{
+				$static_companion_flags = array(
+					'mock_location_suspected',
+					'dev_options_on',
+					'rooted_suspected',
+					'timezone_mismatch_in_office'
+				);
+				for ($i = 0; $i < count($risk_flags); $i += 1)
+				{
+					if (in_array((string) $risk_flags[$i], $static_companion_flags, TRUE))
+					{
+						$has_hard_block_flag = TRUE;
+						break;
+					}
+				}
+			}
+
+			$score_blocked = isset($risk['flagged']) && $risk['flagged'];
+			$antifraud_blocked = !$log_only_mode && ($score_blocked || $has_hard_block_flag);
+
 			// Always record attempt for rate-limiting and location risk model.
 			if (function_exists('antifraud_record_rate_limit_hit'))
 			{
@@ -9774,13 +9956,9 @@ class Home extends CI_Controller {
 			}
 			if (function_exists('antifraud_record_location'))
 			{
-				$is_trusted_point = ($geofence_check['inside'] === TRUE)
-					&& !(isset($risk['flagged']) && $risk['flagged']);
+				$is_trusted_point = ($geofence_check['inside'] === TRUE) && !$antifraud_blocked;
 				antifraud_record_location($username, (float) $latitude, (float) $longitude, $is_trusted_point);
 			}
-
-			$log_only_mode = function_exists('antifraud_config') ? antifraud_config('log_only_mode') : FALSE;
-			$antifraud_blocked = isset($risk['flagged']) && $risk['flagged'] && !$log_only_mode;
 
 			if (function_exists('antifraud_audit_log'))
 			{
@@ -9814,11 +9992,13 @@ class Home extends CI_Controller {
 					'mock_location_suspected' => 'terdeteksi lokasi palsu',
 					'dev_options_on' => 'opsi developer aktif',
 					'rooted_suspected' => 'perangkat terdeteksi di-root',
+					'timezone_mismatch_in_office' => 'zona waktu perangkat tidak sesuai lokasi kantor',
+					'gps_static_pattern' => 'pola GPS statis tidak wajar',
 					'client_time_drift' => 'waktu perangkat tidak sinkron',
-					'attestation_fail' => 'verifikasi integritas perangkat gagal'
+					'attestation_fail' => 'verifikasi integritas perangkat gagal',
+					'attestation_required_not_pass' => 'integritas perangkat belum valid (wajib PASS)'
 				);
 				$reasons = array();
-				$risk_flags = isset($risk['flags']) && is_array($risk['flags']) ? $risk['flags'] : array();
 				for ($i = 0; $i < count($risk_flags); $i += 1)
 				{
 					$flag_name = (string) $risk_flags[$i];
@@ -10819,6 +10999,24 @@ class Home extends CI_Controller {
 			redirect('home');
 			return;
 		}
+		$selected_month_raw = trim((string) $this->input->get('month', TRUE));
+		$selected_month = '';
+		if (preg_match('/^\d{4}\-\d{2}$/', $selected_month_raw))
+		{
+			$selected_month = $selected_month_raw;
+		}
+		elseif (preg_match('/^\d{4}\-\d{2}\-\d{2}$/', $selected_month_raw))
+		{
+			$selected_month = substr($selected_month_raw, 0, 7);
+		}
+		elseif (preg_match('/^\d{4}\/\d{2}$/', $selected_month_raw))
+		{
+			$selected_month = str_replace('/', '-', $selected_month_raw);
+		}
+		if ($selected_month === '' || preg_match('/^\d{4}\-\d{2}$/', $selected_month) !== 1)
+		{
+			$selected_month = date('Y-m');
+		}
 
 		$records = $this->load_attendance_records();
 		$employee_profiles = $this->employee_profile_book(TRUE);
@@ -11780,12 +11978,32 @@ class Home extends CI_Controller {
 				);
 			}
 		}
+		for ($i = 0; $i < count($records); $i += 1)
+		{
+			if (!isset($records[$i]) || !is_array($records[$i]))
+			{
+				unset($records[$i]);
+				continue;
+			}
+			$row_date = isset($records[$i]['date']) ? trim((string) $records[$i]['date']) : '';
+			if (!$this->is_valid_date_format($row_date) || substr($row_date, 0, 7) !== $selected_month)
+			{
+				unset($records[$i]);
+				continue;
+			}
+		}
 		$records = array_values($records);
 		usort($records, function ($a, $b) {
 			$left = (string) $a['date'].' '.(string) $a['check_in_time'];
 			$right = (string) $b['date'].' '.(string) $b['check_in_time'];
 			return strcmp($right, $left);
 		});
+		$selected_month_ts = strtotime($selected_month.'-01 00:00:00');
+		$selected_month_label = $selected_month;
+		if ($selected_month_ts !== FALSE)
+		{
+			$selected_month_label = date('F Y', $selected_month_ts);
+		}
 
 		$data = array(
 			'title' => 'Data Absensi Karyawan',
@@ -11793,7 +12011,9 @@ class Home extends CI_Controller {
 			'can_edit_attendance_records' => $this->can_edit_attendance_records_feature(),
 			'can_delete_attendance_records' => $this->can_delete_attendance_records_feature(),
 			'can_partial_delete_attendance_records' => $this->can_partial_delete_attendance_records_feature(),
-			'can_edit_attendance_datetime' => $this->can_edit_attendance_datetime()
+			'can_edit_attendance_datetime' => $this->can_edit_attendance_datetime(),
+			'selected_month' => $selected_month,
+			'selected_month_label' => $selected_month_label
 		);
 		$this->load->view('home/employee_attendance', $data);
 	}
@@ -11812,7 +12032,24 @@ class Home extends CI_Controller {
 		}
 
 		$requests = $this->load_emergency_attendance_requests();
+		$attendance_records = $this->load_attendance_records();
+		$attendance_record_map = array();
+		for ($record_i = 0; $record_i < count($attendance_records); $record_i += 1)
+		{
+			$record_row = isset($attendance_records[$record_i]) && is_array($attendance_records[$record_i]) ? $attendance_records[$record_i] : array();
+			$record_username = strtolower(trim((string) (isset($record_row['username']) ? $record_row['username'] : '')));
+			$record_date = trim((string) (isset($record_row['date']) ? $record_row['date'] : ''));
+			if ($record_username === '' || $record_date === '')
+			{
+				continue;
+			}
+			$attendance_record_map[$record_username.'|'.$record_date] = $record_row;
+		}
 		$scope_lookup = $this->scoped_employee_lookup(TRUE);
+		$can_edit_attendance_records = $this->can_edit_attendance_records_feature();
+		$can_delete_attendance_records = $this->can_delete_attendance_records_feature();
+		$can_partial_delete_attendance_records = $this->can_partial_delete_attendance_records_feature();
+		$can_delete_emergency_request_row = $this->can_delete_emergency_attendance_request_row();
 		$rows = array();
 		for ($i = 0; $i < count($requests); $i += 1)
 		{
@@ -11833,6 +12070,32 @@ class Home extends CI_Controller {
 			$row['status_label'] = $this->emergency_attendance_status_label($status_key);
 			$row['status_badge_class'] = $this->emergency_attendance_status_badge_class($status_key);
 			$row['can_review'] = $status_key === 'pending';
+			$record_map_key = $username.'|'.$row['date'];
+			$matched_record = isset($attendance_record_map[$record_map_key]) && is_array($attendance_record_map[$record_map_key])
+				? $attendance_record_map[$record_map_key]
+				: NULL;
+			$attendance_exists = $matched_record !== NULL;
+			$record_version = $attendance_exists && isset($matched_record['record_version'])
+				? (int) $matched_record['record_version']
+				: 1;
+			if ($record_version <= 0)
+			{
+				$record_version = 1;
+			}
+			$row['attendance_record_exists'] = $attendance_exists;
+			$row['record_version'] = $record_version;
+			$row['attendance_check_in_time'] = $attendance_exists && isset($matched_record['check_in_time'])
+				? (string) $matched_record['check_in_time']
+				: (isset($row['check_in_time']) ? (string) $row['check_in_time'] : '');
+			$row['attendance_check_out_time'] = $attendance_exists && isset($matched_record['check_out_time'])
+				? (string) $matched_record['check_out_time']
+				: (isset($row['check_out_time']) ? (string) $row['check_out_time'] : '');
+			$row['attendance_salary_cut_amount'] = $attendance_exists && isset($matched_record['salary_cut_amount'])
+				? (int) round((float) $matched_record['salary_cut_amount'])
+				: (isset($row['salary_cut_amount']) ? (int) round((float) $row['salary_cut_amount']) : 0);
+			$row['can_edit_record'] = $attendance_exists && $status_key !== 'pending' && $can_edit_attendance_records;
+			$row['can_delete_record'] = $attendance_exists && $status_key !== 'pending' && $can_delete_attendance_records;
+			$row['can_partial_delete_record'] = $attendance_exists && $status_key !== 'pending' && $can_partial_delete_attendance_records;
 			$rows[] = $row;
 		}
 
@@ -11866,7 +12129,12 @@ class Home extends CI_Controller {
 		$this->load->view('home/employee_attendance_emergency', array(
 			'title' => 'Data Absen Darurat',
 			'records' => $rows,
-			'can_process_emergency_attendance' => $this->can_edit_attendance_records_feature()
+			'can_process_emergency_attendance' => $can_edit_attendance_records,
+			'can_edit_attendance_records' => $can_edit_attendance_records,
+			'can_delete_attendance_records' => $can_delete_attendance_records,
+			'can_partial_delete_attendance_records' => $can_partial_delete_attendance_records,
+			'can_edit_attendance_datetime' => $this->can_edit_attendance_datetime(),
+			'can_delete_emergency_request_row' => $can_delete_emergency_request_row
 		));
 	}
 
@@ -12496,56 +12764,9 @@ class Home extends CI_Controller {
 			$total_telat_31_60 = isset($user_data['late_31_60']) ? (int) $user_data['late_31_60'] : 0;
 			$total_telat_1_3_jam = isset($user_data['late_1_3']) ? (int) $user_data['late_1_3'] : 0;
 			$total_telat_gt_4_jam = isset($user_data['late_gt_4']) ? (int) $user_data['late_gt_4'] : 0;
-			$sheet_summary = isset($user_data['sheet_summary']) && is_array($user_data['sheet_summary'])
-				? $user_data['sheet_summary']
-				: array();
-			$has_sheet_summary = !empty($sheet_summary);
-			if ($has_sheet_summary)
-			{
-				$sheet_hari_efektif = isset($sheet_summary['hari_efektif']) ? (int) $sheet_summary['hari_efektif'] : 0;
-				if ($sheet_hari_efektif > 0 && !$has_custom_schedule)
-				{
-					$hari_efektif_bulan = $sheet_hari_efektif;
-					$work_days_plan = $sheet_hari_efektif;
-				}
-
-				$sheet_hadir = isset($sheet_summary['total_hadir']) ? (int) $sheet_summary['total_hadir'] : 0;
-				if ($sheet_hadir <= 0)
-				{
-					$sheet_hadir = isset($sheet_summary['sudah_berapa_absen']) ? (int) $sheet_summary['sudah_berapa_absen'] : 0;
-				}
-				$sheet_hadir = max(0, $sheet_hadir);
-				$hadir_days = $sheet_hadir;
-
-				$sheet_izin_cuti = isset($sheet_summary['total_izin_cuti']) ? (int) $sheet_summary['total_izin_cuti'] : 0;
-				$sheet_izin_cuti = max(0, $sheet_izin_cuti);
-				$request_leave_days = $izin_days + $cuti_days;
-				$request_leave_days_unique = isset($user_data['leave_dates']) && is_array($user_data['leave_dates'])
-					? count($user_data['leave_dates'])
-					: 0;
-				// Prioritaskan data pengajuan yang sudah diterima.
-				// Nilai sheet dipakai sebagai fallback jika lebih besar.
-				if ($sheet_izin_cuti > $request_leave_days)
-				{
-					$izin_days = $sheet_izin_cuti;
-					$cuti_days = 0;
-				}
-				$leave_days = $request_leave_days_unique;
-				if ($sheet_izin_cuti > $leave_days)
-				{
-					$leave_days = $sheet_izin_cuti;
-				}
-
-				$sheet_alpha = isset($sheet_summary['total_alpha']) ? (int) $sheet_summary['total_alpha'] : 0;
-				$total_alpha = max(0, $sheet_alpha);
-				$total_alpha_izin = $total_alpha + $izin_days;
-
-				$total_telat_1_30 = max(0, (int) (isset($sheet_summary['total_telat_1_30']) ? $sheet_summary['total_telat_1_30'] : 0));
-				$total_telat_31_60 = max(0, (int) (isset($sheet_summary['total_telat_31_60']) ? $sheet_summary['total_telat_31_60'] : 0));
-				$total_telat_1_3_jam = max(0, (int) (isset($sheet_summary['total_telat_1_3']) ? $sheet_summary['total_telat_1_3'] : 0));
-				$total_telat_gt_4_jam = max(0, (int) (isset($sheet_summary['total_telat_gt_4']) ? $sheet_summary['total_telat_gt_4'] : 0));
-				$leave_used_before_period = 0;
-			}
+			// Data bulanan wajib mengikuti data harian web untuk bulan aktif.
+			// Ringkasan sheet tidak dipakai lagi sebagai sumber override hitungan.
+			$has_sheet_summary = FALSE;
 
 			if (
 				$this->monthly_demo_randomization_enabled() &&
@@ -12808,16 +13029,19 @@ class Home extends CI_Controller {
 			redirect('home');
 			return;
 		}
+		$redirect_target = $this->resolve_attendance_record_redirect_target(
+			$this->input->post('return_to', TRUE)
+		);
 		if (!$this->can_edit_attendance_records_feature())
 		{
 			$this->session->set_flashdata('attendance_notice_error', 'Akun login kamu belum punya izin untuk edit data absensi karyawan.');
-			redirect('home/employee_data');
+			redirect($redirect_target);
 			return;
 		}
 
 		if ($this->input->method(TRUE) !== 'POST')
 		{
-			redirect('home/employee_data');
+			redirect($redirect_target);
 			return;
 		}
 
@@ -12825,7 +13049,7 @@ class Home extends CI_Controller {
 		$date_key = trim((string) $this->input->post('date', TRUE));
 		$salary_cut_raw = trim((string) $this->input->post('salary_cut_amount', TRUE));
 		$salary_cut_digits = preg_replace('/\D+/', '', $salary_cut_raw);
-		$salary_cut_amount = $salary_cut_digits === '' ? 0 : (int) $salary_cut_digits;
+		$salary_cut_amount_input = $salary_cut_digits === '' ? 0 : (int) $salary_cut_digits;
 		$edit_date_raw = trim((string) $this->input->post('edit_date', TRUE));
 		$edit_check_in_raw = trim((string) $this->input->post('edit_check_in_time', TRUE));
 		$edit_check_out_raw = trim((string) $this->input->post('edit_check_out_time', TRUE));
@@ -12834,13 +13058,13 @@ class Home extends CI_Controller {
 		if ($username === '' || $date_key === '')
 		{
 			$this->session->set_flashdata('attendance_notice_error', 'Data absensi yang ingin diedit tidak valid.');
-			redirect('home/employee_data');
+			redirect($redirect_target);
 			return;
 		}
 		if (!$this->is_username_in_actor_scope($username))
 		{
 			$this->session->set_flashdata('attendance_notice_error', 'Akses data absensi ditolak karena beda cabang.');
-			redirect('home/employee_data');
+			redirect($redirect_target);
 			return;
 		}
 
@@ -12860,7 +13084,7 @@ class Home extends CI_Controller {
 		if ($record_index < 0)
 		{
 			$this->session->set_flashdata('attendance_notice_error', 'Data absensi tidak ditemukan.');
-			redirect('home/employee_data');
+			redirect($redirect_target);
 			return;
 		}
 		$current_record_version = isset($records[$record_index]['record_version'])
@@ -12877,7 +13101,7 @@ class Home extends CI_Controller {
 				'attendance_notice_error',
 				'Konflik versi data absensi '.$username.' tanggal '.$date_key.'. Muat ulang tabel lalu coba lagi.'
 			);
-			redirect('home/employee_data');
+			redirect($redirect_target);
 			return;
 		}
 
@@ -12897,7 +13121,7 @@ class Home extends CI_Controller {
 					'attendance_notice_error',
 					'Hanya akun bos/developer/adminbaros/admin_cadasari yang diizinkan mengubah tanggal atau jam absensi.'
 				);
-				redirect('home/employee_data');
+				redirect($redirect_target);
 				return;
 			}
 
@@ -12906,7 +13130,7 @@ class Home extends CI_Controller {
 				if (!$this->is_valid_date_format($edit_date_raw))
 				{
 					$this->session->set_flashdata('attendance_notice_error', 'Format tanggal absensi tidak valid. Gunakan YYYY-MM-DD.');
-					redirect('home/employee_data');
+					redirect($redirect_target);
 					return;
 				}
 				$new_date_key = $edit_date_raw;
@@ -12943,14 +13167,14 @@ class Home extends CI_Controller {
 			if (!$check_in_valid || !$check_out_valid)
 			{
 				$this->session->set_flashdata('attendance_notice_error', 'Format jam absensi tidak valid. Gunakan HH:MM atau HH:MM:SS.');
-				redirect('home/employee_data');
+				redirect($redirect_target);
 				return;
 			}
 
 			if ($new_check_out !== '' && $new_check_in === '')
 			{
 				$this->session->set_flashdata('attendance_notice_error', 'Jam pulang tidak boleh diisi jika jam masuk masih kosong.');
-				redirect('home/employee_data');
+				redirect($redirect_target);
 				return;
 			}
 			if ($new_check_in !== '' && $new_check_out !== '')
@@ -12960,7 +13184,7 @@ class Home extends CI_Controller {
 				if ($check_out_seconds < $check_in_seconds)
 				{
 					$this->session->set_flashdata('attendance_notice_error', 'Jam pulang tidak boleh lebih awal dari jam masuk.');
-					redirect('home/employee_data');
+					redirect($redirect_target);
 					return;
 				}
 			}
@@ -12981,7 +13205,7 @@ class Home extends CI_Controller {
 							'attendance_notice_error',
 							'Tanggal absensi '.$new_date_key.' untuk '.$username.' sudah ada. Ubah tanggal lain atau hapus data duplikat dulu.'
 						);
-						redirect('home/employee_data');
+						redirect($redirect_target);
 						return;
 					}
 				}
@@ -12993,10 +13217,12 @@ class Home extends CI_Controller {
 				($new_check_out !== $original_check_out);
 		}
 
-		$records[$record_index]['salary_cut_amount'] = number_format(max(0, $salary_cut_amount), 0, '.', '');
-		$records[$record_index]['salary_cut_rule'] = $salary_cut_amount > 0
+		$salary_cut_amount = max(0, (int) $salary_cut_amount_input);
+		$salary_cut_rule = $salary_cut_amount > 0
 			? 'Disesuaikan admin'
 			: 'Disesuaikan admin (potongan dihapus)';
+		$salary_cut_category = '';
+		$salary_cut_auto_synced = FALSE;
 		if ($date_time_changed)
 		{
 			$records[$record_index]['date'] = $new_date_key;
@@ -13016,6 +13242,49 @@ class Home extends CI_Controller {
 				$records[$record_index]['late_reason'] = '';
 			}
 		}
+
+		$should_auto_recalculate_cut = $date_time_changed
+			&& (($new_check_in !== $original_check_in) || ($new_date_key !== $original_date_key));
+		if ($should_auto_recalculate_cut)
+		{
+			$late_duration = isset($records[$record_index]['check_in_late'])
+				? trim((string) $records[$record_index]['check_in_late'])
+				: '00:00:00';
+			$late_seconds = $this->duration_to_seconds($late_duration);
+			$salary_tier = isset($records[$record_index]['salary_tier'])
+				? (string) $records[$record_index]['salary_tier']
+				: '';
+			$salary_monthly = isset($records[$record_index]['salary_monthly'])
+				? (float) $records[$record_index]['salary_monthly']
+				: 0;
+			$work_days = isset($records[$record_index]['work_days_per_month']) && (int) $records[$record_index]['work_days_per_month'] > 0
+				? (int) $records[$record_index]['work_days_per_month']
+				: self::WORK_DAYS_DEFAULT;
+			$weekly_day_off_override = isset($records[$record_index]['weekly_day_off'])
+				? $records[$record_index]['weekly_day_off']
+				: NULL;
+			$deduction_result = $this->calculate_late_deduction(
+				$salary_tier,
+				$salary_monthly,
+				$work_days,
+				$late_seconds,
+				$new_date_key,
+				$username,
+				$weekly_day_off_override
+			);
+			$salary_cut_amount = isset($deduction_result['amount']) ? max(0, (int) $deduction_result['amount']) : 0;
+			$salary_cut_rule = isset($deduction_result['rule']) && trim((string) $deduction_result['rule']) !== ''
+				? trim((string) $deduction_result['rule'])
+				: 'Tidak telat';
+			$salary_cut_category = isset($deduction_result['category_key'])
+				? trim((string) $deduction_result['category_key'])
+				: '';
+			$salary_cut_auto_synced = TRUE;
+		}
+
+		$records[$record_index]['salary_cut_amount'] = number_format($salary_cut_amount, 0, '.', '');
+		$records[$record_index]['salary_cut_rule'] = $salary_cut_rule;
+		$records[$record_index]['salary_cut_category'] = $salary_cut_category;
 		$records[$record_index]['salary_cut_adjusted_by'] = (string) $this->session->userdata('absen_username');
 		$records[$record_index]['salary_cut_adjusted_at'] = date('Y-m-d H:i:s');
 		$records[$record_index]['record_version'] = $current_record_version + 1;
@@ -13043,7 +13312,14 @@ class Home extends CI_Controller {
 			)
 		);
 
-		if ($salary_cut_amount > 0 && $date_time_changed)
+		if ($salary_cut_auto_synced && $date_time_changed)
+		{
+			$this->session->set_flashdata(
+				'attendance_notice_success',
+				'Data absensi '.$username.' berhasil diperbarui. Potongan otomatis disesuaikan dari jam telat menjadi Rp '.number_format($salary_cut_amount, 0, ',', '.').'.'
+			);
+		}
+		elseif ($salary_cut_amount > 0 && $date_time_changed)
 		{
 			$this->session->set_flashdata(
 				'attendance_notice_success',
@@ -13072,7 +13348,7 @@ class Home extends CI_Controller {
 			);
 		}
 
-		redirect('home/employee_data');
+		redirect($redirect_target);
 	}
 
 	public function delete_attendance_record()
@@ -13088,16 +13364,19 @@ class Home extends CI_Controller {
 			redirect('home');
 			return;
 		}
+		$redirect_target = $this->resolve_attendance_record_redirect_target(
+			$this->input->post('return_to', TRUE)
+		);
 		if (!$this->can_delete_attendance_records_feature())
 		{
 			$this->session->set_flashdata('attendance_notice_error', 'Akun login kamu belum punya izin untuk hapus data absensi karyawan.');
-			redirect('home/employee_data');
+			redirect($redirect_target);
 			return;
 		}
 
 		if ($this->input->method(TRUE) !== 'POST')
 		{
-			redirect('home/employee_data');
+			redirect($redirect_target);
 			return;
 		}
 
@@ -13107,13 +13386,13 @@ class Home extends CI_Controller {
 		if ($username === '' || $date_key === '' || !$this->is_valid_date_format($date_key))
 		{
 			$this->session->set_flashdata('attendance_notice_error', 'Data absensi yang ingin dihapus tidak valid.');
-			redirect('home/employee_data');
+			redirect($redirect_target);
 			return;
 		}
 		if (!$this->is_username_in_actor_scope($username))
 		{
 			$this->session->set_flashdata('attendance_notice_error', 'Akses data absensi ditolak karena beda cabang.');
-			redirect('home/employee_data');
+			redirect($redirect_target);
 			return;
 		}
 
@@ -13133,7 +13412,7 @@ class Home extends CI_Controller {
 		if ($record_index < 0)
 		{
 			$this->session->set_flashdata('attendance_notice_error', 'Data absensi tidak ditemukan atau sudah dihapus.');
-			redirect('home/employee_data');
+			redirect($redirect_target);
 			return;
 		}
 		$current_record_version = isset($records[$record_index]['record_version'])
@@ -13150,7 +13429,7 @@ class Home extends CI_Controller {
 				'attendance_notice_error',
 				'Konflik versi data absensi '.$username.' tanggal '.$date_key.'. Muat ulang tabel lalu coba lagi.'
 			);
-			redirect('home/employee_data');
+			redirect($redirect_target);
 			return;
 		}
 
@@ -13164,6 +13443,7 @@ class Home extends CI_Controller {
 		unset($records[$record_index]);
 		$this->save_attendance_records(array_values($records));
 		$this->clear_admin_dashboard_live_summary_cache();
+		$removed_emergency_rows = $this->prune_emergency_attendance_requests_for_attendance_delete($username, $date_key, 'full');
 
 		$delete_note = 'Hapus data absensi tidak valid dari data web.';
 		$delete_note .= ' Tanggal '.$date_key.'.';
@@ -13183,8 +13463,9 @@ class Home extends CI_Controller {
 		$this->session->set_flashdata(
 			'attendance_notice_success',
 			'Data absensi '.$username.' tanggal '.$date_key.' berhasil dihapus.'
+			.($removed_emergency_rows > 0 ? (' Row absen darurat terkait ikut dihapus: '.$removed_emergency_rows.'.') : '')
 		);
-		redirect('home/employee_data');
+		redirect($redirect_target);
 	}
 
 	public function delete_attendance_record_partial()
@@ -13200,16 +13481,19 @@ class Home extends CI_Controller {
 			redirect('home');
 			return;
 		}
+		$redirect_target = $this->resolve_attendance_record_redirect_target(
+			$this->input->post('return_to', TRUE)
+		);
 		if (!$this->can_partial_delete_attendance_records_feature())
 		{
 			$this->session->set_flashdata('attendance_notice_error', 'Hanya akun bos/developer yang bisa hapus absensi masuk/pulang secara terpisah.');
-			redirect('home/employee_data');
+			redirect($redirect_target);
 			return;
 		}
 
 		if ($this->input->method(TRUE) !== 'POST')
 		{
-			redirect('home/employee_data');
+			redirect($redirect_target);
 			return;
 		}
 
@@ -13219,20 +13503,20 @@ class Home extends CI_Controller {
 		if ($delete_part !== 'masuk' && $delete_part !== 'pulang')
 		{
 			$this->session->set_flashdata('attendance_notice_error', 'Aksi hapus absensi parsial tidak valid.');
-			redirect('home/employee_data');
+			redirect($redirect_target);
 			return;
 		}
 
 		if ($username === '' || $date_key === '' || !$this->is_valid_date_format($date_key))
 		{
 			$this->session->set_flashdata('attendance_notice_error', 'Data absensi yang ingin dihapus tidak valid.');
-			redirect('home/employee_data');
+			redirect($redirect_target);
 			return;
 		}
 		if (!$this->is_username_in_actor_scope($username))
 		{
 			$this->session->set_flashdata('attendance_notice_error', 'Akses data absensi ditolak karena beda cabang.');
-			redirect('home/employee_data');
+			redirect($redirect_target);
 			return;
 		}
 
@@ -13252,7 +13536,7 @@ class Home extends CI_Controller {
 		if ($record_index < 0)
 		{
 			$this->session->set_flashdata('attendance_notice_error', 'Data absensi tidak ditemukan atau sudah dihapus.');
-			redirect('home/employee_data');
+			redirect($redirect_target);
 			return;
 		}
 		$current_record_version = isset($records[$record_index]['record_version'])
@@ -13269,7 +13553,7 @@ class Home extends CI_Controller {
 				'attendance_notice_error',
 				'Konflik versi data absensi '.$username.' tanggal '.$date_key.'. Muat ulang tabel lalu coba lagi.'
 			);
-			redirect('home/employee_data');
+			redirect($redirect_target);
 			return;
 		}
 
@@ -13283,13 +13567,13 @@ class Home extends CI_Controller {
 		if ($delete_part === 'masuk' && !$has_check_in_before)
 		{
 			$this->session->set_flashdata('attendance_notice_error', 'Absensi masuk untuk '.$username.' tanggal '.$date_key.' sudah kosong.');
-			redirect('home/employee_data');
+			redirect($redirect_target);
 			return;
 		}
 		if ($delete_part === 'pulang' && !$has_check_out_before)
 		{
 			$this->session->set_flashdata('attendance_notice_error', 'Absensi pulang untuk '.$username.' tanggal '.$date_key.' sudah kosong.');
-			redirect('home/employee_data');
+			redirect($redirect_target);
 			return;
 		}
 
@@ -13336,6 +13620,7 @@ class Home extends CI_Controller {
 			unset($records[$record_index]);
 			$this->save_attendance_records(array_values($records));
 			$this->clear_admin_dashboard_live_summary_cache();
+			$removed_emergency_rows = $this->prune_emergency_attendance_requests_for_attendance_delete($username, $date_key, 'full');
 			$this->log_activity_event(
 				$action_key,
 				'web_data',
@@ -13351,8 +13636,9 @@ class Home extends CI_Controller {
 			$this->session->set_flashdata(
 				'attendance_notice_success',
 				'Absensi '.$partial_label.' untuk '.$username.' tanggal '.$date_key.' berhasil dihapus. Data harian kosong sehingga record ikut dihapus.'
+				.($removed_emergency_rows > 0 ? (' Row absen darurat terkait ikut dihapus: '.$removed_emergency_rows.'.') : '')
 			);
-			redirect('home/employee_data');
+			redirect($redirect_target);
 			return;
 		}
 
@@ -13361,6 +13647,7 @@ class Home extends CI_Controller {
 		$records[$record_index] = $record_row;
 		$this->save_attendance_records($records);
 		$this->clear_admin_dashboard_live_summary_cache();
+		$removed_emergency_rows = $this->prune_emergency_attendance_requests_for_attendance_delete($username, $date_key, $delete_part);
 
 		$this->log_activity_event(
 			$action_key,
@@ -13378,8 +13665,9 @@ class Home extends CI_Controller {
 		$this->session->set_flashdata(
 			'attendance_notice_success',
 			'Absensi '.$partial_label.' untuk '.$username.' tanggal '.$date_key.' berhasil dihapus.'
+			.($removed_emergency_rows > 0 ? (' Row absen darurat terkait ikut dihapus: '.$removed_emergency_rows.'.') : '')
 		);
-		redirect('home/employee_data');
+		redirect($redirect_target);
 	}
 
 	public function submit_leave_request()
@@ -13758,14 +14046,26 @@ class Home extends CI_Controller {
 
 	public function update_loan_request_status()
 	{
+		$is_ajax = $this->input->is_ajax_request()
+			|| strtolower(trim((string) $this->input->server('HTTP_X_REQUESTED_WITH'))) === 'xmlhttprequest';
 		if ($this->session->userdata('absen_logged_in') !== TRUE)
 		{
+			if ($is_ajax)
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Sesi login sudah habis.'), 401);
+				return;
+			}
 			redirect('login');
 			return;
 		}
 
 		if ((string) $this->session->userdata('absen_role') === 'user')
 		{
+			if ($is_ajax)
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Akses ditolak.'), 403);
+				return;
+			}
 			redirect('home');
 			return;
 		}
@@ -13799,6 +14099,11 @@ class Home extends CI_Controller {
 		$loan_redirect_url = 'home/loan_requests'.(!empty($loan_redirect_query) ? '?'.implode('&', $loan_redirect_query) : '');
 		if (!$this->can_process_loan_requests_feature())
 		{
+			if ($is_ajax)
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Akun login kamu belum punya izin untuk proses pengajuan pinjaman.'), 403);
+				return;
+			}
 			$this->session->set_flashdata('loan_notice_error', 'Akun login kamu belum punya izin untuk proses pengajuan pinjaman.');
 			redirect($loan_redirect_url);
 			return;
@@ -13806,6 +14111,11 @@ class Home extends CI_Controller {
 
 		if ($this->input->method(TRUE) !== 'POST')
 		{
+			if ($is_ajax)
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Metode request tidak valid.'), 405);
+				return;
+			}
 			redirect($loan_redirect_url);
 			return;
 		}
@@ -13814,6 +14124,11 @@ class Home extends CI_Controller {
 		$next_status = strtolower(trim((string) $this->input->post('status', TRUE)));
 		if ($request_id === '' || ($next_status !== 'diterima' && $next_status !== 'ditolak'))
 		{
+			if ($is_ajax)
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Aksi status pengajuan pinjaman tidak valid.'), 422);
+				return;
+			}
 			$this->session->set_flashdata('loan_notice_error', 'Aksi status pengajuan pinjaman tidak valid.');
 			redirect($loan_redirect_url);
 			return;
@@ -13832,6 +14147,11 @@ class Home extends CI_Controller {
 
 		if ($target_index < 0)
 		{
+			if ($is_ajax)
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Data pengajuan pinjaman tidak ditemukan.'), 404);
+				return;
+			}
 			$this->session->set_flashdata('loan_notice_error', 'Data pengajuan pinjaman tidak ditemukan.');
 			redirect($loan_redirect_url);
 			return;
@@ -13841,6 +14161,11 @@ class Home extends CI_Controller {
 		$request_username = isset($request_row['username']) ? (string) $request_row['username'] : '';
 		if (!$this->is_username_in_actor_scope($request_username))
 		{
+			if ($is_ajax)
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Akses pengajuan ditolak karena beda cabang.'), 403);
+				return;
+			}
 			$this->session->set_flashdata('loan_notice_error', 'Akses pengajuan ditolak karena beda cabang.');
 			redirect($loan_redirect_url);
 			return;
@@ -13878,20 +14203,38 @@ class Home extends CI_Controller {
 		$whatsapp_message = $this->build_loan_status_whatsapp_message($request_row);
 		$whatsapp_result = $this->send_whatsapp_notification($phone, $whatsapp_message);
 
+		$notice_type = 'warning';
+		$notice_message = '';
 		if ($whatsapp_result['success'])
 		{
+			$notice_type = 'success';
+			$notice_message = 'Status pengajuan pinjaman berhasil diubah menjadi '.$request_row['status'].' dan notifikasi WhatsApp sudah terkirim.';
 			$this->session->set_flashdata(
 				'loan_notice_success',
-				'Status pengajuan pinjaman berhasil diubah menjadi '.$request_row['status'].' dan notifikasi WhatsApp sudah terkirim.'
+				$notice_message
 			);
 		}
 		else
 		{
 			$reason = isset($whatsapp_result['message']) ? (string) $whatsapp_result['message'] : 'Pengiriman WhatsApp gagal.';
+			$notice_type = 'warning';
+			$notice_message = 'Status pengajuan pinjaman berhasil diubah menjadi '.$request_row['status'].', tetapi notifikasi WhatsApp gagal dikirim. '.$reason;
 			$this->session->set_flashdata(
 				'loan_notice_warning',
-				'Status pengajuan pinjaman berhasil diubah menjadi '.$request_row['status'].', tetapi notifikasi WhatsApp gagal dikirim. '.$reason
+				$notice_message
 			);
+		}
+		if ($is_ajax)
+		{
+			$this->json_response(array(
+				'success' => TRUE,
+				'message' => $notice_message,
+				'notice_type' => $notice_type,
+				'request_id' => $request_id,
+				'status_label' => isset($request_row['status']) ? (string) $request_row['status'] : '-',
+				'status_key' => $next_status
+			));
+			return;
 		}
 
 		redirect($loan_redirect_url);
@@ -14035,6 +14378,127 @@ class Home extends CI_Controller {
 		redirect('home/employee_data_emergency');
 	}
 
+	public function delete_emergency_attendance_request_row()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			redirect('login');
+			return;
+		}
+		if ((string) $this->session->userdata('absen_role') === 'user')
+		{
+			redirect('home');
+			return;
+		}
+		if (!$this->can_delete_emergency_attendance_request_row())
+		{
+			$this->session->set_flashdata('attendance_notice_error', 'Hanya akun developer yang boleh hapus row pengajuan absen darurat.');
+			redirect('home/employee_data_emergency');
+			return;
+		}
+		if ($this->input->method(TRUE) !== 'POST')
+		{
+			redirect('home/employee_data_emergency');
+			return;
+		}
+
+		$request_id = trim((string) $this->input->post('request_id', TRUE));
+		if ($request_id === '')
+		{
+			$this->session->set_flashdata('attendance_notice_error', 'Request ID absen darurat tidak valid.');
+			redirect('home/employee_data_emergency');
+			return;
+		}
+
+		$requests = $this->load_emergency_attendance_requests();
+		$target_index = -1;
+		for ($i = 0; $i < count($requests); $i += 1)
+		{
+			if (isset($requests[$i]['id']) && (string) $requests[$i]['id'] === $request_id)
+			{
+				$target_index = $i;
+				break;
+			}
+		}
+		if ($target_index < 0)
+		{
+			$this->session->set_flashdata('attendance_notice_error', 'Row pengajuan absen darurat tidak ditemukan atau sudah dihapus.');
+			redirect('home/employee_data_emergency');
+			return;
+		}
+
+		$request_row = isset($requests[$target_index]) && is_array($requests[$target_index]) ? $requests[$target_index] : array();
+		$username = isset($request_row['username']) ? strtolower(trim((string) $request_row['username'])) : '';
+		$date_key = isset($request_row['date']) ? trim((string) $request_row['date']) : '';
+		$status_key = $this->normalize_emergency_attendance_status_key(isset($request_row['status']) ? (string) $request_row['status'] : 'pending');
+
+		array_splice($requests, $target_index, 1);
+		$this->save_emergency_attendance_requests($requests);
+
+		$this->log_activity_event(
+			'delete_emergency_attendance_request_row',
+			'web_data',
+			$username,
+			$username,
+			'Hapus row pengajuan absen darurat. Tanggal '.$date_key.'. Status '.$status_key.'.',
+			array(
+				'target_id' => $request_id,
+				'field' => 'emergency_attendance_request',
+				'old_value' => $status_key,
+				'new_value' => ''
+			)
+		);
+
+		$this->session->set_flashdata('attendance_notice_success', 'Row pengajuan absen darurat berhasil dihapus permanen.');
+		redirect('home/employee_data_emergency');
+	}
+
+	private function prune_emergency_attendance_requests_for_attendance_delete($username, $date_key, $delete_part = '')
+	{
+		$username_key = strtolower(trim((string) $username));
+		$date_value = trim((string) $date_key);
+		$part = strtolower(trim((string) $delete_part));
+		if ($part !== 'masuk' && $part !== 'pulang')
+		{
+			$part = 'full';
+		}
+		if ($username_key === '' || $date_value === '')
+		{
+			return 0;
+		}
+
+		$requests = $this->load_emergency_attendance_requests();
+		if (empty($requests))
+		{
+			return 0;
+		}
+
+		$filtered = array();
+		$removed_count = 0;
+		for ($i = 0; $i < count($requests); $i += 1)
+		{
+			$row = isset($requests[$i]) && is_array($requests[$i]) ? $requests[$i] : array();
+			$row_username = strtolower(trim((string) (isset($row['username']) ? $row['username'] : '')));
+			$row_date = trim((string) (isset($row['date']) ? $row['date'] : ''));
+			$row_action = strtolower(trim((string) (isset($row['action']) ? $row['action'] : '')));
+			$match_identity = $row_username === $username_key && $row_date === $date_value;
+			$match_action = $part === 'full' ? TRUE : ($row_action === $part);
+			if ($match_identity && $match_action)
+			{
+				$removed_count += 1;
+				continue;
+			}
+			$filtered[] = $row;
+		}
+
+		if ($removed_count > 0)
+		{
+			$this->save_emergency_attendance_requests($filtered);
+		}
+
+		return $removed_count;
+	}
+
 	public function delete_leave_request()
 	{
 		if ($this->session->userdata('absen_logged_in') !== TRUE)
@@ -14129,14 +14593,26 @@ class Home extends CI_Controller {
 
 	public function delete_loan_request()
 	{
+		$is_ajax = $this->input->is_ajax_request()
+			|| strtolower(trim((string) $this->input->server('HTTP_X_REQUESTED_WITH'))) === 'xmlhttprequest';
 		if ($this->session->userdata('absen_logged_in') !== TRUE)
 		{
+			if ($is_ajax)
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Sesi login sudah habis.'), 401);
+				return;
+			}
 			redirect('login');
 			return;
 		}
 
 		if ((string) $this->session->userdata('absen_role') === 'user')
 		{
+			if ($is_ajax)
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Akses ditolak.'), 403);
+				return;
+			}
 			redirect('home');
 			return;
 		}
@@ -14171,12 +14647,22 @@ class Home extends CI_Controller {
 
 		if ($this->input->method(TRUE) !== 'POST')
 		{
+			if ($is_ajax)
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Metode request tidak valid.'), 405);
+				return;
+			}
 			redirect($loan_redirect_url);
 			return;
 		}
 
 		if (!$this->can_delete_loan_requests_feature())
 		{
+			if ($is_ajax)
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Akun login kamu belum punya izin untuk hapus data pengajuan pinjaman.'), 403);
+				return;
+			}
 			$this->session->set_flashdata('loan_notice_error', 'Akun login kamu belum punya izin untuk hapus data pengajuan pinjaman.');
 			redirect($loan_redirect_url);
 			return;
@@ -14185,6 +14671,11 @@ class Home extends CI_Controller {
 		$request_id = trim((string) $this->input->post('request_id', TRUE));
 		if ($request_id === '')
 		{
+			if ($is_ajax)
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Data pinjaman yang ingin dihapus tidak valid.'), 422);
+				return;
+			}
 			$this->session->set_flashdata('loan_notice_error', 'Data pinjaman yang ingin dihapus tidak valid.');
 			redirect($loan_redirect_url);
 			return;
@@ -14203,6 +14694,11 @@ class Home extends CI_Controller {
 
 		if ($target_index < 0)
 		{
+			if ($is_ajax)
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Data pengajuan pinjaman tidak ditemukan atau sudah dihapus.'), 404);
+				return;
+			}
 			$this->session->set_flashdata('loan_notice_error', 'Data pengajuan pinjaman tidak ditemukan atau sudah dihapus.');
 			redirect($loan_redirect_url);
 			return;
@@ -14212,6 +14708,11 @@ class Home extends CI_Controller {
 		$request_username = isset($request_row['username']) ? (string) $request_row['username'] : '';
 		if (!$this->is_username_in_actor_scope($request_username))
 		{
+			if ($is_ajax)
+			{
+				$this->json_response(array('success' => FALSE, 'message' => 'Akses pengajuan ditolak karena beda cabang.'), 403);
+				return;
+			}
 			$this->session->set_flashdata('loan_notice_error', 'Akses pengajuan ditolak karena beda cabang.');
 			redirect($loan_redirect_url);
 			return;
@@ -14234,7 +14735,18 @@ class Home extends CI_Controller {
 			)
 		);
 
-		$this->session->set_flashdata('loan_notice_success', 'Data pengajuan pinjaman berhasil dihapus.');
+		$notice_message = 'Data pengajuan pinjaman berhasil dihapus.';
+		$this->session->set_flashdata('loan_notice_success', $notice_message);
+		if ($is_ajax)
+		{
+			$this->json_response(array(
+				'success' => TRUE,
+				'message' => $notice_message,
+				'notice_type' => 'success',
+				'request_id' => $request_id
+			));
+			return;
+		}
 		redirect($loan_redirect_url);
 	}
 
@@ -23196,6 +23708,22 @@ class Home extends CI_Controller {
 		}
 
 		return $this->actor_has_admin_feature('edit_attendance_records');
+	}
+
+	private function can_delete_emergency_attendance_request_row()
+	{
+		if ($this->session->userdata('absen_logged_in') !== TRUE)
+		{
+			return FALSE;
+		}
+
+		$role = strtolower(trim((string) $this->session->userdata('absen_role')));
+		if ($role === '' || $role === 'user')
+		{
+			return FALSE;
+		}
+
+		return $this->current_actor_username() === 'developer';
 	}
 
 	private function is_branch_scoped_admin()

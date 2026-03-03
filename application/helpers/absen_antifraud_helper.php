@@ -17,12 +17,7 @@ function antifraud_config($key = NULL, $default = NULL)
 	if ($cfg === NULL)
 	{
 		$env = function ($name, $fallback) {
-			$v = getenv($name);
-			if ($v === FALSE || $v === '')
-			{
-				return $fallback;
-			}
-			return $v;
+			return antifraud_env_value($name, $fallback);
 		};
 
 		$cfg = array(
@@ -36,6 +31,8 @@ function antifraud_config($key = NULL, $default = NULL)
 			'weight_mock_suspected'       => (float) $env('ANTIFRAUD_WEIGHT_MOCK_SUSPECTED', 30),
 			'weight_dev_options'          => (float) $env('ANTIFRAUD_WEIGHT_DEV_OPTIONS', 10),
 			'weight_rooted'               => (float) $env('ANTIFRAUD_WEIGHT_ROOTED', 15),
+			'weight_timezone_mismatch'    => (float) $env('ANTIFRAUD_WEIGHT_TIMEZONE_MISMATCH', 20),
+			'weight_gps_static_pattern'   => (float) $env('ANTIFRAUD_WEIGHT_GPS_STATIC_PATTERN', 25),
 			'weight_attestation_fail'     => (float) $env('ANTIFRAUD_WEIGHT_ATTESTATION_FAIL', 40),
 			'weight_client_time_drift'    => (float) $env('ANTIFRAUD_WEIGHT_CLIENT_TIME_DRIFT', 10),
 
@@ -47,6 +44,13 @@ function antifraud_config($key = NULL, $default = NULL)
 			'jump_distance_m'             => (float) $env('ANTIFRAUD_JUMP_DISTANCE_M', 50000),
 			'jump_time_window_s'          => (int) $env('ANTIFRAUD_JUMP_TIME_WINDOW_S', 600),
 			'client_time_drift_s'         => (int) $env('ANTIFRAUD_CLIENT_TIME_DRIFT_S', 300),
+			'office_timezone'             => trim((string) $env('ANTIFRAUD_OFFICE_TIMEZONE', 'Asia/Jakarta')),
+			'timezone_offset_tolerance_min' => (int) $env('ANTIFRAUD_TIMEZONE_OFFSET_TOLERANCE_MIN', 30),
+			'gps_static_min_samples'      => (int) $env('ANTIFRAUD_GPS_STATIC_MIN_SAMPLES', 3),
+			'gps_static_window_s'         => (int) $env('ANTIFRAUD_GPS_STATIC_WINDOW_S', 30),
+			'gps_static_min_span_s'       => (int) $env('ANTIFRAUD_GPS_STATIC_MIN_SPAN_S', 6),
+			'gps_static_coord_delta_deg'  => (float) $env('ANTIFRAUD_GPS_STATIC_COORD_DELTA_DEG', 0.0000005),
+			'gps_static_accuracy_delta_m' => (float) $env('ANTIFRAUD_GPS_STATIC_ACCURACY_DELTA_M', 0.5),
 
 			// Rate limiting
 			'rate_limit_window_s'         => (int) $env('ANTIFRAUD_RATE_LIMIT_WINDOW_S', 60),
@@ -59,6 +63,8 @@ function antifraud_config($key = NULL, $default = NULL)
 			// Enable/disable
 			'enabled'                     => antifraud_truthy($env('ANTIFRAUD_ENABLED', 'true')),
 			'log_only_mode'               => antifraud_truthy($env('ANTIFRAUD_LOG_ONLY_MODE', 'false')),
+			// Secure-by-default: when env key is missing, strict attestation is ON.
+			'require_attestation_pass'    => antifraud_truthy($env('ANTIFRAUD_REQUIRE_ATTESTATION_PASS', 'true')),
 
 			// Audit log path
 			'audit_log_dir'               => rtrim((string) $env('ANTIFRAUD_AUDIT_LOG_DIR', APPPATH.'cache/antifraud_logs'), '/\\'),
@@ -71,6 +77,33 @@ function antifraud_config($key = NULL, $default = NULL)
 	}
 
 	return isset($cfg[$key]) ? $cfg[$key] : $default;
+}
+
+function antifraud_env_value($name, $fallback = '')
+{
+	$key = trim((string) $name);
+	if ($key === '')
+	{
+		return $fallback;
+	}
+
+	$v = getenv($key);
+	if ($v !== FALSE && $v !== '')
+	{
+		return $v;
+	}
+
+	if (isset($_ENV[$key]) && $_ENV[$key] !== '')
+	{
+		return $_ENV[$key];
+	}
+
+	if (isset($_SERVER[$key]) && $_SERVER[$key] !== '')
+	{
+		return $_SERVER[$key];
+	}
+
+	return $fallback;
 }
 
 // ---------------------------------------------------------------------------
@@ -188,6 +221,26 @@ function antifraud_evaluate_risk($params)
 		$details['rooted_suspected'] = array('weight' => $cfg['weight_rooted']);
 	}
 
+	// 6b. Office geofence but timezone offset mismatch (strong spoof signal for browser sensors)
+	$timezone_result = antifraud_check_timezone_mismatch_in_office($client, $geofence_inside, $cfg);
+	if ($timezone_result['flagged'])
+	{
+		$score += $cfg['weight_timezone_mismatch'];
+		$flags[] = 'timezone_mismatch_in_office';
+		$details['timezone_mismatch_in_office'] = $timezone_result;
+		$details['timezone_mismatch_in_office']['weight'] = $cfg['weight_timezone_mismatch'];
+	}
+
+	// 6c. Static GPS samples over time (common for DevTools/fake provider)
+	$gps_static_result = antifraud_check_gps_static_pattern($client, $cfg);
+	if ($gps_static_result['flagged'])
+	{
+		$score += $cfg['weight_gps_static_pattern'];
+		$flags[] = 'gps_static_pattern';
+		$details['gps_static_pattern'] = $gps_static_result;
+		$details['gps_static_pattern']['weight'] = $cfg['weight_gps_static_pattern'];
+	}
+
 	// 7. Client timestamp drift
 	if (!empty($client['client_timestamp']))
 	{
@@ -206,15 +259,39 @@ function antifraud_evaluate_risk($params)
 		}
 	}
 
-	// 8. Attestation verdict (if available)
-	if (isset($client['attestation_verdict']))
+	// 8. Attestation verdict handling
+	$attestation_verdict = isset($client['attestation_verdict'])
+		? strtoupper(trim((string) $client['attestation_verdict']))
+		: '';
+	$attestation_reason = isset($client['attestation_reason'])
+		? trim((string) $client['attestation_reason'])
+		: '';
+
+	// Strict mode: normal attendance requires PASS verdict.
+	if (!empty($cfg['require_attestation_pass']))
 	{
-		$verdict = strtoupper(trim((string) $client['attestation_verdict']));
-		if ($verdict === 'FAIL')
+		if ($attestation_verdict !== 'PASS')
+		{
+			$score += $cfg['weight_attestation_fail'];
+			$flags[] = 'attestation_required_not_pass';
+			$details['attestation_required_not_pass'] = array(
+				'weight' => $cfg['weight_attestation_fail'],
+				'verdict' => $attestation_verdict !== '' ? $attestation_verdict : 'NONE',
+				'reason' => $attestation_reason
+			);
+		}
+	}
+	else
+	{
+		// Non-strict mode: only explicit FAIL adds risk.
+		if ($attestation_verdict === 'FAIL')
 		{
 			$score += $cfg['weight_attestation_fail'];
 			$flags[] = 'attestation_fail';
-			$details['attestation_fail'] = array('weight' => $cfg['weight_attestation_fail']);
+			$details['attestation_fail'] = array(
+				'weight' => $cfg['weight_attestation_fail'],
+				'reason' => $attestation_reason
+			);
 		}
 	}
 
@@ -333,6 +410,209 @@ function antifraud_check_jump_distance($username, $lat, $lng)
 	}
 
 	return array('flagged' => FALSE);
+}
+
+function antifraud_check_timezone_mismatch_in_office($client, $geofence_inside, $cfg)
+{
+	if (!$geofence_inside)
+	{
+		return array('flagged' => FALSE);
+	}
+
+	$office_timezone = isset($cfg['office_timezone']) ? trim((string) $cfg['office_timezone']) : '';
+	if ($office_timezone === '')
+	{
+		return array('flagged' => FALSE);
+	}
+
+	$client_timezone = isset($client['client_timezone']) ? trim((string) $client['client_timezone']) : '';
+	$client_offset_raw = isset($client['client_tz_offset_min']) ? trim((string) $client['client_tz_offset_min']) : '';
+	if ($client_timezone === '' && $client_offset_raw === '')
+	{
+		return array('flagged' => FALSE);
+	}
+
+	try
+	{
+		$office_tz = new DateTimeZone($office_timezone);
+		$office_now = new DateTime('now', $office_tz);
+		// JS getTimezoneOffset uses opposite sign from UTC offset.
+		$expected_js_offset_min = (int) round(-1 * ($office_now->getOffset() / 60));
+	}
+	catch (Exception $e)
+	{
+		return array('flagged' => FALSE);
+	}
+
+	$client_offset_min = NULL;
+	if ($client_offset_raw !== '' && is_numeric($client_offset_raw))
+	{
+		$client_offset_min = (int) round((float) $client_offset_raw);
+	}
+
+	if ($client_offset_min === NULL)
+	{
+		return array('flagged' => FALSE);
+	}
+
+	$tolerance_min = isset($cfg['timezone_offset_tolerance_min']) ? (int) $cfg['timezone_offset_tolerance_min'] : 30;
+	if ($tolerance_min < 0)
+	{
+		$tolerance_min = 0;
+	}
+	$offset_diff_min = abs($client_offset_min - $expected_js_offset_min);
+	if ($offset_diff_min <= $tolerance_min)
+	{
+		return array('flagged' => FALSE);
+	}
+
+	return array(
+		'flagged' => TRUE,
+		'office_timezone' => $office_timezone,
+		'client_timezone' => $client_timezone,
+		'client_offset_min' => $client_offset_min,
+		'expected_offset_min' => $expected_js_offset_min,
+		'offset_diff_min' => $offset_diff_min,
+		'tolerance_min' => $tolerance_min
+	);
+}
+
+function antifraud_check_gps_static_pattern($client, $cfg)
+{
+	$raw = isset($client['gps_samples_json']) ? trim((string) $client['gps_samples_json']) : '';
+	if ($raw === '')
+	{
+		return array('flagged' => FALSE);
+	}
+
+	$decoded = @json_decode($raw, TRUE);
+	if (!is_array($decoded) || empty($decoded))
+	{
+		return array('flagged' => FALSE);
+	}
+
+	$samples = array();
+	for ($i = 0; $i < count($decoded); $i += 1)
+	{
+		$row = $decoded[$i];
+		if (!is_array($row))
+		{
+			continue;
+		}
+		$lat = isset($row['lat']) ? $row['lat'] : NULL;
+		$lng = isset($row['lng']) ? $row['lng'] : NULL;
+		$accuracy = isset($row['accuracy']) ? $row['accuracy'] : NULL;
+		$timestamp = isset($row['timestamp']) ? $row['timestamp'] : NULL;
+		if (!is_numeric($lat) || !is_numeric($lng) || !is_numeric($accuracy) || !is_numeric($timestamp))
+		{
+			continue;
+		}
+		$ts = (int) round((float) $timestamp);
+		if ($ts > 9999999999)
+		{
+			$ts = (int) round($ts / 1000);
+		}
+		$samples[] = array(
+			'lat' => (float) $lat,
+			'lng' => (float) $lng,
+			'accuracy' => (float) $accuracy,
+			'timestamp' => $ts
+		);
+	}
+
+	$min_samples = isset($cfg['gps_static_min_samples']) ? (int) $cfg['gps_static_min_samples'] : 3;
+	if ($min_samples < 2)
+	{
+		$min_samples = 2;
+	}
+	if (count($samples) < $min_samples)
+	{
+		return array('flagged' => FALSE);
+	}
+
+	usort($samples, function ($a, $b) {
+		$at = isset($a['timestamp']) ? (int) $a['timestamp'] : 0;
+		$bt = isset($b['timestamp']) ? (int) $b['timestamp'] : 0;
+		return $at <=> $bt;
+	});
+
+	$window_s = isset($cfg['gps_static_window_s']) ? (int) $cfg['gps_static_window_s'] : 30;
+	if ($window_s <= 0)
+	{
+		$window_s = 30;
+	}
+	$latest_ts = (int) $samples[count($samples) - 1]['timestamp'];
+	$window_start = $latest_ts - $window_s;
+	$window_samples = array();
+	for ($i = 0; $i < count($samples); $i += 1)
+	{
+		if ((int) $samples[$i]['timestamp'] >= $window_start)
+		{
+			$window_samples[] = $samples[$i];
+		}
+	}
+	if (count($window_samples) < $min_samples)
+	{
+		return array('flagged' => FALSE);
+	}
+
+	$first_ts = (int) $window_samples[0]['timestamp'];
+	$span_s = $latest_ts - $first_ts;
+	$min_span_s = isset($cfg['gps_static_min_span_s']) ? (int) $cfg['gps_static_min_span_s'] : 6;
+	if ($span_s < $min_span_s)
+	{
+		return array('flagged' => FALSE);
+	}
+
+	$lat_min = $window_samples[0]['lat'];
+	$lat_max = $window_samples[0]['lat'];
+	$lng_min = $window_samples[0]['lng'];
+	$lng_max = $window_samples[0]['lng'];
+	$acc_min = $window_samples[0]['accuracy'];
+	$acc_max = $window_samples[0]['accuracy'];
+	$unique_6dp = array();
+
+	for ($i = 0; $i < count($window_samples); $i += 1)
+	{
+		$sample = $window_samples[$i];
+		$lat = (float) $sample['lat'];
+		$lng = (float) $sample['lng'];
+		$acc = (float) $sample['accuracy'];
+		if ($lat < $lat_min) $lat_min = $lat;
+		if ($lat > $lat_max) $lat_max = $lat;
+		if ($lng < $lng_min) $lng_min = $lng;
+		if ($lng > $lng_max) $lng_max = $lng;
+		if ($acc < $acc_min) $acc_min = $acc;
+		if ($acc > $acc_max) $acc_max = $acc;
+		$key = number_format($lat, 6, '.', '').','.number_format($lng, 6, '.', '');
+		$unique_6dp[$key] = TRUE;
+	}
+
+	$coord_delta = isset($cfg['gps_static_coord_delta_deg']) ? (float) $cfg['gps_static_coord_delta_deg'] : 0.0000005;
+	$acc_delta = isset($cfg['gps_static_accuracy_delta_m']) ? (float) $cfg['gps_static_accuracy_delta_m'] : 0.5;
+	$lat_span = $lat_max - $lat_min;
+	$lng_span = $lng_max - $lng_min;
+	$acc_span = $acc_max - $acc_min;
+	$is_static = $lat_span <= $coord_delta
+		&& $lng_span <= $coord_delta
+		&& $acc_span <= $acc_delta
+		&& count($unique_6dp) <= 1;
+
+	if (!$is_static)
+	{
+		return array('flagged' => FALSE);
+	}
+
+	return array(
+		'flagged' => TRUE,
+		'samples_count' => count($window_samples),
+		'span_s' => $span_s,
+		'lat_span' => $lat_span,
+		'lng_span' => $lng_span,
+		'accuracy_span' => $acc_span,
+		'unique_6dp' => count($unique_6dp),
+		'window_s' => $window_s
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -747,6 +1027,10 @@ function antifraud_extract_client_signals($input)
 		'is_mock_suspected'    => trim((string) $input->post('is_mock_suspected', TRUE)),
 		'is_dev_options_on'    => trim((string) $input->post('is_dev_options_on', TRUE)),
 		'is_rooted_suspected'  => trim((string) $input->post('is_rooted_suspected', TRUE)),
+		'client_timezone'      => trim((string) $input->post('client_timezone', TRUE)),
+		'client_locale'        => trim((string) $input->post('client_locale', TRUE)),
+		'client_tz_offset_min' => trim((string) $input->post('client_tz_offset_min', TRUE)),
+		'gps_samples_json'     => trim((string) $input->post('gps_samples_json', TRUE)),
 		'client_timestamp'     => trim((string) $input->post('client_timestamp', TRUE)),
 		'integrity_token'      => trim((string) $input->post('integrity_token', TRUE)),
 		'payload_signature'    => trim((string) $input->post('payload_signature', TRUE)),
